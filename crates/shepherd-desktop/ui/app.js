@@ -20,7 +20,7 @@ let dirty = false, armed = null;
 let pollTimer = 0;
 function poll(key, fn) {
   clearInterval(pollTimer);
-  pollTimer = setInterval(() => (tab === key ? fn() : clearInterval(pollTimer)), 3000);
+  pollTimer = setInterval(() => (tab !== key ? clearInterval(pollTimer) : $("shepherd-panel").hidden || fn()), 3000);
 }
 
 const setMsg = (box, text, cls = "") => { box.textContent = text; box.className = cls; };
@@ -147,9 +147,12 @@ async function drawRaw() {
 }
 
 addEventListener("keydown", (e) => {
+  if ($("shepherd-panel").hidden) return; // terminals own the keyboard
   if (e.ctrlKey && e.key === "s") { e.preventDefault(); [...document.querySelectorAll(".head .btn.primary")][0]?.click(); }
   if (!e.ctrlKey && !e.altKey && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) {
     const t = TABS[Number(e.key) - 1]; if (t) document.querySelectorAll("#tabs button")[Number(e.key) - 1].click();
   }
 });
 draw();
+initStatus();
+initWorkspace();

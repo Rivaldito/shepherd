@@ -1,7 +1,10 @@
 //! Thin Tauri shell over `shepherd-core`: lists, reads and saves the config/pattern files.
 //! Paths from the webview are only accepted if they appear in `list_files()` (allowlist).
 
+mod api;
+
 use serde::Serialize;
+use serde_json::json;
 use serde_yaml_ng::{Mapping, Value};
 use shepherd_core::bus::{ConsumerGroupSummary, Message, MessageBus};
 use shepherd_core::config::{self, Config, Role, Vendor};
@@ -16,6 +19,7 @@ use shepherd_core::{
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use tauri::Emitter;
 
 #[derive(Serialize)]
 struct FileEntry {
@@ -620,8 +624,97 @@ fn topic_messages(
     messages_from(&open_bus()?, &topic, from_offset, agent.as_deref(), limit)
 }
 
+#[derive(Serialize)]
+struct ApiStatus {
+    socket: String,
+    running: bool,
+    version: Option<String>,
+    protocol: Option<u64>,
+    /// Binary used by "start server"; `None` when it cannot be found.
+    server_bin: Option<String>,
+}
+
+fn api_status_now() -> ApiStatus {
+    let socket = api::default_socket_path();
+    let pong = api::call(&socket, "ping", json!({})).ok();
+    ApiStatus {
+        running: pong.is_some(),
+        version: pong
+            .as_ref()
+            .and_then(|p| p["version"].as_str())
+            .map(String::from),
+        protocol: pong.as_ref().and_then(|p| p["protocol"].as_u64()),
+        server_bin: api::default_server_bin().map(|p| p.display().to_string()),
+        socket: socket.display().to_string(),
+    }
+}
+
+#[tauri::command(async)]
+fn api_status() -> ApiStatus {
+    api_status_now()
+}
+
+/// The UI's single door to the server. Only runtime methods pass (see `api::allowed_method`).
+#[tauri::command(async)]
+fn api_call(
+    method: String,
+    params: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    if !api::allowed_method(&method) {
+        return Err(format!("método no permitido: {method}"));
+    }
+    api::call(
+        &api::default_socket_path(),
+        &method,
+        params.unwrap_or_else(|| json!({})),
+    )
+}
+
+/// Explicit user action: starting a server creates real state, so it never happens on its own.
+#[tauri::command(async)]
+fn api_start_server() -> Result<ApiStatus, String> {
+    let socket = api::default_socket_path();
+    if api::call(&socket, "ping", json!({})).is_err() {
+        let bin = api::default_server_bin().ok_or(
+            "no se encontró el binario `shepherd`: ponlo en el PATH o define SHEPHERD_BIN",
+        )?;
+        api::start_server(&bin, &socket)?;
+    }
+    Ok(api_status_now())
+}
+
+/// Keeps one subscription alive and forwards server events to the webview, reconnecting forever.
+/// `shepherd-event` means "re-read the snapshot"; `shepherd-connection` carries up/down changes.
+fn spawn_event_forwarder(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        let connected = std::cell::Cell::new(false);
+        let announce = |now: bool| {
+            if connected.replace(now) != now {
+                let _ = app.emit("shepherd-connection", json!({ "connected": now }));
+            }
+        };
+        let result = api::read_events(
+            &api::default_socket_path(),
+            api::EVENT_TYPES,
+            &mut || announce(true),
+            &mut |event| {
+                let _ = app.emit("shepherd-event", event);
+            },
+        );
+        announce(false);
+        if matches!(&result, Err(e) if e.starts_with("events_lost")) {
+            let _ = app.emit("shepherd-event", json!({ "event": "events_lost" }));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+    });
+}
+
 fn main() {
     tauri::Builder::default()
+        .setup(|app| {
+            spawn_event_forwarder(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_files,
             read_file,
@@ -643,7 +736,10 @@ fn main() {
             skill_agent,
             git_status,
             topic_list,
-            topic_messages
+            topic_messages,
+            api_status,
+            api_call,
+            api_start_server
         ])
         .run(tauri::generate_context!())
         .expect("error al iniciar Shepherd desktop");

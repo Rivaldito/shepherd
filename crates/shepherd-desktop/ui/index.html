@@ -6,11 +6,25 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<nav id="tabs"></nav>
-<div id="body">
-  <section id="list"></section>
-  <section id="detail"></section>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand"><span class="logo">S</span><b>Shepherd</b></div>
+    <div class="sect"><div class="sh"><span>Spaces</span><button class="mini" id="space-add" title="Nuevo space">+</button></div><div id="spaces"></div></div>
+    <div class="sect grow"><div class="sh"><span>Agentes</span></div><div id="agents-side"></div></div>
+  </aside>
+  <section id="workarea">
+    <nav id="wtabs"></nav>
+    <div id="panes"></div>
+    <div id="shepherd-panel" hidden>
+      <nav id="tabs"></nav>
+      <div id="body">
+        <section id="list"></section>
+        <section id="detail"></section>
+      </div>
+    </div>
+  </section>
 </div>
+<footer id="statusbar"></footer>
 <!-- app.js last: it draws the first tab on load and needs the tab modules defined -->
 <script src="patterns.js"></script>
 <script src="agents.js"></script>
@@ -19,6 +33,9 @@
 <script src="skills.js"></script>
 <script src="git.js"></script>
 <script src="events.js"></script>
+<script src="status.js"></script>
+<script src="terminal.js"></script>
+<script src="workspace.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
