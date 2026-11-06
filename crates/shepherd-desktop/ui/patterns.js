@@ -133,35 +133,12 @@ function drawEditor() {
   if (pe.problems.length || !pe.isNew) renderProblems(); else setMsg(msgBox(), pe.path ?? "");
 }
 
-// "Ejecutar": launches the pattern's agents in the active workspace. The workspace is linked to its checkout
-// first, so the agents land inside it instead of in new workspaces.
+// "Ejecutar": the shared launcher (launcher.js) with this pattern fixed.
 function runPatternForm() {
-  const objective = el("textarea", { className: "inline", rows: 3, placeholder: "Objetivo del run (opcional)" });
-  const where = el("div", { className: "dim small" });
-  const msg = el("div", { className: "dim" });
-  const w = () => ws.snap?.workspaces.find((x) => x.workspace_id === ws.wid);
-  where.textContent = w() ? `Se ejecutará en el space «${w().label || "Workspace " + w().number}»` : "Crea un space antes de ejecutar un patrón.";
-  const close = () => { pe.runOpen = false; drawEditor(); };
-  const run = el("button", { className: "btn small", onclick: async () => {
-    if (shepherdOff()) { msg.textContent = "Activa Shepherd primero (aviso bajo los paneles)."; return; }
-    if (!ws.wid) { msg.textContent = "No hay ningún space activo."; return; }
-    run.disabled = true; msg.textContent = "Preparando el space…";
-    let target;
-    try { target = await rootForWorkspace(ws.wid); } catch (e) { run.disabled = false; msg.textContent = `No se pudo preparar el space: ${e}`; return; }
-    const params = { pattern: pe.pat.name };
-    if (objective.value.trim()) params.task = objective.value.trim();
-    if (target.root) params.root = target.root;
-    msg.textContent = "Ejecutando…";
-    const r = await act("shepherd.pattern.run.start", params);
-    run.disabled = false;
-    if (!r) { msg.textContent = `No se pudo ejecutar: ${ws.lastError || "error desconocido"}`; return; }
-    flash(target.note ? `Run iniciado. ${target.note}` : "Run iniciado");
-    pe.runOpen = false; pe.runForm = null; openPanelTab("runs");
-  } }, "Ejecutar patrón");
-  const form = el("div", { className: "aform", style: "margin:8px 14px" }, el("label", {}, "Objetivo"), objective, where, msg,
-    el("div", { className: "row" }, run, el("button", { className: "mini", onclick: close }, "Cancelar")));
-  form.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Escape") close(); });
-  return form;
+  const f = patternRunForm({ pattern: pe.pat.name, onCancel: () => { pe.runOpen = false; drawEditor(); },
+    onStarted: () => { pe.runOpen = false; pe.runForm = null; openPanelTab("runs"); } });
+  f.fill([{ name: pe.pat.name, kind: pe.pat.kind, agents_count: (pe.pat.agents ?? []).length }]);
+  return f.el;
 }
 
 async function savePattern() {

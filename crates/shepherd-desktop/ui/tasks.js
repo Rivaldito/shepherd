@@ -101,27 +101,7 @@ function assignedBlock(t) {
 // Runs a pattern FOR this task: the server creates the pattern's agents in the active workspace, and the run is
 // tied to the task through its objective ("Tarea #N: …"), which the monitor and this list read back.
 function patternLauncher(t) {
-  const pick = el("select", {});
-  const objective = el("textarea", { className: "inline", rows: 3, value: taskPrompt(t) });
-  const msg = el("div", { className: "dim small" }, "Se crea un agente por cada agente del patrón, en el space activo, y el run queda ligado a esta tarea.");
-  const go = el("button", { className: "btn small", onclick: async () => {
-    if (shepherdOff()) { msg.textContent = "Activa Shepherd primero (aviso bajo los paneles)."; return; }
-    if (!pick.value) { msg.textContent = "Elige un patrón."; return; }
-    if (!ws.wid) { msg.textContent = "No hay ningún space activo."; return; }
-    go.disabled = true; msg.textContent = "Preparando el space…";
-    let target;
-    try { target = await rootForWorkspace(ws.wid); } catch (e) { go.disabled = false; msg.textContent = `No se pudo preparar el space: ${e}`; return; }
-    const params = { pattern: pick.value, task: ensureTaskPrefix(objective.value, t) };
-    if (target.root) params.root = target.root;
-    msg.textContent = "Creando los agentes…";
-    const r = await act("shepherd.pattern.run.start", params);
-    go.disabled = false;
-    if (!r) { msg.textContent = `No se pudo ejecutar: ${ws.lastError || "error desconocido"}`; return; }
-    flash(`Patrón ${pick.value} ejecutado para la tarea #${t.id}: ${r.run.agents.length} agente(s)${target.note ? ". " + target.note : ""}`);
-    delete tk.runEls[t.id]; tk.raw = ""; refreshTasks();
-  } }, "Ejecutar patrón para esta tarea");
-  const el2 = el("div", { className: "aform", style: "margin-top:8px" }, el("label", {}, "Patrón"), pick, el("label", {}, "Objetivo (empieza por «Tarea #N:» para ligar el run)"), objective, msg, go);
-  return { el: el2, pick, go };
+  return patternRunForm({ task: t, onStarted: () => { tk.raw = ""; refreshTasks(); } });
 }
 
 function patternsBlock(t) {
@@ -134,10 +114,7 @@ function patternsBlock(t) {
       el("button", { className: "mini", onclick: () => openMonitorWindow(`run:${r.id}`) }, "Ventana nueva"));
   });
   const L = (tk.runEls[t.id] ??= patternLauncher(t)); // built once: a refresh must not wipe an edited objective
-  const chosen = L.pick.value;
-  L.pick.replaceChildren(...(tk.patterns.length ? tk.patterns.map((p) => el("option", { value: p.name }, `${p.name} · ${p.kind} · ${p.agents_count} agente(s)`)) : [el("option", { value: "" }, "No hay patrones en este proyecto")]));
-  if (tk.patterns.some((p) => p.name === chosen)) L.pick.value = chosen;
-  L.go.disabled = !tk.patterns.length;
+  L.fill(tk.patterns);
   return el("div", { className: "block" }, el("h4", {}, "PATRONES DE ESTA TAREA:"), ...(rows.length ? rows : [el("div", { className: "dim" }, "Ninguno todavía.")]), L.el);
 }
 

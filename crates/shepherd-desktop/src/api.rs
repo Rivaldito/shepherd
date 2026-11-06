@@ -83,16 +83,50 @@ pub fn socket_path_from(
     }
 }
 
+/// The `socket:` line of `shepherd status server`, which prints it even when no server is running.
+pub fn socket_from_status(text: &str) -> Option<PathBuf> {
+    text.lines()
+        .find_map(|l| l.strip_prefix("socket:"))
+        .map(|p| PathBuf::from(p.trim()))
+        .filter(|p| !p.as_os_str().is_empty())
+}
+
+/// Where this `shepherd` binary listens: a debug build uses `shepherd-dev`, a release build `shepherd`,
+/// so the binary is the only reliable source.
+pub fn socket_of_bin(bin: &Path) -> Option<PathBuf> {
+    let out = std::process::Command::new(bin)
+        .args(["status", "server"])
+        .output()
+        .ok()?;
+    socket_from_status(&String::from_utf8_lossy(&out.stdout))
+}
+
 pub fn default_socket_path() -> PathBuf {
+    static FROM_BIN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let env = std::env::var("SHEPHERD_SOCKET_PATH").ok();
+    if env.as_deref().is_some_and(|s| !s.is_empty()) {
+        return PathBuf::from(env.unwrap_or_default());
+    }
+    if let Some(path) = FROM_BIN.get() {
+        return path.clone();
+    }
+    if let Some(path) = default_server_bin().and_then(|bin| socket_of_bin(&bin)) {
+        return FROM_BIN.get_or_init(|| path).clone();
+    }
     let config_dir = shepherd_core::config::global_config_path()
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    socket_path_from(
-        std::env::var("SHEPHERD_SOCKET_PATH").ok().as_deref(),
-        std::env::var("SHEPHERD_SESSION").ok().as_deref(),
-        &config_dir,
-    )
+    let session = std::env::var("SHEPHERD_SESSION").ok();
+    let path = socket_path_from(None, session.as_deref(), &config_dir);
+    // No binary to ask: a running debug server lives next to the release config dir.
+    let dev = config_dir
+        .parent()
+        .map(|p| p.join("shepherd-dev").join("shepherd.sock"));
+    match dev {
+        Some(dev) if !path.exists() && dev.exists() => dev,
+        _ => path,
+    }
 }
 
 /// Where the server binary comes from: `SHEPHERD_BIN`, then `shepherd` on `PATH`, then next to this app.
@@ -366,7 +400,7 @@ pub fn start_server(bin: &Path, socket: &Path) -> Result<(), String> {
         .process_group(0)
         .spawn()
         .map_err(|e| format!("no se pudo ejecutar {}: {e}", bin.display()))?;
-    for _ in 0..30 {
+    for _ in 0..75 {
         std::thread::sleep(Duration::from_millis(200));
         if call(socket, "ping", json!({})).is_ok() {
             return Ok(());
@@ -431,6 +465,16 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn socket_is_read_from_status_output() {
+        let text = "status: not running\nsocket: /home/u/.config/shepherd-dev/shepherd.sock\n";
+        assert_eq!(
+            socket_from_status(text),
+            Some(PathBuf::from("/home/u/.config/shepherd-dev/shepherd.sock"))
+        );
+        assert_eq!(socket_from_status("status: running\n"), None);
     }
 
     #[test]

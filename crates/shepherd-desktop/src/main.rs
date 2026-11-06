@@ -811,6 +811,7 @@ fn api_start_server() -> Result<ApiStatus, String> {
         let bin = api::default_server_bin().ok_or(
             "no se encontró el binario `shepherd`: ponlo en el PATH o define SHEPHERD_BIN",
         )?;
+        let socket = api::socket_of_bin(&bin).unwrap_or(socket);
         api::start_server(&bin, &socket)?;
     }
     Ok(api_status_now())
