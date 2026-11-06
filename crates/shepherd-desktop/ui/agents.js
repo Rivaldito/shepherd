@@ -59,7 +59,7 @@ function armedButton(key, label, armedLabel, run, extra = "") {
 function listFooter() {
   const live = ag.live;
   const buttons = [el("button", { className: "btn small", disabled: !live, title: live ? "" : "Necesita el servidor en marcha", onclick: () => {
-    ag.creating = true; ag.form ??= spawnForm({ root: typeof activeCwd === "function" ? activeCwd() : "", onDone: (agent) => { ag.creating = false; ag.form = null; ag.sel = agent.id; ag.raw = ""; refreshAgents(); }, onCancel: () => { ag.creating = false; ag.form = null; renderAgents(); } });
+    ag.creating = true; ag.form ??= spawnForm({ root: typeof activeCwd === "function" ? activeCwd() : "", onDone: (agent) => { ag.creating = false; ag.form = null; ag.sel = agent.id ?? ag.sel; ag.raw = ""; refreshAgents(); }, onCancel: () => { ag.creating = false; ag.form = null; renderAgents(); } });
     renderAgents();
   } }, "+ Nuevo")];
   if (live) buttons.push(armedButton("resume", "Reanudar", "¿Reanudar todos?", () => agentAction("shepherd.agent.resume", {})));

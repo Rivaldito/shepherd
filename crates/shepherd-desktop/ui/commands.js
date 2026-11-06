@@ -51,6 +51,8 @@ function buildCommands() {
   }
   add("Agentes", "Lanzar agente…", () => { ws.panel = false; ws.forms.agent ??= openSpawnForm(); renderWorkspace(); });
   add("Agentes", "Reanudar agentes", () => act("shepherd.agent.resume", {}), { danger: true });
+  for (const d of dc.detected) if (d.known && d.path) add("Agentes", `Iniciar agente: ${d.command}`, () => quickStartAgent({ kind: d.command }));
+  add("Agentes", "Detectar agentes instalados de nuevo", async () => { await loadDiscovery(true); flash("Agentes detectados: " + dc.detected.filter((d) => d.known && d.path).map((d) => d.command).join(", ")); });
   add("Tareas", "Nueva tarea…", () => askFor("Título de la tarea", (title) => title && act("shepherd.task.create", { title })));
   add("Patrones", "Ejecutar patrón…", () => askFor("Nombre del patrón", (pattern) => pattern && askFor("Objetivo del run", (task) => act("shepherd.pattern.run.start", task ? { pattern, task } : { pattern }))));
   for (const w of s.workspaces) add("Navegar", `Ir a space: ${spaceName(w)}`, () => selectWorkspace(w.workspace_id));
@@ -120,6 +122,7 @@ function renderDock() {
 }
 
 function openDock() {
+  if (!dc.loaded) loadDiscovery().then(() => cm.open && renderDock()); // so "Iniciar agente: …" can list what is installed
   cm.open = true; $("cmdbar").hidden = false; dockInput().value = ""; cm.sel = 0; cm.armed = null; cm.ask = null;
   renderDock(); dockInput().focus();
 }

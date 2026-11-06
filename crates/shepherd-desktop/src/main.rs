@@ -2,6 +2,7 @@
 //! Paths from the webview are only accepted if they appear in `list_files()` (allowlist).
 
 mod api;
+mod discover;
 
 use serde::Serialize;
 use serde_json::json;
@@ -689,6 +690,43 @@ fn cli_run(args: Vec<String>) -> Result<api::CliOutput, String> {
     )
 }
 
+/// Known agent kinds plus the config's vendor commands, with where each is installed (None = not found).
+#[tauri::command(async)]
+fn agents_detected(extra: Vec<String>, refresh: bool) -> Result<Vec<discover::Detected>, String> {
+    discover::detected(&extra, refresh)
+}
+
+#[derive(Serialize)]
+struct AgentModels {
+    kind: String,
+    /// Models the agent listed itself (only some agents can).
+    live: Vec<discover::ModelInfo>,
+    live_error: Option<String>,
+    /// The model the agent would pick on its own, from its own config.
+    agent_default: Option<String>,
+}
+
+#[tauri::command(async)]
+fn agent_models(kind: String, refresh: bool) -> AgentModels {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let (live, live_error) = if discover::live_models_command(&kind).is_some() {
+        match discover::live_models(&kind, refresh) {
+            Ok(models) => (models, None),
+            Err(e) => (Vec::new(), Some(e)),
+        }
+    } else {
+        (Vec::new(), None)
+    };
+    AgentModels {
+        agent_default: discover::agent_default_model(&kind, &home),
+        kind,
+        live,
+        live_error,
+    }
+}
+
 /// Explicit user action: starting a server creates real state, so it never happens on its own.
 #[tauri::command(async)]
 fn api_start_server() -> Result<ApiStatus, String> {
@@ -759,7 +797,9 @@ fn main() {
             api_status,
             api_call,
             api_start_server,
-            cli_run
+            cli_run,
+            agents_detected,
+            agent_models
         ])
         .run(tauri::generate_context!())
         .expect("error al iniciar Shepherd desktop");

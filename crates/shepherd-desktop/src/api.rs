@@ -130,11 +130,21 @@ fn format_error(err: &Value) -> String {
     }
 }
 
+/// Methods that wait for an agent (to be ready, to answer, to be spawned) get longer than a plain read.
+pub fn timeout_for(method: &str) -> std::time::Duration {
+    match method {
+        "agent.start" | "agent.wait" | "agent.prompt" | "shepherd.agent.spawn" => {
+            std::time::Duration::from_secs(45)
+        }
+        _ => std::time::Duration::from_secs(10),
+    }
+}
+
 /// One request, one response. Returns the `result` value, or the server's error as text.
 #[cfg(unix)]
 pub fn call(path: &Path, method: &str, params: Value) -> Result<Value, String> {
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-    let timeout = Some(Duration::from_secs(10));
+    let timeout = Some(timeout_for(method));
     let mut stream = UnixStream::connect(path)
         .map_err(|e| format!("no se pudo conectar a {}: {e}", path.display()))?;
     stream
@@ -226,7 +236,6 @@ pub struct CliOutput {
 }
 
 /// Runs `bin args…` against `socket` (never through a shell), killing it after `timeout`.
-/// Output is capped so a chatty command cannot flood the webview.
 #[cfg(unix)]
 pub fn run_cli(
     bin: &Path,
@@ -234,19 +243,39 @@ pub fn run_cli(
     args: &[String],
     timeout: Duration,
 ) -> Result<CliOutput, String> {
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(args)
+        .env("SHEPHERD_SOCKET_PATH", socket)
+        .env_remove("SHEPHERD_ENV");
+    run_command(cmd, timeout)
+}
+
+/// Runs a prepared command with no stdin, killing it after `timeout`.
+/// Output is capped so a chatty command cannot flood the webview.
+#[cfg(unix)]
+pub fn run_command(mut cmd: std::process::Command, timeout: Duration) -> Result<CliOutput, String> {
     use std::io::Read;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::time::Instant;
     const CAP: u64 = 256 * 1024;
-    let mut child = Command::new(bin)
-        .args(args)
-        .env("SHEPHERD_SOCKET_PATH", socket)
-        .env_remove("SHEPHERD_ENV")
-        .stdin(Stdio::null())
+    let program = cmd.get_program().to_string_lossy().into_owned();
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("no se pudo ejecutar {}: {e}", bin.display()))?;
+        .stderr(Stdio::piped());
+    // ETXTBSY ("Text file busy", errno 26) is transient: another thread forked while the file was
+    // still open for writing (a script just written, a binary being replaced). Give it a moment.
+    let mut child = {
+        let mut attempts = 0;
+        loop {
+            match cmd.spawn() {
+                Err(e) if e.raw_os_error() == Some(26) && attempts < 40 => {
+                    attempts += 1;
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                other => break other.map_err(|e| format!("no se pudo ejecutar {program}: {e}"))?,
+            }
+        }
+    };
     // Output is collected as it arrives: a grandchild that keeps the pipe open after we killed the
     // child must not make us wait for it (its output so far is still returned).
     let drain = |pipe: Option<Box<dyn Read + Send>>| {
@@ -307,6 +336,11 @@ pub fn run_cli(
         stderr: text(&err),
         timed_out,
     })
+}
+
+#[cfg(not(unix))]
+pub fn run_command(_: std::process::Command, _: std::time::Duration) -> Result<CliOutput, String> {
+    Err("solo está implementado en Unix".into())
 }
 
 #[cfg(not(unix))]
@@ -599,6 +633,13 @@ mod tests {
             "took {:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn waiting_methods_get_a_longer_timeout_than_plain_ones() {
+        assert_eq!(timeout_for("pane.read"), std::time::Duration::from_secs(10));
+        assert!(timeout_for("agent.start") > timeout_for("pane.read"));
+        assert!(timeout_for("shepherd.agent.spawn") > timeout_for("ping"));
     }
 
     #[test]
