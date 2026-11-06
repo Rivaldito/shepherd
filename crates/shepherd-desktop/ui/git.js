@@ -7,7 +7,7 @@ async function drawGit() {
   $("detail").replaceChildren();
   gt.loading = true;
   try {
-    [gt.status, gt.agents] = await Promise.all([invoke("git_status"), invoke("agent_list")]);
+    [gt.status, gt.agents] = await Promise.all([invokeP("git_status"), invoke("agent_list")]);
   } catch (e) { gt.status = null; gt.loading = false; return $("list").replaceChildren(el("div", { className: "empty" }, String(e))); }
   gt.loading = false;
   if (tab === "git") renderGit(); // the user may have moved to another tab while git was running

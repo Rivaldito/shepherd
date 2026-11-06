@@ -15,7 +15,7 @@ const isInstalledKind = (kind) => !!pathOf(kind);
 const modelFlagFor = (kind) => dc.vendors[vendorForKind(kind)]?.model_flag || MODEL_FLAGS[kind] || null;
 
 async function loadDiscovery(refresh = false) {
-  const m = await invoke("get_models").catch(() => ({ vendors: {}, roles: {} }));
+  const m = await invokeP("get_models").catch(() => ({ vendors: {}, roles: {} }));
   dc.vendors = m.vendors; dc.roles = m.roles;
   const extra = Object.values(m.vendors).map((v) => v.command).filter(Boolean);
   try { dc.detected = await invoke("agents_detected", { extra, refresh }); } catch (_) { /* keep the previous answer */ }

@@ -3,6 +3,7 @@
 
 mod api;
 mod discover;
+mod setup;
 
 use serde::Serialize;
 use serde_json::json;
@@ -34,6 +35,29 @@ fn project_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// Root of the project containing `start`: the nearest folder with `.shepherd/config.yaml`, else the
+/// git root, else `start` itself. This is where `.shepherd/` (tasks, patterns, skills) lives.
+fn project_root_at(start: &Path) -> PathBuf {
+    let cfg = config::project_config_path(start);
+    cfg.parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| start.to_path_buf())
+}
+
+/// The project a view is about: the folder the UI sends (its active workspace's), else the one the
+/// app was started in. A folder that does not exist falls back too, so a stale workspace cannot break a view.
+fn resolve_root(root: Option<&str>) -> PathBuf {
+    match root
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(PathBuf::from)
+    {
+        Some(dir) if dir.is_dir() => project_root_at(&dir),
+        _ => task_root(),
+    }
+}
+
 fn entry(group: &'static str, label: String, p: PathBuf) -> FileEntry {
     FileEntry {
         group,
@@ -43,8 +67,7 @@ fn entry(group: &'static str, label: String, p: PathBuf) -> FileEntry {
     }
 }
 
-fn known_files() -> Vec<FileEntry> {
-    let root = project_root();
+fn known_files(root: &Path) -> Vec<FileEntry> {
     let mut v = vec![
         entry(
             "config",
@@ -60,10 +83,10 @@ fn known_files() -> Vec<FileEntry> {
         entry(
             "config",
             "config.yaml (proyecto)".into(),
-            config::project_config_path(&root),
+            config::project_config_path(root),
         ),
     ];
-    if let Ok(list) = patterns::list_patterns(&root, None) {
+    if let Ok(list) = patterns::list_patterns(root, None) {
         for p in list {
             if let Some(path) = p.path {
                 v.push(entry("patterns", p.name, PathBuf::from(path)));
@@ -73,8 +96,8 @@ fn known_files() -> Vec<FileEntry> {
     v
 }
 
-fn allowed(path: &str) -> Result<PathBuf, String> {
-    known_files()
+fn allowed(path: &str, root: &Path) -> Result<PathBuf, String> {
+    known_files(root)
         .into_iter()
         .find(|f| f.path == path)
         .map(|f| PathBuf::from(f.path))
@@ -82,13 +105,13 @@ fn allowed(path: &str) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-fn list_files() -> Vec<FileEntry> {
-    known_files()
+fn list_files(root: Option<String>) -> Vec<FileEntry> {
+    known_files(&resolve_root(root.as_deref()))
 }
 
 #[tauri::command]
-fn read_file(path: String) -> Result<String, String> {
-    let p = allowed(&path)?;
+fn read_file(path: String, root: Option<String>) -> Result<String, String> {
+    let p = allowed(&path, &resolve_root(root.as_deref()))?;
     if !p.is_file() {
         return Ok(String::new());
     }
@@ -110,19 +133,20 @@ fn check_syntax(path: &Path, text: &str) -> Result<(), String> {
 
 /// Saves the file and returns semantic warnings (empty = clean).
 #[tauri::command]
-fn save_file(path: String, text: String) -> Result<Vec<String>, String> {
-    let p = allowed(&path)?;
+fn save_file(path: String, text: String, root: Option<String>) -> Result<Vec<String>, String> {
+    let root = resolve_root(root.as_deref());
+    let p = allowed(&path, &root)?;
     check_syntax(&p, &text)?;
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     std::fs::write(&p, &text).map_err(|e| e.to_string())?;
-    Ok(warnings())
+    Ok(warnings(&root))
 }
 
 /// Semantic problems of the effective (merged) config; empty = clean.
-fn warnings() -> Vec<String> {
-    match config::load_config(project_root()) {
+fn warnings(root: &Path) -> Vec<String> {
+    match config::load_config(root) {
         Ok(cfg) => config::validate(&cfg),
         Err(e) => vec![format!("config no carga: {e}")],
     }
@@ -137,8 +161,8 @@ struct Models {
 }
 
 #[tauri::command]
-fn get_models() -> Result<Models, String> {
-    let cfg = config::load_config(project_root()).map_err(|e| e.to_string())?;
+fn get_models(root: Option<String>) -> Result<Models, String> {
+    let cfg = config::load_config(resolve_root(root.as_deref())).map_err(|e| e.to_string())?;
     Ok(Models {
         vendors: cfg.vendors.into_iter().collect(),
         roles: cfg.roles.into_iter().collect(),
@@ -185,7 +209,7 @@ fn update_yaml(section: &str, name: &str, value: Option<Value>) -> Result<Vec<St
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     std::fs::write(&path, text).map_err(|e| e.to_string())?;
-    Ok(warnings())
+    Ok(warnings(&task_root()))
 }
 
 #[tauri::command]
@@ -223,21 +247,22 @@ struct SavedPattern {
     problems: Vec<Problem>,
 }
 
-fn problems_for(pattern: &Pattern) -> Result<Vec<Problem>, String> {
-    let cfg = config::load_config(project_root()).map_err(|e| e.to_string())?;
+fn problems_for(pattern: &Pattern, root: &Path) -> Result<Vec<Problem>, String> {
+    let cfg = config::load_config(root).map_err(|e| e.to_string())?;
     Ok(patterns::validate(pattern, &cfg))
 }
 
 #[tauri::command]
-fn pattern_list() -> Result<Vec<PatternSummary>, String> {
-    patterns::list_patterns(&project_root(), None).map_err(|e| e.to_string())
+fn pattern_list(root: Option<String>) -> Result<Vec<PatternSummary>, String> {
+    patterns::list_patterns(&resolve_root(root.as_deref()), None).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn pattern_load(name: String) -> Result<LoadedPattern, String> {
+fn pattern_load(name: String, root: Option<String>) -> Result<LoadedPattern, String> {
+    let root = resolve_root(root.as_deref());
     let (pattern, source, path) =
-        patterns::load_pattern(&name, &project_root(), None).map_err(|e| e.to_string())?;
-    let problems = problems_for(&pattern)?;
+        patterns::load_pattern(&name, &root, None).map_err(|e| e.to_string())?;
+    let problems = problems_for(&pattern, &root)?;
     Ok(LoadedPattern {
         pattern,
         source,
@@ -247,8 +272,8 @@ fn pattern_load(name: String) -> Result<LoadedPattern, String> {
 }
 
 #[tauri::command]
-fn pattern_validate(pattern: Pattern) -> Result<Vec<Problem>, String> {
-    problems_for(&pattern)
+fn pattern_validate(pattern: Pattern, root: Option<String>) -> Result<Vec<Problem>, String> {
+    problems_for(&pattern, &resolve_root(root.as_deref()))
 }
 
 /// Existing project patterns are saved back to the project; everything else goes to the global dir.
@@ -258,12 +283,14 @@ fn pattern_save(
     pattern: Pattern,
     source: PatternSource,
     is_new: bool,
+    root: Option<String>,
 ) -> Result<SavedPattern, String> {
+    let root = resolve_root(root.as_deref());
     patterns::validate_pattern_name(&pattern.name).map_err(|e| e.to_string())?;
     let (source, dir) = if source == PatternSource::Project && !is_new {
         (
             PatternSource::Project,
-            patterns::project_patterns_dir(&project_root()),
+            patterns::project_patterns_dir(&root),
         )
     } else {
         (
@@ -275,7 +302,7 @@ fn pattern_save(
         return Err(patterns::PatternError::AlreadyExists(pattern.name).to_string());
     }
     let path = patterns::save_pattern_to_dir(&pattern, &dir).map_err(|e| e.to_string())?;
-    let problems = problems_for(&pattern)?;
+    let problems = problems_for(&pattern, &root)?;
     Ok(SavedPattern {
         path: path.display().to_string(),
         source,
@@ -284,8 +311,8 @@ fn pattern_save(
 }
 
 #[tauri::command]
-fn pattern_delete(name: String) -> Result<(), String> {
-    patterns::delete_pattern(&name, &project_root(), None)
+fn pattern_delete(name: String, root: Option<String>) -> Result<(), String> {
+    patterns::delete_pattern(&name, &resolve_root(root.as_deref()), None)
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
@@ -315,10 +342,10 @@ struct RunView {
 
 /// Every `pattern_runs.json` that can hold runs we know of: this project, the global state dir,
 /// and the root of each registered agent (the same places the service reopens runs from).
-fn run_files(registry: &AgentRegistryFile) -> Vec<PathBuf> {
-    let (root, state) = (project_root(), config::state_dir());
+fn run_files(registry: &AgentRegistryFile, root: &Path) -> Vec<PathBuf> {
+    let state = config::state_dir();
     let mut paths = vec![
-        pattern_runs_path(&root, &state),
+        pattern_runs_path(root, &state),
         pattern_runs_path(&state, &state),
     ];
     paths.extend(
@@ -356,18 +383,17 @@ fn collect_runs(paths: &[PathBuf], registry: &AgentRegistryFile) -> Result<Vec<R
 
 /// Read-only view of persisted pattern runs; the live state belongs to the running server.
 #[tauri::command]
-fn run_list() -> Result<Vec<RunView>, String> {
+fn run_list(root: Option<String>) -> Result<Vec<RunView>, String> {
     let registry = load_agent_registry(config::state_dir().join("agents.json")).unwrap_or_default();
-    collect_runs(&run_files(&registry), &registry)
+    collect_runs(
+        &run_files(&registry, &resolve_root(root.as_deref())),
+        &registry,
+    )
 }
 
-/// Root of the project the app was started in: where `.shepherd/` (config, tasks) lives.
+/// Root of the project the app was started in.
 fn task_root() -> PathBuf {
-    let cfg = config::project_config_path(&project_root());
-    cfg.parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(project_root)
+    project_root_at(&project_root())
 }
 
 #[derive(Serialize)]
@@ -423,18 +449,28 @@ fn task_view(task: CreatedTask) -> TaskView {
     }
 }
 
+/// The project root the views resolve a workspace folder to, so API calls that create files under
+/// `.shepherd/` (tasks, pattern runs) write where the views read, not into a subfolder.
+#[tauri::command]
+fn resolved_root(root: Option<String>) -> String {
+    resolve_root(root.as_deref()).display().to_string()
+}
+
 /// Read-only view of the project's tasks (`.shepherd/tasks`), oldest id first.
 #[tauri::command]
-fn task_list() -> Result<Vec<TaskView>, String> {
-    list_tasks(task_root(), false)
+fn task_list(root: Option<String>) -> Result<Vec<TaskView>, String> {
+    list_tasks(resolve_root(root.as_deref()), false)
         .map(|t| t.into_iter().map(task_view).collect())
         .map_err(|e| e.to_string())
 }
 
 /// Where tasks are read from, so an empty list can say where it looked.
 #[tauri::command]
-fn task_dir() -> String {
-    task_root().join(".shepherd/tasks").display().to_string()
+fn task_dir(root: Option<String>) -> String {
+    resolve_root(root.as_deref())
+        .join(".shepherd/tasks")
+        .display()
+        .to_string()
 }
 
 #[derive(Serialize)]
@@ -454,16 +490,16 @@ struct SkillCatalog {
     repo_dir: String,
 }
 
-fn catalog_and_config() -> Result<(Catalog, Config), String> {
-    let root = task_root();
-    let cfg = config::load_config(&root).map_err(|e| e.to_string())?;
-    Ok((Catalog::load(Some(&root), Some(&user_skills_dir())), cfg))
+fn catalog_and_config(root: &Path) -> Result<(Catalog, Config), String> {
+    let cfg = config::load_config(root).map_err(|e| e.to_string())?;
+    Ok((Catalog::load(Some(root), Some(&user_skills_dir())), cfg))
 }
 
 /// Read-only merged catalog (`repo > user > default`); `global` also reflects `skills.global`.
 #[tauri::command]
-fn skill_catalog() -> Result<SkillCatalog, String> {
-    let (cat, cfg) = catalog_and_config()?;
+fn skill_catalog(root: Option<String>) -> Result<SkillCatalog, String> {
+    let root = resolve_root(root.as_deref());
+    let (cat, cfg) = catalog_and_config(&root)?;
     let globals = cat.global_names(&cfg);
     let skills = cat
         .all()
@@ -477,7 +513,6 @@ fn skill_catalog() -> Result<SkillCatalog, String> {
             }
         })
         .collect();
-    let root = task_root();
     Ok(SkillCatalog {
         skills,
         user_dir: user_skills_dir().display().to_string(),
@@ -531,7 +566,7 @@ fn agent_skills_for(cat: &Catalog, cfg: &Config, agent: &Agent) -> AgentSkills {
 }
 
 #[tauri::command]
-fn skill_agent(agent_id: String) -> Result<AgentSkills, String> {
+fn skill_agent(agent_id: String, root: Option<String>) -> Result<AgentSkills, String> {
     let registry =
         load_agent_registry(config::state_dir().join("agents.json")).map_err(|e| e.to_string())?;
     let agent = registry
@@ -539,16 +574,22 @@ fn skill_agent(agent_id: String) -> Result<AgentSkills, String> {
         .iter()
         .find(|a| a.id == agent_id)
         .ok_or("agente no encontrado")?;
-    let (cat, cfg) = catalog_and_config()?;
+    // An agent works in its own project: its skills come from there, not from the view's project.
+    let project = resolve_root(
+        Some(agent.root.as_str())
+            .filter(|r| !r.is_empty())
+            .or(root.as_deref()),
+    );
+    let (cat, cfg) = catalog_and_config(&project)?;
     Ok(agent_skills_for(&cat, &cfg, agent))
 }
 
 /// Worktrees of the project with dirty/ahead/behind, linked agent and PR (needs `git`; PRs need `gh`).
 /// `async` so the command runs off the main thread: git and gh can take seconds.
 #[tauri::command(async)]
-fn git_status() -> Result<GitRepoStatus, String> {
+fn git_status(root: Option<String>) -> Result<GitRepoStatus, String> {
     let registry = load_agent_registry(config::state_dir().join("agents.json")).unwrap_or_default();
-    collect_git_status(&task_root(), &registry.agents)
+    collect_git_status(&resolve_root(root.as_deref()), &registry.agents)
 }
 
 #[derive(Serialize)]
@@ -727,6 +768,41 @@ fn agent_models(kind: String, refresh: bool) -> AgentModels {
     }
 }
 
+/// Where the server's `config.toml` is and whether the Shepherd layer is on in it.
+#[tauri::command]
+fn shepherd_config() -> setup::ShepherdConfig {
+    setup::shepherd_config()
+}
+
+/// Explicit user action: turns the Shepherd layer on in the server's config and RESTARTS the server, because
+/// the layer is read only at startup. Restarting closes every open terminal; the UI asks first.
+#[tauri::command(async)]
+fn enable_shepherd() -> Result<ApiStatus, String> {
+    let bin = api::default_server_bin()
+        .ok_or("no se encontró el binario `shepherd`: ponlo en el PATH o define SHEPHERD_BIN")?;
+    setup::enable_and_restart(
+        &setup::default_config_path(),
+        &api::default_socket_path(),
+        &bin,
+    )?;
+    Ok(api_status_now())
+}
+
+/// Attaches an existing agent to a task (`None` detaches it). See `setup::assign_task_at` for how.
+#[tauri::command(async)]
+fn assign_agent_task(
+    agent_id: String,
+    task: Option<u32>,
+    root: Option<String>,
+) -> Result<(), String> {
+    setup::assign_task_at(
+        &config::state_dir().join("agents.json"),
+        &resolve_root(root.as_deref()),
+        &agent_id,
+        task,
+    )
+}
+
 /// Explicit user action: starting a server creates real state, so it never happens on its own.
 #[tauri::command(async)]
 fn api_start_server() -> Result<ApiStatus, String> {
@@ -799,7 +875,11 @@ fn main() {
             api_start_server,
             cli_run,
             agents_detected,
-            agent_models
+            agent_models,
+            resolved_root,
+            shepherd_config,
+            enable_shepherd,
+            assign_agent_task
         ])
         .run(tauri::generate_context!())
         .expect("error al iniciar Shepherd desktop");
@@ -846,13 +926,13 @@ mod tests {
 
     #[test]
     fn builtin_pattern_loads_and_round_trips_through_json() {
-        let r = pattern_load("market".into()).unwrap();
+        let r = pattern_load("market".into(), None).unwrap();
         assert_eq!(r.source, PatternSource::Builtin);
         // What the webview gets, and sends back after editing, must still be a valid Pattern.
         let json = serde_json::to_string(&r.pattern).unwrap();
         let back: Pattern = serde_json::from_str(&json).unwrap();
         assert_eq!(back, r.pattern);
-        assert!(!pattern_list().unwrap().is_empty());
+        assert!(!pattern_list(None).unwrap().is_empty());
     }
 
     #[test]
@@ -1016,8 +1096,84 @@ mod tests {
         assert_eq!(by_agent, ["uno", "tres"]);
     }
 
+    fn temp_project(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("shepherd-desktop-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_project_root_is_found_from_any_folder_inside_it() {
+        let repo = temp_project("rootat");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(repo.join("src/deep")).unwrap();
+        // a nested folder with its own .shepherd/config.yaml wins over the enclosing git root
+        std::fs::create_dir_all(repo.join("sub/.shepherd")).unwrap();
+        std::fs::write(repo.join("sub/.shepherd/config.yaml"), "{}").unwrap();
+        std::fs::create_dir_all(repo.join("sub/x")).unwrap();
+        let got = (
+            project_root_at(&repo.join("src/deep")),
+            project_root_at(&repo),
+            project_root_at(&repo.join("sub/x")),
+        );
+        std::fs::remove_dir_all(&repo).unwrap();
+        assert_eq!(got.0, repo);
+        assert_eq!(got.1, repo);
+        assert_eq!(got.2, repo.join("sub"));
+    }
+
+    #[test]
+    fn resolve_root_falls_back_to_the_app_project_for_missing_or_empty_folders() {
+        let app = task_root();
+        assert_eq!(resolve_root(None), app);
+        assert_eq!(resolve_root(Some("")), app);
+        assert_eq!(resolve_root(Some("   ")), app);
+        assert_eq!(resolve_root(Some("/nonexistent/stale/workspace")), app);
+    }
+
+    #[test]
+    fn each_workspace_sees_the_tasks_of_its_own_project() {
+        let write_task = |root: &Path, id: u32, title: &str| {
+            let dir = root.join(format!(".shepherd/tasks/{id}-t"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("status.json"),
+                format!(r#"{{"id":{id},"slug":"t","title":"{title}","state":"open","created":"x","updated":"x"}}"#),
+            )
+            .unwrap();
+        };
+        let (a, b) = (temp_project("tasks-a"), temp_project("tasks-b"));
+        for r in [&a, &b] {
+            std::fs::create_dir_all(r.join(".git")).unwrap();
+        }
+        std::fs::create_dir_all(b.join("src")).unwrap(); // a workspace may sit in a subfolder of its project
+        write_task(&a, 1, "tarea de A");
+        write_task(&b, 1, "tarea de B");
+        write_task(&b, 2, "otra de B");
+        let titles = |root: &Path| {
+            task_list(Some(root.display().to_string()))
+                .unwrap()
+                .into_iter()
+                .map(|t| t.status.title)
+                .collect::<Vec<_>>()
+        };
+        let (ta, tb) = (titles(&a), titles(&b.join("src")));
+        let dir_a = task_dir(Some(a.display().to_string()));
+        for r in [&a, &b] {
+            std::fs::remove_dir_all(r).unwrap();
+        }
+        assert_eq!(ta, ["tarea de A"]);
+        assert_eq!(tb, ["tarea de B", "otra de B"]);
+        assert!(
+            dir_a.ends_with("/.shepherd/tasks") && dir_a.contains("tasks-a"),
+            "{dir_a}"
+        );
+    }
+
     #[test]
     fn rejects_paths_outside_allowlist() {
-        assert!(allowed("/etc/passwd").is_err());
+        assert!(allowed("/etc/passwd", &task_root()).is_err());
     }
 }

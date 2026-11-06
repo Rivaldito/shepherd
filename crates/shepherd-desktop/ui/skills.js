@@ -6,7 +6,7 @@ const scopeBadge = (s) => el("span", { className: "badge " + (SCOPE[s] ?? "dim")
 
 async function drawSkills() {
   try {
-    sk.catalog = await invoke("skill_catalog");
+    sk.catalog = await invokeP("skill_catalog");
     sk.agents = await invoke("agent_list");
     if (!sk.agents.some((a) => a.id === sk.agent)) sk.agent = sk.agents[0]?.id ?? null;
     await loadAgentSkills();
@@ -17,7 +17,7 @@ async function drawSkills() {
 async function loadAgentSkills() {
   sk.active = []; sk.problems = [];
   if (sk.mode !== 0 || !sk.agent) return;
-  const r = await invoke("skill_agent", { agentId: sk.agent });
+  const r = await invokeP("skill_agent", { agentId: sk.agent });
   sk.active = r.active; sk.problems = r.problems;
 }
 

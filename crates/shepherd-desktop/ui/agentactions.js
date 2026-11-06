@@ -51,9 +51,36 @@ function modelPicker() {
 
 const optionFor = (value, text, disabled = false) => el("option", { value, disabled }, text);
 
+// Where a workspace's terminal is (its focused pane, else any of its panes).
+const cwdOfWorkspace = (wid) => {
+  const panes = ws.snap?.panes.filter((p) => p.workspace_id === wid) ?? [];
+  return (panes.find((p) => p.focused) ?? panes[0])?.cwd ?? "";
+};
+const spaceName2 = (w) => w.label || `Workspace ${w.number}`;
+
+// The folder to launch an agent with so the server puts it in THIS workspace. The server places an agent
+// in the workspace that has its `root` checkout open, so a plain workspace inside a git repo is linked to
+// its checkout first (`worktree.open`, which keeps the workspace and its name). Outside git there is
+// nothing to link: the server then opens a new workspace for the folder.
+async function rootForWorkspace(wid) {
+  const w = ws.snap?.workspaces.find((x) => x.workspace_id === wid);
+  const cwd = cwdOfWorkspace(wid);
+  if (w?.worktree?.checkout_path) return { root: w.worktree.checkout_path, linked: true };
+  try {
+    const l = await srv("worktree.list", { workspace_id: wid });
+    const path = checkoutFor(cwd, l.worktrees.map((x) => x.path)) ?? l.source.source_checkout_path;
+    await srv("worktree.open", { workspace_id: wid, path });
+    await refreshSnapshot();
+    return { root: path, linked: true };
+  } catch (e) {
+    if (!String(e).includes("not_git_worktree")) throw e;
+    return { root: cwd || null, linked: false, note: "Este space no está en un repositorio git: el servidor abrirá el agente en un space nuevo de esa carpeta." };
+  }
+}
+
 // Launch form with two modes: an agent with a Shepherd role and task, or a plain agent of any
 // installed kind. `root` is the folder to work in; `onDone({ id?, pane })` runs after a launch.
-function spawnForm({ root = "", onDone, onCancel }) {
+function spawnForm({ root = "", workspaceId = ws.wid, taskId = null, taskText = "", onDone, onCancel }) {
   let mode = "role";
   const msg = el("div", { className: "dim" });
   const body = el("div", { className: "aform-body" });
@@ -62,8 +89,23 @@ function spawnForm({ root = "", onDone, onCancel }) {
 
   // --- role mode
   const role = el("select", { className: "inline" }, optionFor("", "cargando roles…"));
-  const task = el("textarea", { className: "inline", rows: 3, placeholder: "Tarea del agente" });
+  const task = el("textarea", { className: "inline", rows: 3, placeholder: "Tarea del agente", value: taskText });
   const dir = el("input", { type: "text", className: "inline", placeholder: "carpeta del proyecto", value: root });
+  // The workspace the agent is created in; "otra carpeta" is for projects with no workspace yet.
+  const space = el("select", { className: "inline" });
+  const spaceHint = el("div", { className: "dim small" });
+  const workspaces = () => ws.snap?.workspaces ?? [];
+  const fillSpaces = () => {
+    space.replaceChildren(...workspaces().map((w) => optionFor(w.workspace_id, spaceName2(w))), optionFor("", "Otra carpeta…"));
+    space.value = workspaces().some((w) => w.workspace_id === workspaceId) ? workspaceId : (workspaces()[0]?.workspace_id ?? "");
+    showSpace();
+  };
+  const showSpace = () => {
+    const w = workspaces().find((x) => x.workspace_id === space.value);
+    spaceHint.textContent = w ? `Carpeta: ${workspaceRootOf(w, cwdOfWorkspace(w.workspace_id)) ?? "(desconocida)"}` : "Escribe la carpeta del proyecto.";
+    dir.hidden = !!w;
+  };
+  space.onchange = showSpace;
   const vendor = el("select", { className: "inline" }, optionFor("", "(el vendor del rol)"));
   const worktree = el("input", { type: "checkbox" });
   // --- plain mode
@@ -89,14 +131,14 @@ function spawnForm({ root = "", onDone, onCancel }) {
   const submit = el("button", { className: "btn small", onclick: launch }, "Lanzar");
 
   function render() {
-    seg.replaceChildren(...[["role", "Con rol de Shepherd"], ["plain", "Agente suelto"]].map(([m, label]) =>
+    seg.replaceChildren(...[["role", taskId ? `Agente para la tarea #${taskId}` : "Con rol de Shepherd"], ...(taskId ? [] : [["plain", "Agente suelto"]])].map(([m, label]) =>
       el("button", { className: "mini" + (m === mode ? " on" : ""), onclick: () => { mode = m; msg.textContent = ""; render(); refreshModels(); } }, label)));
     submit.textContent = mode === "role" ? "Lanzar" : "Iniciar";
     const refresh = el("button", { className: "mini", title: "Volver a buscar agentes instalados y sus modelos", onclick: async () => { msg.textContent = "Buscando…"; await loadDiscovery(true); fillVendors(); fillKinds(); fillRoles(); await refreshModels(); msg.textContent = ""; } }, "Detectar de nuevo");
     body.replaceChildren(...(mode === "role"
-      ? [el("label", {}, "Rol"), role, el("label", {}, "Tarea"), task, el("label", {}, "Carpeta"), dir, el("label", {}, "Vendor"), vendor,
+      ? [el("label", {}, "Rol"), role, el("label", {}, "Tarea"), task, el("label", {}, "Space"), space, spaceHint, dir, el("label", {}, "Vendor"), vendor,
         el("label", {}, "Modelo"), picker.input, picker.list, picker.hint, picker.saveBtn, el("label", { className: "check" }, worktree, " en un worktree propio")]
-      : [el("label", {}, "Agente"), kind, el("label", {}, "Nombre"), nick, el("label", {}, "Modelo"), picker.input, picker.list, picker.hint, picker.saveBtn]), refresh);
+      : [el("label", {}, "Agente"), kind, el("label", {}, "Space"), space, spaceHint, el("label", {}, "Nombre"), nick, el("label", {}, "Modelo"), picker.input, picker.list, picker.hint, picker.saveBtn]), refresh);
   }
 
   const fillRoles = () => {
@@ -113,39 +155,47 @@ function spawnForm({ root = "", onDone, onCancel }) {
       const typed = nick.value.trim(), name = sanitizeAgentName(typed);
       if (typed && !name) { msg.textContent = "El nombre debe empezar por una letra (a-z, 0-9, - y _)."; return; }
       if (typed && name !== typed) { nick.value = name; flash(`Nombre ajustado a «${name}»`); }
-      const started = await quickStartAgent({ kind: kind.value, name, model });
+      const started = await quickStartAgent({ kind: kind.value, name, model, workspaceId: space.value || undefined });
       submit.disabled = false;
-      if (!started) { msg.textContent = "No se pudo iniciar (ver la barra inferior)."; return; }
+      if (!started) { msg.textContent = `No se pudo iniciar: ${ws.lastError || "error desconocido"}`; return; }
       flash(`Agente ${kind.value} iniciado`); onDone?.(started); return;
     }
+    if (shepherdOff()) { msg.textContent = "Activa Shepherd primero (aviso bajo los paneles)."; return; }
     if (!role.value || !task.value.trim()) { msg.textContent = "Elige un rol y escribe la tarea."; return; }
     const params = { role: role.value, task: task.value.trim(), worktree: worktree.checked };
-    if (dir.value.trim()) params.root = dir.value.trim();
+    if (taskId !== null) params.task_id = String(taskId);
+    submit.disabled = true; msg.textContent = space.value ? "Preparando el space…" : "Lanzando…";
+    let note = "";
+    if (space.value) {
+      try { const target = await rootForWorkspace(space.value); if (target.root) params.root = target.root; note = target.note ?? ""; }
+      catch (e) { submit.disabled = false; msg.textContent = `No se pudo preparar el space: ${e}`; return; }
+    } else if (dir.value.trim()) params.root = dir.value.trim();
     if (vendor.value) params.vendor = vendor.value;
     if (model) params.model = model;
-    submit.disabled = true; msg.textContent = "Lanzando…";
+    msg.textContent = "Lanzando…";
     const r = await act("shepherd.agent.spawn", params);
     submit.disabled = false;
-    if (!r) { msg.textContent = "No se pudo lanzar (ver la barra inferior)."; return; }
-    flash(`Agente ${r.agent.id} lanzado`);
+    if (!r) { msg.textContent = `No se pudo lanzar: ${ws.lastError || "error desconocido"}`; return; }
+    flash(note ? `Agente ${r.agent.id} lanzado. ${note}` : `Agente ${r.agent.id} lanzado`);
     onDone?.(r.agent);
   }
 
   const form = el("div", { className: "aform" }, seg, body, msg, el("div", { className: "row" }, submit, el("button", { className: "mini", onclick: () => onCancel?.() }, "Cancelar")));
   form.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Escape") onCancel?.(); });
+  fillSpaces();
   render();
-  loadDiscovery().then(() => { fillVendors(); fillKinds(); fillRoles(); render(); refreshModels(); });
+  loadDiscovery().then(() => { fillVendors(); fillKinds(); fillRoles(); fillSpaces(); render(); refreshModels(); });
   return form;
 }
 
 // Starts a plain agent (no role) in a new tab of the active space: `agent.start` needs a pane that
 // sits at a shell prompt. Returns { pane } or null (the failure is already in the status bar).
-async function quickStartAgent({ kind, name, model }) {
-  const cwd = activeCwd() || undefined;
+async function quickStartAgent({ kind, name, model, workspaceId = ws.wid }) {
+  const cwd = (workspaceId ? cwdOfWorkspace(workspaceId) : activeCwd()) || undefined;
   let pane = null;
-  if (ws.wid) {
-    const r = await act("tab.create", { workspace_id: ws.wid, focus: true, cwd });
-    if (r) { ws.tid = r.tab.tab_id; pane = r.root_pane.pane_id; }
+  if (workspaceId) {
+    const r = await act("tab.create", { workspace_id: workspaceId, focus: true, cwd });
+    if (r) { ws.wid = workspaceId; ws.tid = r.tab.tab_id; pane = r.root_pane.pane_id; }
   } else {
     const r = await act("workspace.create", { focus: true, cwd });
     if (r) { ws.wid = r.workspace.workspace_id; ws.tid = r.tab.tab_id; pane = r.root_pane.pane_id; }
@@ -166,7 +216,7 @@ async function quickStartAgent({ kind, name, model }) {
       break;
     }
   }
-  if (!started) { flash(lastError); return null; }
+  if (!started) { ws.lastError = lastError; flash(lastError); return null; }
   scheduleRefresh();
   return { pane };
 }
@@ -192,6 +242,13 @@ function agentRows(snap, registry) {
     rows.push({ status: STATE_GROUP[r.state] ?? "idle", pane: r.pane || null, sid: r.id, sstate: r.state, title: `${r.role} (${r.id})`, sub: r.error || r.task_text || "", canPrompt: false });
   }
   return rows;
+}
+
+// Attaches an existing agent to a task, or detaches it (taskId null). The server has no method for it, so the
+// desktop edits the agent registry (see setup.rs). Returns true on success; the failure is shown in the bar.
+async function assignAgent(agentId, taskId) {
+  try { await invoke("assign_agent_task", { agentId, task: taskId, root: projectRoot() }); return true; }
+  catch (e) { ws.lastError = String(e); flash(String(e)); return false; }
 }
 
 const isFinished = (row) => !!row.sid && TERMINAL_STATES.includes(row.sstate);

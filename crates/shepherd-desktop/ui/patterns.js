@@ -56,7 +56,8 @@ function setPattern(pat, source, isNew, path = null) {
 }
 
 async function drawPatterns() {
-  const [list, cfg] = await Promise.all([invoke("pattern_list"), invoke("get_models").catch(() => null)]);
+  if (!dc.loaded) loadDiscovery().then(() => { if (pe?.sel?.type === "agent") renderInspector(); });
+  const [list, cfg] = await Promise.all([invokeP("pattern_list"), invokeP("get_models").catch(() => null)]);
   const items = el("div", { id: "items" });
   for (const p of list)
     items.append(listItem({ title: p.name, meta: `${p.kind} · ${p.agents_count}a${p.shadowed ? " · tapado" : ""}`, off: p.shadowed,
@@ -71,7 +72,7 @@ async function drawPatterns() {
 async function openPattern(name) {
   if (!leave("pat:" + name, msgBox())) return;
   try {
-    const r = await invoke("pattern_load", { name });
+    const r = await invokeP("pattern_load", { name });
     setPattern(r.pattern, r.source, false, r.path); pe.problems = r.problems;
   } catch (e) { return setMsg(msgBox(), String(e), "bad"); }
   drawPatterns();
@@ -91,7 +92,7 @@ function changed() {
   renderCanvas();
   clearTimeout(validateTimer);
   validateTimer = setTimeout(async () => {
-    try { pe.problems = await invoke("pattern_validate", { pattern: pe.pat }); renderProblems(); }
+    try { pe.problems = await invokeP("pattern_validate", { pattern: pe.pat }); renderProblems(); }
     catch (e) { setMsg(msgBox(), String(e), "bad"); }
   }, 250);
 }
@@ -108,11 +109,15 @@ function drawEditor() {
   const save = el("button", { className: "btn primary", disabled: builtin, title: builtin ? "Plantilla incluida: usa Duplicar" : "", onclick: savePattern }, "Guardar");
   const head = el("div", { className: "head" }, `PATRÓN: ${pe.pat.name || "nuevo"} (${pe.isNew ? "nuevo" : pe.source})`, st, save,
     el("button", { className: "btn", onclick: () => newPattern(pe.pat) }, "Duplicar"));
+  // Running needs a saved pattern: the server reads it from disk, not from this editor.
+  const runnable = !pe.isNew && !dirty;
+  head.append(el("button", { className: "btn", disabled: !runnable, title: runnable ? "Lanza los agentes del patrón en el space activo" : "Guarda el patrón antes de ejecutarlo",
+    onclick: () => { pe.runOpen = !pe.runOpen; pe.runForm ??= runPatternForm(); drawEditor(); } }, "Ejecutar"));
   if (!pe.isNew && !builtin) {
     let sure = false;
     const del = el("button", { className: "btn danger", onclick: async () => {
       if (!sure) { sure = true; del.textContent = "¿Seguro? Pulsa otra vez"; return; }
-      try { await invoke("pattern_delete", { name: pe.pat.name }); pe = null; dirty = false; drawPatterns(); }
+      try { await invokeP("pattern_delete", { name: pe.pat.name }); pe = null; dirty = false; drawPatterns(); }
       catch (e) { setMsg(msgBox(), String(e), "bad"); }
     } }, "Eliminar");
     head.append(del);
@@ -123,15 +128,46 @@ function drawEditor() {
     el("button", { className: "btn", onclick: () => { pe.pos = autoLayout(pe.pat); renderCanvas(); } }, "Ordenar"),
     el("span", { className: "hint" }, "Arrastra el punto ● de un nodo hasta otro para conectar. Suprimir borra lo seleccionado."));
   const canvas = el("div", { id: "canvas" });
-  $("detail").replaceChildren(head, tools, el("div", { id: "work" }, canvas, el("div", { id: "insp", className: "insp" })), el("pre", { id: "msgs" }));
+  $("detail").replaceChildren(head, ...(pe.runOpen && pe.runForm ? [pe.runForm] : []), tools, el("div", { id: "work" }, canvas, el("div", { id: "insp", className: "insp" })), el("pre", { id: "msgs" }));
   renderCanvas(); renderInspector();
   if (pe.problems.length || !pe.isNew) renderProblems(); else setMsg(msgBox(), pe.path ?? "");
+}
+
+// "Ejecutar": launches the pattern's agents in the active workspace. The workspace is linked to its checkout
+// first, so the agents land inside it instead of in new workspaces.
+function runPatternForm() {
+  const objective = el("textarea", { className: "inline", rows: 3, placeholder: "Objetivo del run (opcional)" });
+  const where = el("div", { className: "dim small" });
+  const msg = el("div", { className: "dim" });
+  const w = () => ws.snap?.workspaces.find((x) => x.workspace_id === ws.wid);
+  where.textContent = w() ? `Se ejecutará en el space «${w().label || "Workspace " + w().number}»` : "Crea un space antes de ejecutar un patrón.";
+  const close = () => { pe.runOpen = false; drawEditor(); };
+  const run = el("button", { className: "btn small", onclick: async () => {
+    if (shepherdOff()) { msg.textContent = "Activa Shepherd primero (aviso bajo los paneles)."; return; }
+    if (!ws.wid) { msg.textContent = "No hay ningún space activo."; return; }
+    run.disabled = true; msg.textContent = "Preparando el space…";
+    let target;
+    try { target = await rootForWorkspace(ws.wid); } catch (e) { run.disabled = false; msg.textContent = `No se pudo preparar el space: ${e}`; return; }
+    const params = { pattern: pe.pat.name };
+    if (objective.value.trim()) params.task = objective.value.trim();
+    if (target.root) params.root = target.root;
+    msg.textContent = "Ejecutando…";
+    const r = await act("shepherd.pattern.run.start", params);
+    run.disabled = false;
+    if (!r) { msg.textContent = `No se pudo ejecutar: ${ws.lastError || "error desconocido"}`; return; }
+    flash(target.note ? `Run iniciado. ${target.note}` : "Run iniciado");
+    pe.runOpen = false; pe.runForm = null; openPanelTab("runs");
+  } }, "Ejecutar patrón");
+  const form = el("div", { className: "aform", style: "margin:8px 14px" }, el("label", {}, "Objetivo"), objective, where, msg,
+    el("div", { className: "row" }, run, el("button", { className: "mini", onclick: close }, "Cancelar")));
+  form.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Escape") close(); });
+  return form;
 }
 
 async function savePattern() {
   clearTimeout(validateTimer); // a pending live validation must not overwrite the save message
   try {
-    const r = await invoke("pattern_save", { pattern: pe.pat, source: pe.source, isNew: pe.isNew });
+    const r = await invokeP("pattern_save", { pattern: pe.pat, source: pe.source, isNew: pe.isNew });
     pe.problems = r.problems; pe.isNew = false; pe.source = r.source; pe.path = r.path; dirty = false;
     await drawPatterns(); renderProblems("Guardado en " + r.path);
   } catch (e) { setMsg(msgBox(), String(e), "bad"); }
@@ -253,6 +289,15 @@ function bind(obj, key, { kind = "text", nullable = false, list = null, disabled
 }
 const row = (label, input) => [el("label", {}, label), input];
 
+// Adds the models the agent itself lists (e.g. `agy models`) to the model suggestions of a pattern agent.
+async function suggestModels(a, cfg, list) {
+  const vendor = cfg?.vendors?.[a.vendor];
+  if (!vendor) return;
+  const info = await invoke("agent_models", { kind: kindOfVendor(vendor), refresh: false }).catch(() => null);
+  if (!info || !list.isConnected) return;
+  list.replaceChildren(...mergeModels({ live: info.live, configured: vendor.models ?? [], agentDefault: info.agent_default }).map((o) => el("option", { value: o.id }, o.label)));
+}
+
 function renderInspector() {
   const box = $("insp"); if (!box) return;
   const form = el("div", { className: "form" }), s = pe.sel, pat = pe.pat, cfg = pe.cfg;
@@ -271,7 +316,11 @@ function renderInspector() {
       ...row("model", bind(a, "model", { nullable: true, list: "dl-models" })), ...row("count", bind(a, "count", { kind: "number" })),
       ...row("level", bind(a, "level", { kind: "number", nullable: true })), ...row("group", bind(a, "group", { nullable: true })),
       ...row("start", bind(a, "start", { kind: "bool" })), ...row("prompt", bind(a, "prompt", { kind: "area", nullable: true })));
-    form.append(dl("dl-roles", Object.keys(cfg?.roles ?? {})), dl("dl-vendors", Object.keys(cfg?.vendors ?? {})), dl("dl-models", models), remove("Quitar agente"));
+    const vendorOptions = Object.entries(cfg?.vendors ?? {}).map(([name, v]) => el("option", { value: name, label: `${name}${dc.loaded ? (pathOf(v.command) ? " ✓" : " (no instalado)") : ""}` }));
+    const vendorList = el("datalist", { id: "dl-vendors" }); vendorList.append(...vendorOptions);
+    const modelList = dl("dl-models", models);
+    form.append(dl("dl-roles", Object.keys(cfg?.roles ?? {})), vendorList, modelList, remove("Quitar agente"));
+    suggestModels(a, cfg, modelList);
   } else if (s.type === "topic") {
     const t = pat.topics.find((x) => x.name === s.name);
     form.append(title("Tópico"),

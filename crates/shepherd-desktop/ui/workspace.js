@@ -17,7 +17,7 @@ function flash(msg) {
 // Runs a server method, refreshes the view, and reports failures in the status bar.
 async function act(method, params) {
   try { const r = await srv(method, params); scheduleRefresh(); return r; }
-  catch (e) { flash(String(e)); return null; }
+  catch (e) { ws.lastError = String(e); flash(String(e)); return null; }
 }
 
 // Two-step destructive buttons without pop-ups: the first click arms, the second one runs.
@@ -34,6 +34,12 @@ function inlineEdit(initial, commit, cancel) {
   setTimeout(() => { input.focus(); input.select(); }, 0);
   return input;
 }
+
+// The project the views are about: the folder of the active workspace (its linked checkout, else where its
+// terminal is). The Rust side finds the project root from it; null means "the one the app started in".
+const projectRoot = () => workspaceRootOf(ws.snap?.workspaces.find((w) => w.workspace_id === ws.wid), activeCwd()) || null;
+// invoke() for commands that read a project (tasks, patterns, runs, skills, git, files, config).
+const invokeP = (cmd, args = {}) => invoke(cmd, { ...args, root: projectRoot() });
 
 // ---- state ---------------------------------------------------------------------------------
 let refreshTimer = 0, refreshing = false, again = false;
@@ -73,6 +79,9 @@ function focusPane(paneId) {
 // ---- rendering -----------------------------------------------------------------------------
 function renderWorkspace() {
   $("panes").hidden = ws.panel; $("shepherd-panel").hidden = !ws.panel;
+  // Another workspace means another project: the open panel view must read that one.
+  const root = projectRoot();
+  if (root !== ws.root) { ws.root = root; if (ws.panel) draw(); }
   renderSidebar(); renderTabs();
   if (!ws.panel) renderPanes();
 }

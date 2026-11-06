@@ -53,8 +53,20 @@ function buildCommands() {
   add("Agentes", "Reanudar agentes", () => act("shepherd.agent.resume", {}), { danger: true });
   for (const d of dc.detected) if (d.known && d.path) add("Agentes", `Iniciar agente: ${d.command}`, () => quickStartAgent({ kind: d.command }));
   add("Agentes", "Detectar agentes instalados de nuevo", async () => { await loadDiscovery(true); flash("Agentes detectados: " + dc.detected.filter((d) => d.known && d.path).map((d) => d.command).join(", ")); });
-  add("Tareas", "Nueva tarea…", () => askFor("Título de la tarea", (title) => title && act("shepherd.task.create", { title })));
-  add("Patrones", "Ejecutar patrón…", () => askFor("Nombre del patrón", (pattern) => pattern && askFor("Objetivo del run", (task) => act("shepherd.pattern.run.start", task ? { pattern, task } : { pattern }))));
+  add("Tareas", "Nueva tarea…", () => askFor("Título de la tarea", async (title) => {
+    if (!title) return;
+    // in the project of the active workspace, at its root (where `.shepherd/` is)
+    const root = await invoke("resolved_root", { root: projectRoot() });
+    await act("shepherd.task.create", { title, root });
+  }));
+  add("Patrones", "Ejecutar patrón…", () => askFor("Nombre del patrón", (pattern) => pattern && askFor("Objetivo del run", async (task) => {
+    // agents of the run land in the active workspace: link it to its checkout first
+    const target = ws.wid ? await rootForWorkspace(ws.wid).catch(() => null) : null;
+    const params = { pattern };
+    if (task) params.task = task;
+    if (target?.root) params.root = target.root;
+    await act("shepherd.pattern.run.start", params);
+  })));
   for (const w of s.workspaces) add("Navegar", `Ir a space: ${spaceName(w)}`, () => selectWorkspace(w.workspace_id));
   for (const t of ws.wid ? tabsOf(ws.wid) : []) add("Navegar", `Ir a pestaña: ${t.label}`, () => selectTab(t.tab_id));
   for (const r of agentRows(s, ws.sagents)) if (r.pane) add("Navegar", `Ir al agente: ${r.title}`, () => focusPane(r.pane));

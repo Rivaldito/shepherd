@@ -12,12 +12,12 @@ function applyRuns(raw) {
 
 async function drawRuns() {
   poll("runs", refreshRuns); // runs live in a file
-  try { applyRuns(JSON.stringify(await invoke("run_list"))); }
+  try { applyRuns(JSON.stringify(await invokeP("run_list"))); }
   catch (e) { $("list").replaceChildren(el("div", { className: "empty" }, String(e))); $("detail").replaceChildren(); }
 }
 
 async function refreshRuns() {
-  try { const raw = JSON.stringify(await invoke("run_list")); if (raw !== rn.raw) applyRuns(raw); } catch (_) { /* keep last view */ }
+  try { const raw = JSON.stringify(await invokeP("run_list")); if (raw !== rn.raw) applyRuns(raw); } catch (_) { /* keep last view */ }
 }
 
 function renderRuns() {

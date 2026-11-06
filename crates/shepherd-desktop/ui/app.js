@@ -57,9 +57,9 @@ async function draw() {
   if (tab === "skills") return drawSkills();
   if (tab === "git") return drawGit();
   if (tab === "events") return drawEvents();
-  if (tab === "models") { models = await invoke("get_models").catch((e) => { models = null; sel = null; $("list").replaceChildren(el("div", { className: "empty" }, String(e))); return null; }); if (!models) return; }
+  if (tab === "models") { models = await invokeP("get_models").catch((e) => { models = null; sel = null; $("list").replaceChildren(el("div", { className: "empty" }, String(e))); return null; }); if (!models) return; }
   else if (tab === "patterns") return drawPatterns();
-  else files = await invoke("list_files");
+  else files = await invokeP("list_files");
 
   const items = el("div", { id: "items" });
   if (tab === "models") {
@@ -134,10 +134,10 @@ async function drawRaw() {
   const f = sel;
   const msgs = el("pre", { id: "msgs" }, f.path);
   const state = el("span", { className: "state" });
-  const ed = el("textarea", { id: "editor", spellcheck: false, value: await invoke("read_file", { path: f.path }) });
+  const ed = el("textarea", { id: "editor", spellcheck: false, value: await invokeP("read_file", { path: f.path }) });
   const save = el("button", { className: "btn primary", disabled: true, onclick: async () => {
     try {
-      const w = await invoke("save_file", { path: f.path, text: ed.value });
+      const w = await invokeP("save_file", { path: f.path, text: ed.value });
       dirty = false; state.textContent = ""; save.disabled = true;
       setMsg(msgs, w.length ? w.join("\n") : "Guardado, sin problemas.", w.length ? "bad" : "ok");
     } catch (e) { setMsg(msgs, String(e), "bad"); }
