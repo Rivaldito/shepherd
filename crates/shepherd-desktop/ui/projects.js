@@ -30,4 +30,38 @@ function taskPrompt(task) {
   return parts.join("\n\n");
 }
 
-if (typeof module !== "undefined") module.exports = { checkoutFor, workspaceRootOf, agentsOfTask, taskPrompt };
+// A pattern run belongs to a task when its objective starts with "Tarea #N:" (what taskPrompt writes).
+// The run's agents cannot carry the task: the registry uses their task_id for the run's own id.
+const TASK_REF = /^Tarea #(\d+):/;
+const taskOfRun = (run) => { const m = TASK_REF.exec(run.task ?? ""); return m ? Number(m[1]) : null; };
+const isRunAgent = (agent) => String(agent.task_id ?? "").startsWith("run-");
+
+// The objective to run a pattern with for `task`: keeps whatever the user edited, but always starts with the
+// reference that links the run to the task.
+const ensureTaskPrefix = (text, task) => (TASK_REF.test(text.trim()) ? text.trim() : `Tarea #${task.id}: ${task.title}\n\n${text.trim()}`.trim());
+
+// What the monitor shows: every task with its direct agents and its pattern runs, then whatever has no task.
+// A run's agents come from the run, refreshed with the live registry record when there is one.
+function buildMonitorTree(tasks, runs, registry) {
+  const byId = new Map(registry.map((a) => [a.id, a]));
+  const runNode = (run) => ({ run, agents: (run.agents ?? []).map((ra) => ({ ...ra, ...(byId.get(ra.id) ?? {}) })) });
+  const newestFirst = (a, b) => String(b.run.created_at ?? "").localeCompare(String(a.run.created_at ?? ""));
+  const inRun = new Set(runs.flatMap((r) => (r.agents ?? []).map((a) => a.id)));
+  const known = new Set(tasks.map((t) => t.id));
+  const groups = tasks.map((task) => ({
+    kind: "task", task,
+    direct: agentsOfTask(registry, task.id).filter((a) => !isRunAgent(a)),
+    runs: runs.filter((r) => taskOfRun(r) === task.id).map(runNode).sort(newestFirst),
+  }));
+  const rest = {
+    kind: "none",
+    direct: registry.filter((a) => !isRunAgent(a) && !inRun.has(a.id) && !known.has(Number(a.task_id))),
+    runs: runs.filter((r) => !known.has(taskOfRun(r))).map(runNode).sort(newestFirst),
+  };
+  return rest.direct.length || rest.runs.length ? [...groups, rest] : groups;
+}
+
+// Ids of every agent under a node of the tree (a task, a run or the "no task" group).
+const agentIdsOf = (node) => [...new Set([...(node.direct ?? []).map((a) => a.id), ...(node.runs ?? []).flatMap((r) => r.agents.map((a) => a.id))])];
+
+if (typeof module !== "undefined") module.exports = { checkoutFor, workspaceRootOf, agentsOfTask, taskPrompt, taskOfRun, isRunAgent, ensureTaskPrefix, buildMonitorTree, agentIdsOf };

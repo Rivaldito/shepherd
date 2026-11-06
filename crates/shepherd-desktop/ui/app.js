@@ -11,16 +11,16 @@ const VENDOR = [["command","text"],["args","lines"],["models","lines"],["default
 const ROLE = [["vendor","text"],["model","text"],["fallback","lines"],["must_differ_from","text"],
   ["worktree","bool"],["can_spawn","bool"],["skills","lines"],["prompt","area"]];
 const SPECS = { vendors: VENDOR, roles: ROLE };
-const TABS = [["agents", "Agentes"], ["tasks", "Tareas"], ["runs", "Runs"], ["models", "Modelos"], ["patterns", "Patrones"], ["skills", "Skills"], ["git", "Git"], ["events", "Eventos"], ["files", "Archivos"]];
+const TABS = [["agents", "Agentes"], ["tasks", "Tareas"], ["runs", "Runs"], ["monitor", "Monitor"], ["models", "Modelos"], ["patterns", "Patrones"], ["skills", "Skills"], ["git", "Git"], ["events", "Eventos"], ["files", "Archivos"]];
 
-let tab = "agents", files = [], models = null, sel = null; // sel: {section,name,isNew} | file entry
+let tab = window.__view?.view === "monitor" ? "monitor" : "agents", files = [], models = null, sel = null; // sel: {section,name,isNew} | file entry
 let dirty = false, armed = null;
 
 // One poller for the file-backed tabs (agents, runs, tasks): re-runs `fn` every 3 s while `key` is the open tab.
 let pollTimer = 0;
-function poll(key, fn) {
+function poll(key, fn, ms = 3000) {
   clearInterval(pollTimer);
-  pollTimer = setInterval(() => (tab !== key ? clearInterval(pollTimer) : $("shepherd-panel").hidden || fn()), 3000);
+  pollTimer = setInterval(() => (tab !== key ? clearInterval(pollTimer) : $("shepherd-panel").hidden || fn()), ms);
 }
 
 const setMsg = (box, text, cls = "") => { box.textContent = text; box.className = cls; };
@@ -54,6 +54,7 @@ async function draw() {
   if (tab === "agents") return drawAgents();
   if (tab === "tasks") return drawTasks();
   if (tab === "runs") return drawRuns();
+  if (tab === "monitor") return drawMonitor();
   if (tab === "skills") return drawSkills();
   if (tab === "git") return drawGit();
   if (tab === "events") return drawEvents();
@@ -147,7 +148,7 @@ async function drawRaw() {
 }
 
 addEventListener("keydown", (e) => {
-  if ($("shepherd-panel").hidden) return; // terminals own the keyboard
+  if ($("shepherd-panel").hidden || inMonitorWindow()) return; // terminals own the keyboard; the monitor window has no tabs to switch
   if (e.ctrlKey && e.key === "s") { e.preventDefault(); [...document.querySelectorAll(".head .btn.primary")][0]?.click(); }
   if (!e.ctrlKey && !e.altKey && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) {
     const t = TABS[Number(e.key) - 1]; if (t) document.querySelectorAll("#tabs button")[Number(e.key) - 1].click();

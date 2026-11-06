@@ -158,6 +158,14 @@ pre.term { margin:0; padding:4px 6px; width:100%; height:100%; overflow:hidden; 
 /* assigned agents under a task */
 .arow { display:flex; align-items:center; gap:10px; padding:3px 0; }
 
+/* monitor: tree depth, feed, and the window that shows only the monitor */
+.item.depth1 { padding-left:22px; } .item.depth2 { padding-left:38px; font-size:12px; }
+.mfeed { max-height:48vh; overflow:auto; font-size:12px; } .mfeed .m { display:grid; grid-template-columns:5.5em 16em 5em 1fr; gap:10px; padding:3px 0; border-bottom:1px solid var(--line); }
+.mfeed .m span { overflow:hidden; text-overflow:ellipsis; white-space:pre-wrap; word-break:break-word; }
+.block .tools select, .block .tools input { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:4px 8px; color:var(--fg); font:inherit; min-width:0; }
+.monitor-window #sidebar, .monitor-window #wtabs, .monitor-window #panes, .monitor-window #tabs, .monitor-window #notice, .monitor-window #cmdbar { display:none !important; }
+.monitor-window #shepherd-panel { display:flex; }
+
 /* notice row (e.g. Shepherd layer off) */
 #notice { display:flex; align-items:center; gap:12px; padding:6px 12px; background:#3a2f1c; border-top:1px solid var(--warn); color:var(--warn); font-size:12px; }
 #notice span { flex:1; } .assign { display:flex; gap:6px; align-items:center; margin-top:8px; } .assign select { flex:1; min-width:0; background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:3px 6px; color:var(--fg); font:inherit; }

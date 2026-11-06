@@ -50,6 +50,7 @@ function buildCommands() {
     add("Worktrees", "Nuevo worktree…", () => askFor("Rama del worktree", (branch) => branch && act("worktree.create", { branch, workspace_id: ws.wid, focus: true })));
   }
   add("Agentes", "Lanzar agente…", () => { ws.panel = false; ws.forms.agent ??= openSpawnForm(); renderWorkspace(); });
+  add("Agentes", "Abrir el monitor de agentes en una ventana nueva", () => openMonitorWindow(null));
   add("Agentes", "Reanudar agentes", () => act("shepherd.agent.resume", {}), { danger: true });
   for (const d of dc.detected) if (d.known && d.path) add("Agentes", `Iniciar agente: ${d.command}`, () => quickStartAgent({ kind: d.command }));
   add("Agentes", "Detectar agentes instalados de nuevo", async () => { await loadDiscovery(true); flash("Agentes detectados: " + dc.detected.filter((d) => d.known && d.path).map((d) => d.command).join(", ")); });

@@ -45,6 +45,8 @@ function renderRuns() {
   if (r.quiesced) detail.append(block("NOTA:", "Terminó por inactividad; un mensaje nuevo en sus tópicos lo reabre."));
   const meta = [`Topología: ${r.kind}`, `Creado: ${r.created_at}`, `Actualizado: ${r.updated_at}`, r.finished_at && `Terminado: ${r.finished_at}`, r.worktree && `Worktree: ${r.worktree}`].filter(Boolean);
   $("detail").replaceChildren(
-    el("div", { className: "head" }, `RUN: ${r.pattern} (ID: ${r.id})`, el("span", { className: "badge " + cls }, txt), el("span", { className: "state" })),
+    el("div", { className: "head" }, `RUN: ${r.pattern} (ID: ${r.id})`, el("span", { className: "badge " + cls }, txt), el("span", { className: "state" }),
+      el("button", { className: "btn small", onclick: () => showMonitorTab(`run:${r.id}`) }, "Ver comunicación"),
+      el("button", { className: "btn small", onclick: () => openMonitorWindow(`run:${r.id}`) }, "Ventana nueva")),
     el("div", { className: "meta" }, meta.join(" | ")), detail);
 }

@@ -1,7 +1,7 @@
 // Tasks tab, like the TUI: filter (Todas / Abiertas / Completadas) + list + detail, for the project of
 // the active workspace. Tasks can be created here, and agents are launched for a task and listed under it
 // (the registry keeps `task_id` on each agent: that is what "assigned" means).
-let tk = { list: [], agents: [], sel: null, raw: "", filter: 0, dir: "", creating: false, newForm: null, spawning: null, spawnEl: null }; // sel: task id
+let tk = { list: [], agents: [], patterns: [], runs: [], runEls: {}, sel: null, raw: "", filter: 0, dir: "", creating: false, newForm: null, spawning: null, spawnEl: null }; // sel: task id
 
 const TASK_FILTERS = ["Todas", "Abiertas", "Completadas"];
 const isDoneTask = (t) => ["done", "completed", "archived"].includes(t.state.toLowerCase());
@@ -18,13 +18,14 @@ async function fetchTasks() {
   if (sb.status?.running) {
     try { agents = (await invoke("api_call", { method: "shepherd.agent.list", params: {} })).agents; } catch (_) { /* layer off or server gone */ }
   }
-  return { list, dir, agents };
+  const [patterns, runs] = await Promise.all([invokeP("pattern_list").catch(() => []), invokeP("run_list").catch(() => [])]);
+  return { list, dir, agents, patterns, runs };
 }
 
 function applyTasks(data) {
-  const raw = JSON.stringify([data.list, data.agents, data.dir]);
+  const raw = JSON.stringify([data.list, data.agents, data.dir, data.patterns, data.runs]);
   if (raw === tk.raw) return;
-  tk.raw = raw; tk.list = data.list; tk.agents = data.agents; tk.dir = data.dir;
+  tk.raw = raw; tk.list = data.list; tk.agents = data.agents; tk.dir = data.dir; tk.patterns = data.patterns; tk.runs = data.runs;
   renderTasks();
 }
 
@@ -87,7 +88,7 @@ function assignedBlock(t) {
   });
   const running = !!sb.status?.running;
   // Existing agents: anyone not already on this task (the label says which task they are on now).
-  const others = tk.agents.filter((a) => String(a.task_id ?? "") !== String(t.id));
+  const others = tk.agents.filter((a) => String(a.task_id ?? "") !== String(t.id) && !isRunAgent(a)); // a run's agents stay with their run
   const pick = el("select", {}, ...(others.length ? others.map((a) => el("option", { value: a.id }, `${a.role} (${a.id})${a.task_id ? ` · ahora en la tarea #${a.task_id}` : ""}`)) : [el("option", { value: "" }, "No hay otros agentes")]));
   const assign = el("div", { className: "assign" }, pick, el("button", { className: "btn small", disabled: !others.length, onclick: async () => {
     if (pick.value && await assignAgent(pick.value, t.id)) { flash(`Agente ${pick.value} asignado a la tarea #${t.id}`); tk.raw = ""; refreshTasks(); }
@@ -95,6 +96,49 @@ function assignedBlock(t) {
   return el("div", { className: "block" }, el("h4", {}, "AGENTES ASIGNADOS:"),
     ...(rows.length ? rows : [el("div", { className: "dim" }, "Ninguno todavía.")]), assign,
     el("button", { className: "btn small", disabled: !running, title: running ? "" : "Necesita el servidor en marcha", style: "margin-top:8px", onclick: () => spawnForTask(t) }, "+ Lanzar agente para esta tarea"));
+}
+
+// Runs a pattern FOR this task: the server creates the pattern's agents in the active workspace, and the run is
+// tied to the task through its objective ("Tarea #N: …"), which the monitor and this list read back.
+function patternLauncher(t) {
+  const pick = el("select", {});
+  const objective = el("textarea", { className: "inline", rows: 3, value: taskPrompt(t) });
+  const msg = el("div", { className: "dim small" }, "Se crea un agente por cada agente del patrón, en el space activo, y el run queda ligado a esta tarea.");
+  const go = el("button", { className: "btn small", onclick: async () => {
+    if (shepherdOff()) { msg.textContent = "Activa Shepherd primero (aviso bajo los paneles)."; return; }
+    if (!pick.value) { msg.textContent = "Elige un patrón."; return; }
+    if (!ws.wid) { msg.textContent = "No hay ningún space activo."; return; }
+    go.disabled = true; msg.textContent = "Preparando el space…";
+    let target;
+    try { target = await rootForWorkspace(ws.wid); } catch (e) { go.disabled = false; msg.textContent = `No se pudo preparar el space: ${e}`; return; }
+    const params = { pattern: pick.value, task: ensureTaskPrefix(objective.value, t) };
+    if (target.root) params.root = target.root;
+    msg.textContent = "Creando los agentes…";
+    const r = await act("shepherd.pattern.run.start", params);
+    go.disabled = false;
+    if (!r) { msg.textContent = `No se pudo ejecutar: ${ws.lastError || "error desconocido"}`; return; }
+    flash(`Patrón ${pick.value} ejecutado para la tarea #${t.id}: ${r.run.agents.length} agente(s)${target.note ? ". " + target.note : ""}`);
+    delete tk.runEls[t.id]; tk.raw = ""; refreshTasks();
+  } }, "Ejecutar patrón para esta tarea");
+  const el2 = el("div", { className: "aform", style: "margin-top:8px" }, el("label", {}, "Patrón"), pick, el("label", {}, "Objetivo (empieza por «Tarea #N:» para ligar el run)"), objective, msg, go);
+  return { el: el2, pick, go };
+}
+
+function patternsBlock(t) {
+  const mine = tk.runs.filter((r) => taskOfRun(r) === t.id);
+  const rows = mine.map((r) => {
+    const [txt, cls] = runBadge(r.state);
+    return el("div", { className: "arow" }, el("span", {}, `${r.pattern} `, el("span", { className: "badge " + cls }, txt)),
+      el("span", { className: "dim" }, `${(r.agents ?? []).length} agente(s) · ${r.id}`), el("span", { className: "grow" }),
+      el("button", { className: "mini", onclick: () => showMonitorTab(`run:${r.id}`) }, "Ver comunicación"),
+      el("button", { className: "mini", onclick: () => openMonitorWindow(`run:${r.id}`) }, "Ventana nueva"));
+  });
+  const L = (tk.runEls[t.id] ??= patternLauncher(t)); // built once: a refresh must not wipe an edited objective
+  const chosen = L.pick.value;
+  L.pick.replaceChildren(...(tk.patterns.length ? tk.patterns.map((p) => el("option", { value: p.name }, `${p.name} · ${p.kind} · ${p.agents_count} agente(s)`)) : [el("option", { value: "" }, "No hay patrones en este proyecto")]));
+  if (tk.patterns.some((p) => p.name === chosen)) L.pick.value = chosen;
+  L.go.disabled = !tk.patterns.length;
+  return el("div", { className: "block" }, el("h4", {}, "PATRONES DE ESTA TAREA:"), ...(rows.length ? rows : [el("div", { className: "dim" }, "Ninguno todavía.")]), L.el);
 }
 
 function renderTasks() {
@@ -130,6 +174,7 @@ function renderTasks() {
     return `${done ? "☑" : "☐"} ${c.replace(/^([-*] \[[ xX]\]|[-*])\s*/, "")}`;
   }).join("\n"))));
   detail.append(assignedBlock(t));
+  detail.append(patternsBlock(t));
   if ((t.subtasks ?? []).length) detail.append(block("SUBTAREAS:", text(t.subtasks.map((s) =>
     `${s.n}. ${s.title} [${s.state}]${s.branch ? " " + s.branch : ""}${s.pr ? " PR " + s.pr : ""}${s.note ? "\n     " + s.note : ""}`).join("\n"))));
   if (t.links.length) detail.append(block("ENLACES:", text(t.links.join("\n"))));

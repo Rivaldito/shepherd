@@ -70,6 +70,9 @@ function listFooter() {
 
 // "Tarea": which task of the project this agent works for, with a way to change or clear it.
 function taskAssignBlock(a) {
+  // A run's agents carry the run id; giving them a task would cut them off from the run.
+  if (isRunAgent(a)) return el("div", { className: "block" }, el("h4", {}, "TAREA DEL PROYECTO:"),
+    el("div", { className: "dim" }, `Pertenece al run ${a.task_id}: su tarea es la del run (míralo en la pestaña Monitor).`));
   const current = ag.tasks.find((t) => String(t.id) === String(a.task_id ?? ""));
   const pick = el("select", {}, el("option", { value: "" }, "(ninguna)"),
     ...ag.tasks.map((t) => el("option", { value: String(t.id), selected: current?.id === t.id }, `#${t.id} ${t.title}`)));

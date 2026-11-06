@@ -37,7 +37,7 @@ function inlineEdit(initial, commit, cancel) {
 
 // The project the views are about: the folder of the active workspace (its linked checkout, else where its
 // terminal is). The Rust side finds the project root from it; null means "the one the app started in".
-const projectRoot = () => workspaceRootOf(ws.snap?.workspaces.find((w) => w.workspace_id === ws.wid), activeCwd()) || null;
+const projectRoot = () => window.__view?.root || workspaceRootOf(ws.snap?.workspaces.find((w) => w.workspace_id === ws.wid), activeCwd()) || null;
 // invoke() for commands that read a project (tasks, patterns, runs, skills, git, files, config).
 const invokeP = (cmd, args = {}) => invoke(cmd, { ...args, root: projectRoot() });
 
@@ -293,6 +293,7 @@ async function tickTerminals() {
 }
 
 function initWorkspace() {
+  if (inMonitorWindow()) ws.panel = true; // the monitor window shows the panel and nothing else
   $("space-add").onclick = () => { ws.forms.space ??= newSpaceForm(); renderWorkspace(); };
   $("agent-add").onclick = () => { ws.forms.agent ??= openSpawnForm(); renderWorkspace(); };
   const listen = window.__TAURI__?.event?.listen;

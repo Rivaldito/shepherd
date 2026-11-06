@@ -842,6 +842,89 @@ fn spawn_event_forwarder(app: tauri::AppHandle) {
     });
 }
 
+/// Messages sent by or to any of `agents` (topic publications and direct mail), oldest first. Topic names are
+/// shared by every run, so who sends decides what belongs to a group of agents, not the topic.
+fn feed_from(
+    bus: &MessageBus,
+    agents: &[String],
+    after: i64,
+    limit: usize,
+) -> Result<Vec<Message>, String> {
+    let mine: HashSet<&str> = agents.iter().map(String::as_str).collect();
+    let mut msgs: Vec<Message> = bus
+        .since(after)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|m| {
+            mine.contains(m.from.as_str()) || (!m.to.is_empty() && mine.contains(m.to.as_str()))
+        })
+        .collect();
+    let skip = msgs.len().saturating_sub(limit.clamp(1, 500));
+    msgs.drain(..skip);
+    Ok(msgs)
+}
+
+/// What the given agents said and were told, for the monitor. Read-only; `async` since it loads the timeline.
+#[tauri::command(async)]
+fn bus_feed(agents: Vec<String>, after: Option<i64>, limit: usize) -> Result<Vec<Message>, String> {
+    feed_from(&open_bus()?, &agents, after.unwrap_or(0), limit)
+}
+
+/// Query-string safe: everything except unreserved characters is percent-encoded.
+fn encode_component(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+fn monitor_url(root: Option<&str>, focus: Option<&str>) -> String {
+    let mut query = vec!["view=monitor".to_string()];
+    for (key, value) in [("root", root), ("focus", focus)] {
+        if let Some(v) = value.filter(|v| !v.is_empty()) {
+            query.push(format!("{key}={}", encode_component(v)));
+        }
+    }
+    format!("index.html?{}", query.join("&"))
+}
+
+/// Opens the monitor in its own window, or brings the open one to the front and tells it what to focus.
+fn open_monitor_window<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    root: Option<&str>,
+    focus: Option<&str>,
+) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("monitor") {
+        let _ = window.emit("monitor-focus", json!({ "focus": focus }));
+        return window.set_focus().map_err(|e| e.to_string());
+    }
+    tauri::WebviewWindowBuilder::new(
+        app,
+        "monitor",
+        tauri::WebviewUrl::App(monitor_url(root, focus).into()),
+    )
+    .title("Shepherd — agentes y comunicación")
+    .inner_size(1200.0, 760.0)
+    .build()
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// `async` on purpose: creating a window from a synchronous command can deadlock on Linux.
+#[tauri::command(async)]
+fn open_monitor(
+    app: tauri::AppHandle,
+    root: Option<String>,
+    focus: Option<String>,
+) -> Result<(), String> {
+    open_monitor_window(&app, root.as_deref(), focus.as_deref())
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -879,7 +962,9 @@ fn main() {
             resolved_root,
             shepherd_config,
             enable_shepherd,
-            assign_agent_task
+            assign_agent_task,
+            bus_feed,
+            open_monitor
         ])
         .run(tauri::generate_context!())
         .expect("error al iniciar Shepherd desktop");
@@ -1170,6 +1255,67 @@ mod tests {
             dir_a.ends_with("/.shepherd/tasks") && dir_a.contains("tasks-a"),
             "{dir_a}"
         );
+    }
+
+    #[test]
+    fn the_feed_follows_who_sends_and_who_receives_not_the_topic() {
+        let dir = temp_project("feed");
+        let bus = MessageBus::open(dir.join("messages.jsonl")).unwrap();
+        // two runs share the topic name "blackboard"
+        bus.publish("blackboard", "de A", None, Some(0), "a-1")
+            .unwrap();
+        bus.publish("blackboard", "de otro run", None, Some(0), "z-9")
+            .unwrap();
+        bus.publish("blackboard", "de B", None, Some(0), "b-1")
+            .unwrap();
+        bus.send(Message::directed("z-9", "a-1", "msg", "correo directo a A"))
+            .unwrap();
+        bus.send(Message::directed("z-9", "z-8", "msg", "ajeno"))
+            .unwrap();
+        let texts = |agents: &[&str], after, limit| {
+            let list: Vec<String> = agents.iter().map(|a| a.to_string()).collect();
+            feed_from(&bus, &list, after, limit)
+                .unwrap()
+                .into_iter()
+                .map(|m| m.content)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            texts(&["a-1", "b-1"], 0, 100),
+            ["de A", "de B", "correo directo a A"]
+        );
+        assert_eq!(texts(&["b-1"], 0, 100), ["de B"]);
+        assert_eq!(texts(&["a-1", "b-1"], 0, 2), ["de B", "correo directo a A"]); // the newest two, oldest first
+        let first = feed_from(&bus, &["a-1".into()], 0, 100).unwrap();
+        assert_eq!(texts(&["a-1"], first[0].id, 100), ["correo directo a A"]); // only what is newer than `after`
+        assert!(texts(&["nadie"], 0, 100).is_empty() && texts(&[], 0, 100).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_monitor_url_carries_the_project_and_focus_safely_encoded() {
+        assert_eq!(monitor_url(None, None), "index.html?view=monitor");
+        assert_eq!(monitor_url(Some(""), Some("")), "index.html?view=monitor");
+        assert_eq!(
+            monitor_url(Some("/var/tmp/mi proyecto&x=1"), Some("run-fake-1")),
+            "index.html?view=monitor&root=%2Fvar%2Ftmp%2Fmi%20proyecto%26x%3D1&focus=run-fake-1"
+        );
+        assert_eq!(encode_component("ñ/#?"), "%C3%B1%2F%23%3F");
+        assert_eq!(encode_component("a-b_c.d~e"), "a-b_c.d~e");
+    }
+
+    #[test]
+    fn the_monitor_opens_one_window_and_reuses_it() {
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let handle = app.handle();
+        let count = || tauri::Manager::webview_windows(handle).len();
+        assert_eq!(count(), 0);
+        open_monitor_window(handle, Some("/p"), Some("run-1")).unwrap();
+        assert!(tauri::Manager::get_webview_window(handle, "monitor").is_some());
+        open_monitor_window(handle, Some("/other"), Some("run-2")).unwrap(); // already open: focus it, do not open another
+        assert_eq!(count(), 1);
     }
 
     #[test]

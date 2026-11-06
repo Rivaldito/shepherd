@@ -137,6 +137,13 @@ pub fn assign_task_at(
         .iter_mut()
         .find(|a| a.id == agent_id)
         .ok_or("agente no encontrado")?;
+    // Agents of a pattern run keep the run's id in `task_id`; overwriting it would cut them off from their run.
+    if agent.task_id.starts_with("run-") {
+        return Err(format!(
+            "el agente {agent_id} pertenece al run {} y no se puede asignar a una tarea",
+            agent.task_id
+        ));
+    }
     agent.task_id = task.map(|id| id.to_string()).unwrap_or_default();
     save_agent_registry(registry, &reg).map_err(|e| e.to_string())
 }
@@ -291,6 +298,34 @@ mod tests {
         assign_task_at(&reg, &dir, "a-1", None).unwrap(); // unassign
         assert_eq!(load_agent_registry(&reg).unwrap().agents[0].task_id, "");
         assert!(!reg.with_extension("json.tmp").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn agents_of_a_pattern_run_cannot_be_moved_to_a_task() {
+        let dir = temp("assign-run");
+        task_dir(&dir, 1);
+        let reg = dir.join("agents.json");
+        registry_with(
+            &reg,
+            vec![Agent {
+                id: "a-1".into(),
+                seq: 1,
+                token: "t".into(),
+                task_id: "run-fake-2831".into(),
+                ..Agent::default()
+            }],
+        );
+        let err = assign_task_at(&reg, &dir, "a-1", Some(1)).unwrap_err();
+        assert!(err.contains("pertenece al run run-fake-2831"), "{err}");
+        assert!(
+            assign_task_at(&reg, &dir, "a-1", None).is_err(),
+            "clearing it would also detach it from the run"
+        );
+        assert_eq!(
+            load_agent_registry(&reg).unwrap().agents[0].task_id,
+            "run-fake-2831"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
