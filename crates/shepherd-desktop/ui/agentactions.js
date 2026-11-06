@@ -74,7 +74,7 @@ async function rootForWorkspace(wid) {
     return { root: path, linked: true };
   } catch (e) {
     if (!String(e).includes("not_git_worktree")) throw e;
-    return { root: cwd || null, linked: false, note: "Este space no está en un repositorio git: el servidor abrirá el agente en un space nuevo de esa carpeta." };
+    return { root: cwd || null, linked: false, note: "Este space no está en un repositorio git: los agentes trabajan en su carpeta, sin worktree." };
   }
 }
 
@@ -167,13 +167,15 @@ function spawnForm({ root = "", workspaceId = ws.wid, taskId = null, taskText = 
     submit.disabled = true; msg.textContent = space.value ? "Preparando el space…" : "Lanzando…";
     let note = "";
     if (space.value) {
-      try { const target = await rootForWorkspace(space.value); if (target.root) params.root = target.root; note = target.note ?? ""; }
+      try { const target = await rootForWorkspace(space.value); if (target.root) params.root = target.root; params.workspace_id = space.value; note = target.note ?? ""; }
       catch (e) { submit.disabled = false; msg.textContent = `No se pudo preparar el space: ${e}`; return; }
     } else if (dir.value.trim()) params.root = dir.value.trim();
     if (vendor.value) params.vendor = vendor.value;
     if (model) params.model = model;
     msg.textContent = "Lanzando…";
-    const r = await act("shepherd.agent.spawn", params);
+    // `shepherd.call` carries `workspace_id`, which the typed `shepherd.agent.spawn` (frozen shape) cannot.
+    const out = await act("shepherd.call", { op: "spawn", args: params });
+    const r = out && { agent: out.data };
     submit.disabled = false;
     if (!r) { msg.textContent = `No se pudo lanzar: ${ws.lastError || "error desconocido"}`; return; }
     flash(note ? `Agente ${r.agent.id} lanzado. ${note}` : `Agente ${r.agent.id} lanzado`);

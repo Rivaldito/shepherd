@@ -1,19 +1,21 @@
 // The one place that launches a pattern run. Runs, Tareas and Patrones all use it, so the form, the
 // target space, the task link and the agent-limit handling are identical everywhere.
 
-// Starts a run. A pattern that needs more agents than `limits.max_concurrent_agents` is a deliberate
+// Starts a run in `workspace_id` (the space selected in the UI). It goes through `shepherd.call` because the
+// typed `shepherd.pattern.run.start` has a frozen shape without a workspace.
+// A pattern that needs more agents than `limits.max_concurrent_agents` is a deliberate
 // request here, so the server's confirmation is given and the user is told, instead of failing.
 async function startPatternRun(params) {
-  const { pattern, task, root } = params;
+  const { pattern, task, root, workspace_id } = params;
   try {
-    const run = await srv("shepherd.pattern.run.start", { pattern, task, root });
-    scheduleRefresh(); return { run, overLimit: false };
+    const out = await srv("shepherd.call", { op: "pattern_run_start", args: { pattern, task, root, workspace_id } });
+    scheduleRefresh(); return { run: { run: out.data }, overLimit: false };
   } catch (e) {
     if (!/confirmation_required: max_concurrent_agents/.test(String(e))) { ws.lastError = String(e); flash(String(e)); return null; }
   }
   try {
-    const run = await srv("shepherd.pattern.run.start", { pattern, task, root, confirm_over_limit: true });
-    scheduleRefresh(); return { run, overLimit: true };
+    const out = await srv("shepherd.call", { op: "pattern_run_start", args: { pattern, task, root, workspace_id, confirm_over_limit: true } });
+    scheduleRefresh(); return { run: { run: out.data }, overLimit: true };
   } catch (e) { ws.lastError = String(e); flash(String(e)); return null; }
 }
 
@@ -35,7 +37,7 @@ function patternRunForm({ task = null, pattern = null, onStarted, onCancel }) {
     try { target = await rootForWorkspace(ws.wid); } catch (e) { go.disabled = false; msg.textContent = `No se pudo preparar el space: ${e}`; return; }
     const text = task ? ensureTaskPrefix(objective.value, task) : objective.value.trim();
     msg.textContent = "Creando los agentes…";
-    const res = await startPatternRun({ pattern: pick.value, task: text || undefined, root: target.root || undefined });
+    const res = await startPatternRun({ pattern: pick.value, task: text || undefined, root: target.root || undefined, workspace_id: ws.wid });
     go.disabled = false;
     if (!res) { msg.textContent = `No se pudo ejecutar: ${ws.lastError || "error desconocido"}`; return; }
     const n = res.run.run.agents.length;

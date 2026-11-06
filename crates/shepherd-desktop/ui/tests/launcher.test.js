@@ -5,7 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 function load(srv) {
-  const calls = [], ctx = { ws: {}, flash() {}, scheduleRefresh() {}, srv: async (m, p) => { calls.push(p); return srv(p, calls.length); } };
+  const calls = [], ctx = { ws: {}, flash() {}, scheduleRefresh() {}, srv: async (m, p) => { calls.push(p.args); return srv(p.args, calls.length); } };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "launcher.js"), "utf8") + "\nthis.startPatternRun = startPatternRun;", ctx);
   return { start: ctx.startPatternRun, calls, ctx };
@@ -13,14 +13,16 @@ function load(srv) {
 
 (async () => {
   const limit = new Error("shepherd_error: confirmation_required: max_concurrent_agents (4) reached (0 active + 7 new); pass confirm_over_limit to proceed");
-  let t = load((p, n) => { if (!p.confirm_over_limit) throw limit; return { run: { id: "run-1" } }; });
-  let r = await t.start({ pattern: "big", task: "x", root: "/r" });
+  let t = load((p, n) => { if (!p.confirm_over_limit) throw limit; return { data: { id: "run-1" } }; });
+  let r = await t.start({ pattern: "big", task: "x", root: "/r", workspace_id: "w2" });
   assert.equal(r.overLimit, true);
+  assert.equal(r.run.run.id, "run-1", "the run is in data");
+  assert.equal(t.calls[0].workspace_id, "w2");
   assert.equal(t.calls.length, 2);
   assert.equal(t.calls[1].confirm_over_limit, true);
   assert.equal(t.calls[1].pattern, "big");
 
-  t = load(() => ({ run: { id: "run-2" } }));
+  t = load(() => ({ data: { id: "run-2" } }));
   r = await t.start({ pattern: "small" });
   assert.equal(r.overLimit, false);
   assert.equal(t.calls.length, 1);
