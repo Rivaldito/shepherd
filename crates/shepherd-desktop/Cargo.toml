@@ -1,0 +1,21 @@
+[package]
+name = "shepherd-desktop"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Desktop UI for editing Shepherd configuration and patterns"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+shepherd-core = { path = "../shepherd-core" }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10.0"
+toml_edit = "0.22"
+toml = "0.8"
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }

@@ -21,7 +21,7 @@ include = [
 ]
 
 [workspace]
-members = ["crates/ghostty-vt", "crates/shepherd-core"]
+members = ["crates/ghostty-vt", "crates/shepherd-core", "crates/shepherd-desktop"]
 default-members = [".", "crates/ghostty-vt"]
 
 [dependencies]

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Shepherd</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand"><span class="logo">S</span><b>Shepherd</b></div>
+    <div class="sect"><div class="sh"><span>Spaces</span><button class="mini" id="space-add" title="Nuevo space">+</button></div><div id="spaces"></div></div>
+    <div class="sect grow"><div class="sh"><span>Agentes</span><button class="mini" id="agent-add" title="Lanzar agente">+</button></div><div id="agents-side"></div></div>
+  </aside>
+  <section id="workarea">
+    <nav id="wtabs"></nav>
+    <div id="panes"></div>
+    <div id="shepherd-panel" hidden>
+      <nav id="tabs"></nav>
+      <div id="body">
+        <section id="list"></section>
+        <section id="detail"></section>
+      </div>
+    </div>
+    <div id="cmdbar" hidden>
+      <div class="cmd-head">
+        <input id="cmd-input" type="text" spellcheck="false" autocomplete="off">
+        <button class="mini" id="cmd-clear" title="Limpiar la salida">Limpiar</button>
+        <button class="mini" id="cmd-close" title="Cerrar (Esc)">✕</button>
+      </div>
+      <div class="cmd-hint" id="cmd-hint"></div>
+      <div class="cmd-body"><div id="cmd-list"></div><div id="cmd-out"></div></div>
+    </div>
+  </section>
+</div>
+<div id="notice" hidden></div>
+<footer id="statusbar"></footer>
+<!-- app.js last: it draws the first tab on load and needs the tab modules defined -->
+<script src="boot.js"></script>
+<script src="launcher.js"></script>
+  <script src="patterns.js"></script>
+<script src="agents.js"></script>
+<script src="runs.js"></script>
+<script src="tasks.js"></script>
+<script src="skills.js"></script>
+<script src="git.js"></script>
+<script src="events.js"></script>
+<script src="monitor.js"></script>
+<script src="status.js"></script>
+<script src="terminal.js"></script>
+<script src="cmdline.js"></script>
+<script src="projects.js"></script>
+<script src="discover.js"></script>
+<script src="agentactions.js"></script>
+<script src="workspace.js"></script>
+<script src="commands.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
