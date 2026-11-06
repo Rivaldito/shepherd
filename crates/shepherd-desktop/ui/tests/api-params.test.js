@@ -19,8 +19,8 @@ const params = {}; // method -> allowed param names
 let checked = 0;
 for (const file of fs.readdirSync(path.join(__dirname, "..")).filter((f) => f.endsWith(".js"))) {
   const src = fs.readFileSync(path.join(__dirname, "..", file), "utf8");
-  // srv("method", { a: 1, b: x }) and act("method", { ... }); params without braces are skipped
-  for (const m of src.matchAll(/\b(?:srv|act)\(\s*"([a-z_.]+)"\s*(?:,\s*\{([^{}]*)\})?/g)) {
+  // srv("method", { a: 1, b: x }), act(...) and agentAction(...); params without braces are skipped
+  for (const m of src.matchAll(/\b(?:srv|act|agentAction)\(\s*"([a-z_.]+)"\s*(?:,\s*\{([^{}]*)\})?/g)) {
     const [, method, body = ""] = m;
     assert.ok(method in params, `${file}: unknown API method ${method}`);
     for (const key of [...body.matchAll(/([A-Za-z_]+)\s*:/g)].map((k) => k[1])) {

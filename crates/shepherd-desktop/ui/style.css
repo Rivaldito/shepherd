@@ -120,3 +120,13 @@ input.inline { width:100%; background:var(--bg); border:1px solid var(--accent);
 .pane.focused > .phead, .pane.focused > .pbody { border-color:var(--accent); }
 .ptitle { font-weight:700; } .pcwd { color:var(--dim); }
 pre.term { margin:0; padding:4px 6px; width:100%; height:100%; overflow:hidden; white-space:pre; outline:none; font-family:"JetBrains Mono", monospace; line-height:1.2; color:var(--fg); }
+
+/* agent actions */
+.aform { display:flex; flex-direction:column; gap:4px; padding:8px; margin:4px 0; border:1px solid var(--line); border-radius:6px; background:var(--bg); }
+.aform label { color:var(--dim); font-size:11px; } .aform label.check { display:flex; align-items:center; gap:6px; margin-top:4px; }
+.aform .row { display:flex; gap:6px; align-items:center; } .aform .row input { min-width:0; flex:1; }
+.aform select.inline, .aform textarea.inline { width:100%; background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:3px 6px; color:var(--fg); font:inherit; }
+.abtns { display:none; margin-left:auto; } .agent:hover .abtns { display:flex; } .agent:hover .asub { display:none; }
+.agent-prompt { padding:0 8px 6px 24px; }
+.panel-actions { display:flex; gap:8px; padding:8px 14px; border-bottom:1px solid var(--line); align-items:center; }
+.btn.danger { background:var(--bad); }

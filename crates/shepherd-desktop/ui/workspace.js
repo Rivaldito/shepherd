@@ -1,7 +1,7 @@
 // Herdr-like shell over the Shepherd server API: Spaces (workspaces) and Agents in the sidebar,
 // tabs, split panes with live terminals. The server owns every terminal; this paints `pane.read`
 // output and sends keys back. Server events only say "re-read the snapshot".
-let ws = { lastFocused: null, snap: null, wid: null, tid: null, panel: false, error: "", newForm: false, confirm: null, rename: null };
+let ws = { lastFocused: null, snap: null, wid: null, tid: null, panel: false, error: "", forms: { space: null, agent: null }, sagents: [], promptFor: null, confirm: null, rename: null };
 const paneEls = new Map(); // pane_id -> { root, head, pre, text, busy, q, chain, ... }
 let tickN = 0;
 
@@ -22,9 +22,9 @@ async function act(method, params) {
 
 // Two-step destructive buttons without pop-ups: the first click arms, the second one runs.
 function arm(key) { ws.confirm = key; renderWorkspace(); setTimeout(() => { if (ws.confirm === key) { ws.confirm = null; renderWorkspace(); } }, 4000); }
-function closeButton(key, run, label) {
+function closeButton(key, run, label, armedText = "¿Cerrar?", glyph = "✕") {
   const armed = ws.confirm === key;
-  return el("button", { className: "mini" + (armed ? " danger" : ""), title: label, onclick: (e) => { e.stopPropagation(); if (armed) { ws.confirm = null; run(); } else arm(key); } }, armed ? "¿Cerrar?" : "✕");
+  return el("button", { className: "mini" + (armed ? " danger" : ""), title: label, onclick: (e) => { e.stopPropagation(); if (armed) { ws.confirm = null; run(); } else arm(key); } }, armed ? armedText : glyph);
 }
 
 function inlineEdit(initial, commit, cancel) {
@@ -45,6 +45,8 @@ async function refreshSnapshot() {
   refreshing = true;
   try { ws.snap = (await srv("session.snapshot")).snapshot; ws.error = ""; selectDefaults(); }
   catch (e) { ws.snap = null; ws.error = String(e); }
+  // Shepherd's own registry (roles, tasks, state); absent when the orchestration layer is off.
+  try { ws.sagents = ws.snap ? (await srv("shepherd.agent.list")).agents : []; } catch (_) { ws.sagents = []; }
   renderWorkspace();
   refreshing = false;
   if (again) { again = false; scheduleRefresh(); }
@@ -92,10 +94,10 @@ function spaceRow(w) {
 function newSpaceForm() {
   const name = el("input", { type: "text", className: "inline", placeholder: "nombre del space" });
   const cwd = el("input", { type: "text", className: "inline", placeholder: "carpeta (opcional)" });
-  const cancel = () => { ws.newForm = false; renderWorkspace(); };
+  const cancel = () => { ws.forms.space = null; renderWorkspace(); };
   const create = async () => {
     const params = { focus: true }; if (name.value.trim()) params.label = name.value.trim(); if (cwd.value.trim()) params.cwd = cwd.value.trim();
-    ws.newForm = false;
+    ws.forms.space = null;
     const r = await act("workspace.create", params);
     if (r) { ws.wid = r.workspace.workspace_id; ws.tid = r.tab.tab_id; ws.panel = false; }
     renderWorkspace();
@@ -107,24 +109,49 @@ function newSpaceForm() {
 
 const AGENT_GROUPS = [["blocked", "Bloqueados"], ["working", "Trabajando"], ["done", "Terminados"], ["idle", "Inactivos"]];
 
+function activeCwd() {
+  const s = ws.snap, l = currentLayout();
+  return s?.panes.find((p) => p.pane_id === l?.focused_pane_id)?.cwd ?? "";
+}
+
+function openSpawnForm() {
+  const close = () => { ws.forms.agent = null; renderWorkspace(); };
+  return spawnForm({ root: activeCwd(), onDone: (agent) => { close(); if (agent.pane) focusPane(agent.pane); }, onCancel: close });
+}
+
+function agentRow(r) {
+  const finished = isFinished(r);
+  const actions = [];
+  if (r.canPrompt) actions.push(el("button", { className: "mini", title: "Enviar un prompt", onclick: (e) => { e.stopPropagation(); ws.promptFor = ws.promptFor === r.pane ? null : r.pane; renderWorkspace(); } }, "✎"));
+  if (r.sid && finished) actions.push(closeButton("a:" + r.sid, () => act("shepherd.agent.clean", { ids: [r.sid] }), "Limpiar del registro", "¿Limpiar?", "⌫"));
+  else if (r.sid) actions.push(closeButton("a:" + r.sid, () => act("shepherd.agent.kill", { id: r.sid }), "Matar agente", "¿Matar?"));
+  else if (r.pane) actions.push(closeButton("ap:" + r.pane, () => act("pane.close", { pane_id: r.pane }), "Cerrar el panel del agente"));
+  const row = el("div", { className: "agent", onclick: () => r.pane && focusPane(r.pane) }, statusDot(r.status),
+    el("span", { className: "aname" }, r.title), el("span", { className: "asub", title: r.sub }, r.sub), el("span", { className: "abtns" }, ...actions));
+  if (!ws.promptFor || ws.promptFor !== r.pane) return [row]; // rows without a pane never match
+  const prompt = inlineEdit("", (text) => { ws.promptFor = null; if (text) act("agent.prompt", { target: r.pane, text }); renderWorkspace(); }, () => { ws.promptFor = null; renderWorkspace(); });
+  prompt.placeholder = "prompt para el agente (Enter envía)";
+  return [row, el("div", { className: "agent-prompt" }, prompt)];
+}
+
 function renderAgentsSide() {
   const box = $("agents-side"), groups = {};
-  for (const a of ws.snap.agents) if (a.agent) (groups[AGENT_GROUPS.some(([k]) => k === a.agent_status) ? a.agent_status : "idle"] ??= []).push(a);
+  for (const r of agentRows(ws.snap, ws.sagents)) (groups[r.status] ??= []).push(r);
   const out = [];
+  if (ws.forms.agent) out.push(ws.forms.agent); // built once so a refresh does not wipe the typed task
   for (const [key, title] of AGENT_GROUPS) {
     if (!groups[key]) continue;
     out.push(el("div", { className: "ghead " + key }, `${title} ${groups[key].length}`));
-    for (const a of groups[key]) out.push(el("div", { className: "agent", onclick: () => focusPane(a.pane_id) }, statusDot(a.agent_status),
-      el("span", { className: "aname" }, a.name || a.display_agent || a.agent), el("span", { className: "asub" }, baseName(a.cwd) || a.terminal_title_stripped || "")));
+    for (const r of groups[key]) out.push(...agentRow(r));
   }
-  box.replaceChildren(...(out.length ? out : [el("div", { className: "dim pad" }, "Ningún agente detectado.")]));
+  box.replaceChildren(...(out.length ? out : [el("div", { className: "dim pad" }, "Ningún agente. Pulsa + para lanzar uno.")]));
 }
 
 function renderSidebar() {
   const s = ws.snap, box = $("spaces");
   if (!s) { box.replaceChildren(el("div", { className: "dim pad" }, ws.error ? "Sin conexión con el servidor." : "Conectando…")); $("agents-side").replaceChildren(); return; }
   const rows = s.workspaces.map(spaceRow);
-  if (ws.newForm) rows.unshift(newSpaceForm());
+  if (ws.forms.space) rows.unshift(ws.forms.space); // built once: a refresh must not wipe what is being typed
   box.replaceChildren(...(rows.length ? rows : [el("div", { className: "dim pad" }, "Aún no hay spaces. Pulsa + para crear uno.")]));
   renderAgentsSide();
 }
@@ -257,7 +284,8 @@ async function tickTerminals() {
 }
 
 function initWorkspace() {
-  $("space-add").onclick = () => { ws.newForm = true; renderWorkspace(); };
+  $("space-add").onclick = () => { ws.forms.space ??= newSpaceForm(); renderWorkspace(); };
+  $("agent-add").onclick = () => { ws.forms.agent ??= openSpawnForm(); renderWorkspace(); };
   const listen = window.__TAURI__?.event?.listen;
   if (listen) { listen("shepherd-event", scheduleRefresh); listen("shepherd-connection", scheduleRefresh); }
   setInterval(tickTerminals, 120);
