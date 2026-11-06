@@ -24,7 +24,8 @@ function renderStatus() {
     el("span", { className: "dim", title: s.socket }, s.socket)];
   if (!s.running) left.push(el("button", { className: "btn small", disabled: sb.busy || !s.server_bin, onclick: startServer,
     title: s.server_bin ? s.server_bin : "No se encontró `shepherd`: ponlo en el PATH o define SHEPHERD_BIN" }, "Iniciar servidor"));
-  bar.replaceChildren(...left, el("span", { className: "grow" }), el("span", { className: "note" }, sb.note));
+  bar.replaceChildren(...left, el("span", { className: "grow" }), el("span", { className: "note" }, sb.note),
+    el("button", { className: "mini", title: "Comandos y CLI", onclick: toggleDock }, "Comandos · Ctrl+Shift+P"));
 }
 
 function initStatus() {

@@ -670,6 +670,25 @@ fn api_call(
     )
 }
 
+/// The console's door to the `shepherd` CLI, aimed at the same socket as the rest of the app.
+#[tauri::command(async)]
+fn cli_run(args: Vec<String>) -> Result<api::CliOutput, String> {
+    if !api::allowed_cli(&args) {
+        return Err(format!(
+            "comando no permitido: {}",
+            args.first().map(String::as_str).unwrap_or("(vacío)")
+        ));
+    }
+    let bin = api::default_server_bin()
+        .ok_or("no se encontró el binario `shepherd`: ponlo en el PATH o define SHEPHERD_BIN")?;
+    api::run_cli(
+        &bin,
+        &api::default_socket_path(),
+        &args,
+        std::time::Duration::from_secs(15),
+    )
+}
+
 /// Explicit user action: starting a server creates real state, so it never happens on its own.
 #[tauri::command(async)]
 fn api_start_server() -> Result<ApiStatus, String> {
@@ -739,7 +758,8 @@ fn main() {
             topic_messages,
             api_status,
             api_call,
-            api_start_server
+            api_start_server,
+            cli_run
         ])
         .run(tauri::generate_context!())
         .expect("error al iniciar Shepherd desktop");

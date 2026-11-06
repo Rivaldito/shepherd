@@ -197,6 +197,128 @@ pub fn read_events(
     Ok(())
 }
 
+/// What the UI console may run: the runtime command families plus `--version`/`--help`.
+/// Server control, updates, machines, config and integrations stay out of reach, as for `allowed_method`.
+pub fn allowed_cli(args: &[String]) -> bool {
+    const FAMILIES: &[&str] = &[
+        "workspace",
+        "tab",
+        "pane",
+        "agent",
+        "worktree",
+        "notification",
+        "api",
+        "status",
+    ];
+    match args.first().map(String::as_str) {
+        Some("--version" | "-V" | "--help" | "-h" | "help") => true,
+        Some(first) => FAMILIES.contains(&first),
+        None => false,
+    }
+}
+
+#[derive(serde::Serialize, Debug)]
+pub struct CliOutput {
+    pub code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub timed_out: bool,
+}
+
+/// Runs `bin args…` against `socket` (never through a shell), killing it after `timeout`.
+/// Output is capped so a chatty command cannot flood the webview.
+#[cfg(unix)]
+pub fn run_cli(
+    bin: &Path,
+    socket: &Path,
+    args: &[String],
+    timeout: Duration,
+) -> Result<CliOutput, String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+    const CAP: u64 = 256 * 1024;
+    let mut child = Command::new(bin)
+        .args(args)
+        .env("SHEPHERD_SOCKET_PATH", socket)
+        .env_remove("SHEPHERD_ENV")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("no se pudo ejecutar {}: {e}", bin.display()))?;
+    // Output is collected as it arrives: a grandchild that keeps the pipe open after we killed the
+    // child must not make us wait for it (its output so far is still returned).
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let shared = buf.clone();
+        let handle = std::thread::spawn(move || {
+            let (mut pipe, mut chunk) = (pipe, [0u8; 4096]);
+            while let Some(Ok(n)) = pipe.as_mut().map(|p| p.read(&mut chunk)) {
+                let mut out = shared.lock().unwrap_or_else(|e| e.into_inner());
+                let room = (CAP as usize).saturating_sub(out.len());
+                if n == 0 || room == 0 {
+                    break;
+                }
+                out.extend_from_slice(&chunk[..n.min(room)]);
+            }
+        });
+        (buf, handle)
+    };
+    let (out, out_thread) = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let (err, err_thread) = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let deadline = Instant::now() + timeout;
+    let (mut code, mut timed_out) = (None, false);
+    loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => {
+                code = status.code();
+                break;
+            }
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                timed_out = true;
+                break;
+            }
+            None => std::thread::sleep(Duration::from_millis(25)),
+        }
+    }
+    let grace = Instant::now() + Duration::from_millis(300);
+    while !(out_thread.is_finished() && err_thread.is_finished()) && Instant::now() < grace {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let text = |buf: &std::sync::Mutex<Vec<u8>>| {
+        String::from_utf8_lossy(&buf.lock().unwrap_or_else(|e| e.into_inner())).into_owned()
+    };
+    Ok(CliOutput {
+        code,
+        stdout: text(&out),
+        stderr: text(&err),
+        timed_out,
+    })
+}
+
+#[cfg(not(unix))]
+pub fn run_cli(
+    _: &Path,
+    _: &Path,
+    _: &[String],
+    _: std::time::Duration,
+) -> Result<CliOutput, String> {
+    Err("la consola solo está implementada en Unix".into())
+}
+
 /// Starts `shepherd server` detached so it outlives this app, then waits until it answers `ping`.
 #[cfg(unix)]
 pub fn start_server(bin: &Path, socket: &Path) -> Result<(), String> {
@@ -418,6 +540,94 @@ mod tests {
         );
         assert_eq!(find_server_bin(None, None, Some(&a)), None);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn script(dir: &Path, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("fake-shepherd");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[test]
+    fn cli_runs_without_a_shell_against_our_socket_and_reports_the_exit_code() {
+        let dir = temp("cli");
+        let bin = script(
+            &dir,
+            r#"echo "args: $*"; echo "socket=$SHEPHERD_SOCKET_PATH env=${SHEPHERD_ENV:-unset}"; echo oops >&2; exit 3"#,
+        );
+        // `; touch pwned` must stay a literal argument: nothing goes through a shell
+        let args = [
+            "workspace".to_string(),
+            "rename".into(),
+            "a; touch pwned".into(),
+        ];
+        let out = run_cli(
+            &bin,
+            Path::new("/tmp/x.sock"),
+            &args,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let pwned = dir.join("pwned").exists();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!((out.code, out.timed_out, pwned), (Some(3), false, false));
+        assert_eq!(
+            out.stdout,
+            "args: workspace rename a; touch pwned\nsocket=/tmp/x.sock env=unset\n"
+        );
+        assert_eq!(out.stderr, "oops\n");
+    }
+
+    #[test]
+    fn cli_is_killed_when_it_exceeds_the_timeout() {
+        let dir = temp("cli-slow");
+        let bin = script(&dir, "sleep 10");
+        let started = std::time::Instant::now();
+        let out = run_cli(
+            &bin,
+            Path::new("/tmp/x.sock"),
+            &[],
+            Duration::from_millis(200),
+        )
+        .unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(out.timed_out && out.code.is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn only_runtime_cli_families_are_allowed() {
+        let a = |v: &[&str]| allowed_cli(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        for ok in [
+            &["workspace", "list"][..],
+            &["pane", "read", "w1:p1"],
+            &["agent", "list"],
+            &["api", "snapshot"],
+            &["status"],
+            &["--version"],
+            &["--help"],
+        ] {
+            assert!(a(ok), "{ok:?}");
+        }
+        for no in [
+            &["server", "stop"][..],
+            &["update"],
+            &["channel", "set", "preview"],
+            &["machine", "rm", "x"],
+            &["config", "reset-keys"],
+            &["integration", "install", "x"],
+            &["--session", "x"],
+            &["completion", "zsh"],
+            &[],
+        ] {
+            assert!(!a(no), "{no:?}");
+        }
     }
 
     /// Live check against a real server: `SHEPHERD_SOCKET_PATH=… cargo test -- --ignored live`.

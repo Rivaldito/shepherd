@@ -130,3 +130,18 @@ pre.term { margin:0; padding:4px 6px; width:100%; height:100%; overflow:hidden; 
 .agent-prompt { padding:0 8px 6px 24px; }
 .panel-actions { display:flex; gap:8px; padding:8px 14px; border-bottom:1px solid var(--line); align-items:center; }
 .btn.danger { background:var(--bad); }
+
+/* command dock */
+#cmdbar { background:var(--panel); border-top:1px solid var(--accent); display:flex; flex-direction:column; height:42%; min-height:200px; }
+.cmd-head { display:flex; gap:8px; align-items:center; padding:8px 10px 4px; }
+#cmd-input { flex:1; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:6px 10px; color:var(--fg); font:inherit; outline:none; }
+#cmd-input:focus { border-color:var(--accent); }
+.cmd-hint { padding:0 12px 6px; font-size:11px; color:var(--dim); }
+.cmd-body { flex:1; display:flex; min-height:0; border-top:1px solid var(--line); }
+#cmd-list { width:42%; overflow:auto; border-right:1px solid var(--line); padding:4px; }
+.cmd { display:flex; gap:10px; align-items:baseline; padding:4px 8px; border-radius:4px; cursor:pointer; }
+.cmd:hover { background:var(--line); } .cmd.sel { background:var(--accent); color:#111; }
+.cmd .cg { color:var(--dim); font-size:11px; min-width:7em; } .cmd.sel .cg, .cmd.sel small { color:#222; }
+.cmd small { margin-left:auto; color:var(--warn); } .cmd.danger:not(.sel) span:nth-child(2) { color:var(--warn); }
+#cmd-out { flex:1; overflow:auto; padding:8px 12px; font-size:12px; }
+#cmd-out .oe { margin-bottom:10px; } #cmd-out .oe div:last-child { white-space:pre-wrap; word-break:break-word; } #cmd-out .bad { color:var(--bad); }

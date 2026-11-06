@@ -156,3 +156,4 @@ addEventListener("keydown", (e) => {
 draw();
 initStatus();
 initWorkspace();
+initCommands();
