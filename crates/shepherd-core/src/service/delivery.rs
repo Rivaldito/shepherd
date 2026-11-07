@@ -29,6 +29,7 @@ impl OrchestrationService {
         let ready_timeout_ms = self.service_config.ready_timeout.as_millis() as u64;
         let notice_after_ms = self.service_config.notice_after.as_millis() as u64;
         let mut blocked_since_ms: Option<u64> = None;
+        let mut missing_since_ms: Option<u64> = None;
 
         // Phase 1: Wait until the agent is ready to accept input.
         let baseline_seq = loop {
@@ -100,6 +101,14 @@ impl OrchestrationService {
                         }
                     }
                 },
+                Err(err)
+                    if is_missing_terminal_error(&err)
+                        && now_ms.saturating_sub(*missing_since_ms.get_or_insert(now_ms))
+                            < super::MISSING_GRACE_MS =>
+                {
+                    // Just created and not resolvable yet: keep polling instead of giving up.
+                    blocked_since_ms = None;
+                }
                 Err(err) if is_missing_terminal_error(&err) => {
                     let err_msg =
                         "el panel desapareció antes de entregar el primer prompt".to_owned();
@@ -357,6 +366,50 @@ impl OrchestrationService {
         Ok(())
     }
 
+    /// An idle MCP agent only reads the bus when it calls `read_messages`, which an idle agent never
+    /// does. Type one short line telling it to look, once per new message.
+    pub(crate) fn nudge_idle_mcp_agents(&self, registry: &AgentRegistryFile) {
+        let Ok(bus) = self.bus() else { return };
+        for agent in &registry.agents {
+            if !agent.mcp || agent.gone() || agent.state != "idle" {
+                continue;
+            }
+            let Ok(pending) = bus.peek_pending(&agent.id) else {
+                continue;
+            };
+            let Some(newest) = pending.iter().map(|m| m.id).max() else {
+                continue;
+            };
+            if self
+                .nudged
+                .lock()
+                .unwrap()
+                .get(&agent.id)
+                .is_some_and(|&seen| seen >= newest)
+            {
+                continue;
+            }
+            if !self.is_pane_free_for_delivery(agent) {
+                continue;
+            }
+            let target = if agent.pane.is_empty() {
+                &agent.id
+            } else {
+                &agent.pane
+            };
+            let line = format!(
+                "[shep] You have {} unread message(s). Call read_messages() now and act on them.",
+                pending.len()
+            );
+            if matches!(
+                self.terminals.prompt(target, &line, None),
+                Ok(PromptOutcome::Delivered)
+            ) {
+                self.nudged.lock().unwrap().insert(agent.id.clone(), newest);
+            }
+        }
+    }
+
     pub(crate) fn deliver_pending_non_mcp_messages(&self, registry: &mut AgentRegistryFile) {
         let bus = match self.bus() {
             Ok(b) => b,
@@ -492,6 +545,27 @@ impl OrchestrationService {
         }
     }
 
+    /// Takes agents that are gone (or no longer in the registry) out of the consumer groups, so the
+    /// topic partitions are only shared among agents that can read them.
+    pub(crate) fn prune_dead_subscribers(&self, registry: &AgentRegistryFile) {
+        let Ok(bus) = self.bus() else { return };
+        let Ok(groups) = bus.consumer_groups(None) else {
+            return;
+        };
+        for grp in groups {
+            for member in &grp.members {
+                let dead = registry
+                    .agents
+                    .iter()
+                    .find(|a| &a.id == member)
+                    .is_none_or(|a| a.gone());
+                if dead {
+                    let _ = bus.unsubscribe(member, &grp.topic);
+                }
+            }
+        }
+    }
+
     pub(crate) fn wake_dormant_topic_subscribers(
         &self,
         registry: &mut AgentRegistryFile,
@@ -551,6 +625,14 @@ impl OrchestrationService {
 
         let now_ms = self.clock.now_ms();
         let mut registry_dirty = false;
+        // Partitions are shared out among the members that are alive: a member left over from an
+        // earlier run must not keep the messages of its partitions away from the live ones.
+        let live_ids: Vec<String> = registry
+            .agents
+            .iter()
+            .filter(|a| !a.gone()) // a `done` agent can still be woken by a new message
+            .map(|a| a.id.clone())
+            .collect();
 
         for grp in groups {
             for member_id in &grp.members {
@@ -594,10 +676,11 @@ impl OrchestrationService {
 
                 // Check unread messages on the topic
                 // Only unacknowledged messages from other publishers count (not its own).
-                let unread: Vec<_> = match bus.poll(member_id, &grp.topic, None) {
-                    Ok(msgs) => msgs.into_iter().filter(|m| &m.from != member_id).collect(),
-                    Err(_) => continue,
-                };
+                let unread: Vec<_> =
+                    match bus.poll_active(member_id, &grp.topic, None, Some(&live_ids)) {
+                        Ok(msgs) => msgs.into_iter().filter(|m| &m.from != member_id).collect(),
+                        Err(_) => continue,
+                    };
                 if unread.is_empty() {
                     continue;
                 }

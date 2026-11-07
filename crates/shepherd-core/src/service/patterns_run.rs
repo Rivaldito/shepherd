@@ -176,6 +176,40 @@ pub(crate) fn pattern_run_context(
 }
 
 /// Determine location for pattern runs storage.
+/// The task a run was launched for: its objective starts with "Tarea #N:" (or "Task #N:").
+pub(crate) fn task_of_objective(objective: &str) -> Option<u32> {
+    let head = objective.trim_start();
+    let rest = head
+        .strip_prefix("Tarea #")
+        .or_else(|| head.strip_prefix("Task #"))
+        .or_else(|| head.strip_prefix("tarea #"))
+        .or_else(|| head.strip_prefix("task #"))?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    (rest[digits.len()..].starts_with(':'))
+        .then(|| digits.parse().ok())
+        .flatten()
+}
+
+/// Project root of a run: the folder that owns its `.shepherd/pattern_runs.json`, else the root of
+/// one of its agents.
+fn root_of_run(
+    runs_file: &Path,
+    run: &PatternRun,
+    registry: &crate::AgentRegistryFile,
+) -> Option<PathBuf> {
+    let owner = runs_file.parent().filter(|d| d.ends_with(".shepherd"));
+    owner
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            registry
+                .agents
+                .iter()
+                .find(|a| a.task_id == run.id && !a.root.is_empty())
+                .map(|a| PathBuf::from(&a.root))
+        })
+}
+
 pub fn pattern_runs_path(root: &Path, state_dir: &Path) -> PathBuf {
     let proj = root.join(".shepherd");
     if proj.is_dir() {
@@ -230,6 +264,63 @@ impl OrchestrationService {
         task: Option<&str>,
         worktree: Option<&str>,
         confirm_over_limit: bool,
+    ) -> Result<PatternRun, String> {
+        self.start_pattern_run_in(
+            root,
+            pattern_name,
+            pattern_obj,
+            task,
+            worktree,
+            confirm_over_limit,
+            None,
+        )
+    }
+
+    /// A run that finished healthily closes the task it was launched for (see `task_of_objective`),
+    /// unless that task has subtasks of its own.
+    fn close_task_of_run(
+        &self,
+        runs_file: &Path,
+        run: &PatternRun,
+        registry: &crate::AgentRegistryFile,
+    ) {
+        if let (Some(number), Some(root)) = (
+            task_of_objective(&run.task),
+            root_of_run(runs_file, run, registry),
+        ) {
+            let _ = crate::complete_direct_task(root, &number.to_string());
+        }
+    }
+
+    /// Forgets the runs that are over (done, failed or stopped); running, paused and stalled ones stay.
+    pub fn clean_pattern_runs(&self, root: &Path) -> Result<usize, String> {
+        let path = pattern_runs_path(root, &self.service_config.state_dir);
+        let runs = load_pattern_runs(&path)?;
+        let before = runs.len();
+        let kept: Vec<PatternRun> = runs
+            .into_iter()
+            .filter(|r| {
+                !matches!(
+                    r.state,
+                    PatternRunState::Done | PatternRunState::Failed | PatternRunState::Stopped
+                )
+            })
+            .collect();
+        save_pattern_runs(&path, &kept)?;
+        Ok(before - kept.len())
+    }
+
+    /// Like `start_pattern_run`, with every agent placed in `workspace` (the one the run was launched from).
+    #[allow(clippy::too_many_arguments)] // mirrors start_pattern_run plus the workspace
+    pub fn start_pattern_run_in(
+        &self,
+        root: &Path,
+        pattern_name: Option<&str>,
+        pattern_obj: Option<crate::patterns::Pattern>,
+        task: Option<&str>,
+        worktree: Option<&str>,
+        confirm_over_limit: bool,
+        workspace: Option<&str>,
     ) -> Result<PatternRun, String> {
         let pattern = if let Some(pat) = pattern_obj {
             pat
@@ -306,7 +397,7 @@ impl OrchestrationService {
         };
 
         let starters = pattern.starter_ids();
-        let mut run_agents = Vec::new();
+        let mut run_agents: Vec<PatternRunAgent> = Vec::new();
         for agent_def in &pattern.agents {
             let count = agent_def.count.max(1);
             for idx in 0..count {
@@ -337,11 +428,16 @@ impl OrchestrationService {
                     mcp_url: self.mcp_url(),
                     confirm_over_limit,
                     deliver_prompt: true,
+                    workspace: workspace.map(str::to_owned),
                 };
 
                 let spawned = match self.spawn(spawn_req) {
                     Ok(ag) => ag,
                     Err(e) => {
+                        // Nothing is left half-created: the agents already started for this run are closed.
+                        for started in &run_agents {
+                            let _ = self.kill(&started.id);
+                        }
                         let failed_run = PatternRun {
                             id: run_id.clone(),
                             pattern: pattern.name.clone(),
@@ -481,6 +577,7 @@ impl OrchestrationService {
         }
         paths.sort();
         paths.dedup();
+        let mut any_running = false;
 
         let now = self.clock.now_rfc3339();
 
@@ -562,6 +659,7 @@ impl OrchestrationService {
 
                     if all_done {
                         run.state = PatternRunState::Done;
+                        self.close_task_of_run(&path, run, registry);
                     } else if all_failed {
                         run.state = PatternRunState::Failed;
                     } else {
@@ -602,6 +700,7 @@ impl OrchestrationService {
                                 run.state = PatternRunState::Done;
                                 run.quiesced = true;
                                 run.finished_at = Some(now.clone());
+                                self.close_task_of_run(&path, run, registry);
                             }
                             run.updated_at = now.clone();
                             dirty = true;
@@ -612,10 +711,13 @@ impl OrchestrationService {
                 }
             }
 
+            any_running |= runs.iter().any(|r| r.state == PatternRunState::Running);
             if dirty {
                 save_pattern_runs(&path, &runs)?;
             }
         }
+        self.fast_tick
+            .store(any_running, std::sync::atomic::Ordering::Relaxed);
 
         Ok(())
     }

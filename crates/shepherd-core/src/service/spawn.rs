@@ -125,11 +125,24 @@ impl OrchestrationService {
             ));
         }
 
-        let use_worktree = req.worktree.unwrap_or(role_cfg.worktree);
         let root_path = if req.root.as_os_str().is_empty() {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
         } else {
             req.root.clone()
+        };
+        // A role's default worktree only applies inside a git work tree with a commit: in a plain folder (or a
+        // fresh `git init`) the agent
+        // works in the folder itself instead of failing. Asking for a worktree explicitly still fails.
+        let can_worktree = crate::git::can_create_worktree(&root_path);
+        let use_worktree = match req.worktree {
+            Some(true) if !can_worktree => {
+                return Err(format!(
+                    "worktree_unavailable: {} no es un repositorio git con al menos un commit; haz un commit inicial o lanza el agente sin worktree",
+                    root_path.display()
+                ));
+            }
+            Some(explicit) => explicit,
+            None => role_cfg.worktree && can_worktree,
         };
         let task_id = req.task_id.clone().unwrap_or_default();
         let mcp_url = req
@@ -174,8 +187,27 @@ impl OrchestrationService {
         let session_dir = self.service_config.agent_session_dir(&agent.id);
         let catalog = skills::Catalog::load(Some(&root_path), Some(&skills::user_skills_dir()));
         let (_, langs) = skills::detect_checks(&root_path);
+        // Every agent learns how to talk to the others and to drive Shepherd's terminals; pattern agents also learn the topic tools.
+        let mut skill_adjust = req.skills.clone();
+        let mut baseline = vec!["shepherd-comms", "shepherd-control"];
+        if req.pattern_prompt.is_some() {
+            baseline.push("shepherd-events");
+        }
+        // Whoever can start others, and every pattern agent, also learns the CLI: tasks, patterns,
+        // agents, workspaces, tabs and panes.
+        if role_cfg.can_spawn || req.pattern_prompt.is_some() {
+            baseline.push("shepherd-orchestrate");
+        }
+        for name in baseline {
+            if !role_cfg.skills.iter().any(|n| n == name)
+                && !skill_adjust.add.iter().any(|n| n == name)
+                && !skill_adjust.remove.iter().any(|n| n == name)
+            {
+                skill_adjust.add.push(name.to_owned());
+            }
+        }
         let (resolved, _problems) =
-            catalog.effective_for(&project_cfg, &req.role, &langs, &req.skills);
+            catalog.effective_for(&project_cfg, &req.role, &langs, &skill_adjust);
         agent.active_skills = resolved.iter().map(|r| r.skill.name.clone()).collect();
         let skill_launch = skills::install(skills::Plan {
             vendor: vendor.clone(),
@@ -230,6 +262,26 @@ impl OrchestrationService {
             None
         };
 
+        // Agents join the workspace of whoever started them, else of the live agents of the same
+        // task or pattern run, so a task or run never scatters across workspaces.
+        let home_workspace = req.workspace.clone().filter(|w| !w.is_empty()).or_else(|| {
+            registry
+                .agents
+                .iter()
+                .filter(|a| a.id != agent.id && !a.gone() && !a.workspace.is_empty())
+                .find(|a| !agent.parent_id.is_empty() && a.id == agent.parent_id)
+                .or_else(|| {
+                    registry.agents.iter().find(|a| {
+                        a.id != agent.id
+                            && !a.gone()
+                            && !a.workspace.is_empty()
+                            && !task_id.is_empty()
+                            && a.task_id == task_id
+                    })
+                })
+                .map(|a| a.workspace.clone())
+        });
+
         let open_req = OpenAgentRequest {
             root: root_path.clone(),
             role: req.role.clone(),
@@ -241,6 +293,7 @@ impl OrchestrationService {
             label: agent.label.clone(),
             env,
             worktree,
+            workspace: home_workspace,
         };
 
         // Requirement 6: Open agent, reclaiming a Shepherd leftover pane once if name collides.
@@ -249,6 +302,10 @@ impl OrchestrationService {
             Err(err) => {
                 // Keep monotonic counters (`seq` and `next`) intact even when spawn fails!
                 registry.remove(&agent.id);
+                self.removed_agents
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(agent.id.clone());
                 let _ = self.save_registry(&registry);
                 return Err(err);
             }

@@ -84,10 +84,24 @@
     "scope": "default"
   },
   {
+    "description": "Use when you are an agent running inside Shepherd and need to inspect or control its terminals with the `shepherd` CLI: list workspaces, tabs and panes, run a command in another pane, read output, or start, prompt and wait for another agent. Requires SHEPHERD_ENV=1.",
+    "dir": "embedded:shepherd-control",
+    "global": false,
+    "name": "shepherd-control",
+    "scope": "default"
+  },
+  {
     "description": "Use when collaborating via event topics, partitioned message streams, consumer groups, offsets, acknowledgments, and replays in Shepherd multi-agent patterns.",
     "dir": "embedded:shepherd-events",
     "global": false,
     "name": "shepherd-events",
+    "scope": "default"
+  },
+  {
+    "description": "Use when you are asked to plan, delegate or run work with Shepherd (tasks, patterns, coder/reviewer agents), to check that Shepherd is enabled, or to unblock an agent that never received its task. Explains the CLI, the safe order of steps and how to recover.",
+    "dir": "embedded:shepherd-orchestrate",
+    "global": false,
+    "name": "shepherd-orchestrate",
     "scope": "default"
   },
   {
