@@ -92,35 +92,35 @@ fn render_orchestrator_worker_diagram(
     let results_p = results_topic.map(|t| t.partitions).unwrap_or(1);
 
     if narrow {
-        lines.push(format!("[Orquestador] {orch_role} (x{orch_count})"));
-        lines.push(format!("  │ publica: {orch_pub}"));
+        lines.push(format!("[Orchestrator] {orch_role} (x{orch_count})"));
+        lines.push(format!("  │ publishes: {orch_pub}"));
         lines.push("  ▼".into());
         lines.push(format!("[Topic: {orch_pub} (p:{orders_p})]"));
-        lines.push(format!("  │ consume: {worker_group}"));
+        lines.push(format!("  │ consumes: {worker_group}"));
         lines.push("  ▼".into());
         lines.push(format!("[Workers] {worker_role} (x{worker_count})"));
-        lines.push(format!("  │ publica: {orch_sub}"));
+        lines.push(format!("  │ publishes: {orch_sub}"));
         lines.push("  ▼".into());
         lines.push(format!("[Topic: {orch_sub} (p:{results_p})]"));
-        lines.push("  │ consume".into());
+        lines.push("  │ consumes".into());
         lines.push("  ▼".into());
-        lines.push(format!("[Orquestador: {orch_role}] (cierra bucle)"));
+        lines.push(format!("[Orchestrator: {orch_role}] (closes the loop)"));
     } else {
-        let box_w = max_w.min(46).max(34);
-        let orch_txt = format!("[Orquestador] {} (x{})", orch_role, orch_count);
+        let box_w = max_w.clamp(34, 46);
+        let orch_txt = format!("[Orchestrator] {} (x{})", orch_role, orch_count);
         let (t1, m1, b1) = box_line(&orch_txt, box_w);
         lines.push(t1);
         lines.push(m1);
         lines.push(b1);
         let center = box_w / 2;
         let indent = " ".repeat(center.saturating_sub(1));
-        lines.push(format!("{}│ publica: {}", indent, orch_pub));
+        lines.push(format!("{}│ publishes: {}", indent, orch_pub));
         lines.push(format!("{}▼", indent));
 
         let top_txt = format!("[Topic: {} (p:{})]", orch_pub, orders_p);
         let top_pad = " ".repeat(center.saturating_sub(top_txt.chars().count() / 2));
         lines.push(format!("{}{}", top_pad, top_txt));
-        lines.push(format!("{}│ consume: {}", indent, worker_group));
+        lines.push(format!("{}│ consumes: {}", indent, worker_group));
         lines.push(format!("{}▼", indent));
 
         let worker_txt = format!(
@@ -131,16 +131,16 @@ fn render_orchestrator_worker_diagram(
         lines.push(t2);
         lines.push(m2);
         lines.push(b2);
-        lines.push(format!("{}│ publica: {}", indent, orch_sub));
+        lines.push(format!("{}│ publishes: {}", indent, orch_sub));
         lines.push(format!("{}▼", indent));
 
         let res_txt = format!("[Topic: {} (p:{})]", orch_sub, results_p);
         let res_pad = " ".repeat(center.saturating_sub(res_txt.chars().count() / 2));
         lines.push(format!("{}{}", res_pad, res_txt));
-        lines.push(format!("{}│ consume", indent));
+        lines.push(format!("{}│ consumes", indent));
         lines.push(format!("{}▼", indent));
 
-        let return_txt = format!("[Orquestador: {}]", orch_role);
+        let return_txt = format!("[Orchestrator: {}]", orch_role);
         let ret_pad = " ".repeat(center.saturating_sub(return_txt.chars().count() / 2));
         lines.push(format!("{}{}", ret_pad, return_txt));
     }
@@ -181,7 +181,7 @@ fn render_hierarchical_diagram(pattern: &Pattern, narrow: bool, max_w: usize) ->
             let label = match lvl {
                 0 => "Root / Director",
                 1 => "Managers",
-                _ => "Especialistas",
+                _ => "Specialists",
             };
             lines.push(format!("[N{}: {}] {}", lvl, label, role_desc));
             if idx + 1 < levels.len() {
@@ -190,16 +190,16 @@ fn render_hierarchical_diagram(pattern: &Pattern, narrow: bool, max_w: usize) ->
                     .and_then(|a| a.publishes.first())
                     .cloned()
                     .unwrap_or_else(|| "orders".into());
-                lines.push(format!("  │ publica: {pub_topic}"));
+                lines.push(format!("  │ publishes: {pub_topic}"));
                 lines.push("  ▼".into());
                 lines.push(format!("[Topic: {pub_topic}]"));
-                lines.push("  │ consume".into());
+                lines.push("  │ consumes".into());
                 lines.push("  ▼".into());
             }
         }
         lines.push("  ◄── returns via result topics".into());
     } else {
-        let box_w = max_w.min(52).max(36);
+        let box_w = max_w.clamp(36, 52);
         for (idx, (lvl, ags)) in levels.iter().enumerate() {
             let role_desc = ags
                 .iter()
@@ -207,9 +207,9 @@ fn render_hierarchical_diagram(pattern: &Pattern, narrow: bool, max_w: usize) ->
                 .collect::<Vec<_>>()
                 .join(", ");
             let label = match lvl {
-                0 => "Nivel 0: Director",
-                1 => "Nivel 1: Managers",
-                _ => "Nivel 2: Especialistas",
+                0 => "Level 0: Director",
+                1 => "Level 1: Managers",
+                _ => "Level 2: Specialists",
             };
             let text = format!("[{}] {}", label, role_desc);
             let (t, m, b) = box_line(&text, box_w);
@@ -225,13 +225,13 @@ fn render_hierarchical_diagram(pattern: &Pattern, narrow: bool, max_w: usize) ->
                     .and_then(|a| a.publishes.first())
                     .cloned()
                     .unwrap_or_else(|| "cascade-orders".into());
-                lines.push(format!("{}│ publica: {}", indent, pub_topic));
+                lines.push(format!("{}│ publishes: {}", indent, pub_topic));
                 lines.push(format!("{}▼", indent));
 
                 let top_txt = format!("[Topic: {}]", pub_topic);
                 let top_pad = " ".repeat(center.saturating_sub(top_txt.chars().count() / 2));
                 lines.push(format!("{}{}", top_pad, top_txt));
-                lines.push(format!("{}│ consume", indent));
+                lines.push(format!("{}│ consumes", indent));
                 lines.push(format!("{}▼", indent));
             }
         }
@@ -256,13 +256,13 @@ fn render_blackboard_diagram(pattern: &Pattern, narrow: bool, max_w: usize) -> V
     let partitions = pattern.topics.first().map(|t| t.partitions).unwrap_or(1);
 
     if narrow {
-        lines.push(format!("[Pizarra: {} (p:{})]", topic_name, partitions));
+        lines.push(format!("[Blackboard: {} (p:{})]", topic_name, partitions));
         for agent in &pattern.agents {
             lines.push(format!("  ◄──► {} ({})", agent.id, agent.role));
         }
     } else {
-        let box_w = max_w.min(50).max(36);
-        let header = format!("PIZARRA COMPARTIDA: {} (p:{})", topic_name, partitions);
+        let box_w = max_w.clamp(36, 50);
+        let header = format!("SHARED BLACKBOARD: {} (p:{})", topic_name, partitions);
         let (t, m, b) = box_line(&header, box_w);
         lines.push(t);
         lines.push(m);
@@ -316,19 +316,19 @@ fn render_market_diagram(pattern: &Pattern, narrow: bool, max_w: usize) -> Vec<S
 
     if narrow {
         lines.push(format!("[Requesters: {req}]"));
-        lines.push("  │ publica demanda".into());
+        lines.push("  │ posts requests".into());
         lines.push("  ▼".into());
         lines.push("[Topic: ask (p:1)]".into());
-        lines.push("  │ consume".into());
+        lines.push("  │ consumes".into());
         lines.push("  ▼".into());
         lines.push(format!("[Solvers: {sol}]"));
-        lines.push("  │ oferta competitiva".into());
+        lines.push("  │ competitive bids".into());
         lines.push("  ▼".into());
         lines.push("[Topic: bid (p:1)]".into());
-        lines.push("  │ consume".into());
+        lines.push("  │ consumes".into());
         lines.push("  ▼".into());
         lines.push(format!("[Market-Maker: {mm}]"));
-        lines.push("  │ adjudica (transaction)".into());
+        lines.push("  │ awards (transaction)".into());
         lines.push("  ▼".into());
         lines.push("[Topic: transaction] ──► [Solvers / Requesters]".into());
     } else {
@@ -336,8 +336,7 @@ fn render_market_diagram(pattern: &Pattern, narrow: bool, max_w: usize) -> Vec<S
             "[Requesters: {req}] ──────► [Topic: ask] ──────► [Solvers: {sol}]"
         ));
         lines.push(
-            "                                                          │ ofertas competitivas"
-                .into(),
+            "                                                          │ competitive bids".into(),
         );
         lines.push("                                                          ▼".into());
         lines.push(format!(

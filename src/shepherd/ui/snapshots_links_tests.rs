@@ -385,7 +385,7 @@ fn status_bar_and_summary_follow_the_timeline() {
     let (buf, _) = render(&mut st, 160, 40);
     let t = text(&buf);
     assert!(t.contains("Snapshots of coder-1 (2)"), "{t}");
-    assert!(t.contains("Esc: volver"));
+    assert!(t.contains("Esc: back"));
 }
 
 // ---------- integration with the default render helpers ----------

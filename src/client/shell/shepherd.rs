@@ -320,13 +320,10 @@ impl ClientShellState {
                     }
                     true
                 } else {
-                    if action == crate::input::KeybindAction::NextTab
-                        && current_index + 1 >= real_tab_ids.len()
-                    {
-                        self.select_shepherd_tab(outcome);
-                        true
-                    } else if action == crate::input::KeybindAction::PreviousTab
-                        && current_index == 0
+                    if (action == crate::input::KeybindAction::NextTab
+                        && current_index + 1 >= real_tab_ids.len())
+                        || (action == crate::input::KeybindAction::PreviousTab
+                            && current_index == 0)
                     {
                         self.select_shepherd_tab(outcome);
                         true

@@ -41,7 +41,7 @@ fn agent(i: usize) -> ShepherdAgentRow {
         vendor: "claude".into(),
         model: "m".into(),
         state: "working".into(),
-        needs_you: i % 7 == 0,
+        needs_you: i.is_multiple_of(7),
         notice: "avisó\nvarias líneas\n日本語".into(),
         pane: "p1".into(),
         task_text: "tarea\nmultilínea".repeat(5),
@@ -78,12 +78,13 @@ fn git_row(i: usize) -> ShepherdGitRow {
     ShepherdGitRow {
         path: format!("/tmp/wt/{i}/{}", "d/".repeat(30)),
         branch: format!("shep/{i}-{}", "r".repeat(50)),
-        is_clean: i % 2 == 0,
+        is_clean: i.is_multiple_of(2),
         dirty_count: i,
         ..Default::default()
     }
 }
 
+#[allow(clippy::field_reassign_with_default)] // test setup reads clearer as field assignments
 fn big_state(n: usize) -> ShepherdSectionState {
     let mut s = ShepherdSectionState::default();
     s.agents = ShepherdAgentsSectionState::new((0..n).map(agent).collect());

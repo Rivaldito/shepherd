@@ -32,7 +32,7 @@ pub struct ShepherdRunsHits {
     pub empty_hits: Option<EmptyStateHits>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ShepherdRunsSectionState {
     pub selected: usize,
     pub list_scroll: usize,
@@ -42,21 +42,6 @@ pub struct ShepherdRunsSectionState {
     pub confirm_cancel: Option<u32>,
     pub last_action: Option<ShepherdRunsAction>,
     pub error: Option<String>,
-}
-
-impl Default for ShepherdRunsSectionState {
-    fn default() -> Self {
-        Self {
-            selected: 0,
-            list_scroll: 0,
-            detail_scroll: 0,
-            runs: Vec::new(),
-            launch_form: None,
-            confirm_cancel: None,
-            last_action: None,
-            error: None,
-        }
-    }
 }
 
 impl ShepherdRunsSectionState {
@@ -109,9 +94,7 @@ impl ShepherdRunsSectionState {
     }
 
     pub fn submit_launch(&mut self) -> Option<ShepherdRunsAction> {
-        let Some(ref form) = self.launch_form else {
-            return None;
-        };
+        let form = self.launch_form.as_ref()?;
         let action = ShepherdRunsAction::LaunchOrResume {
             task_id: form.task_id,
             options: form.options.clone(),
@@ -555,6 +538,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)] // test setup reads clearer as field assignments
     fn test_runs_section_navigation_and_cancel_guard() {
         let mut state = ShepherdRunsSectionState::default();
         state.runs = vec![ShepherdRunRow {
@@ -584,6 +568,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)] // test setup reads clearer as field assignments
     fn test_runs_section_gate_confirmation_guards() {
         let mut state = ShepherdRunsSectionState::default();
         state.runs = vec![ShepherdRunRow {
@@ -617,7 +602,7 @@ mod tests {
 
         let form = state.launch_form.as_ref().unwrap();
         // auto_push must ALWAYS be false upon opening!
-        assert_eq!(form.options.auto_push, false);
+        assert!(!form.options.auto_push);
 
         // Replan without saved plan is rejected
         let (handled, _) = state.handle_key(&KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
@@ -627,6 +612,6 @@ mod tests {
         let (handled, _) = state.handle_key(&KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
         assert!(handled);
         assert!(state.launch_form.as_ref().unwrap().error.is_some());
-        assert_eq!(state.launch_form.as_ref().unwrap().options.replan, false);
+        assert!(!state.launch_form.as_ref().unwrap().options.replan);
     }
 }

@@ -326,14 +326,14 @@ mod tests {
                 vec!["pane", "--right-click", "shepherd"],
                 "cli:pane:input:set",
                 "pane.input.set",
-                json!({"pane_id": "pane", "right_click": "shepherd"}),
+                json!({"pane_id": "pane", "right_click": "herdr"}),
             ),
             (
                 "split",
                 vec!["pane", "--direction", "down"],
                 "cli:pane:split",
                 "pane.split",
-                json!({"target_pane_id": "pane", "direction": "down", "focus": false, "right_click": "shepherd"}),
+                json!({"target_pane_id": "pane", "direction": "down", "focus": false, "right_click": "herdr"}),
             ),
             (
                 "swap",

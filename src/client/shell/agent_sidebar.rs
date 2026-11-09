@@ -541,13 +541,13 @@ pub(super) fn render_agent_row(
                         .fg(palette.red)
                         .add_modifier(Modifier::BOLD),
                 ))
-            } else if let Some(ref state) = row.shepherd_state {
-                Some((
-                    format!(" [{state}]"),
-                    status_style.add_modifier(Modifier::DIM),
-                ))
             } else {
-                None
+                row.shepherd_state.as_ref().map(|state| {
+                    (
+                        format!(" [{state}]"),
+                        status_style.add_modifier(Modifier::DIM),
+                    )
+                })
             }
         } else {
             None

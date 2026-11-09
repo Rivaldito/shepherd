@@ -1051,7 +1051,7 @@ pub fn render_pattern_editor(
     } else {
         "[ Save blocked ]"
     };
-    let submit_len = text_width(&submit_label);
+    let submit_len = text_width(submit_label);
     let submit_rect = Rect::new(area.x, btn_y, submit_len, 1);
     let submit_style = if editor.is_valid() {
         Style::default()
@@ -1072,7 +1072,7 @@ pub fn render_pattern_editor(
     hits.submit_button = Some(submit_rect);
 
     let cancel_label = "[ Cancel (Esc) ]";
-    let cancel_len = text_width(&cancel_label);
+    let cancel_len = text_width(cancel_label);
     let cancel_rect = Rect::new(submit_rect.right() + 2, btn_y, cancel_len, 1);
     put_str(
         buffer,

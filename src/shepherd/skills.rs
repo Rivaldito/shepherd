@@ -604,7 +604,11 @@ mod tests {
             SkillsSubModal::None,
             "Default skills cannot enter delete confirmation"
         );
-        assert!(state.error.as_ref().unwrap().contains("predeterminadas"));
+        assert!(state
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("Default system skills"));
 
         // Select index 1: "my-custom-skill" (User)
         state.select_next();
