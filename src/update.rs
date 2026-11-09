@@ -4294,14 +4294,18 @@ mod tests {
                     "unexpected release URL for {version} {target}: {url}"
                 );
                 assert!(
-                    url.ends_with(&format!("shepherd-{target}")),
+                    url.ends_with(&format!("herdr-{target}"))
+                        || url.ends_with(&format!("shepherd-{target}")),
                     "unexpected asset name for {version} {target}: {url}"
                 );
             }
             if let Some(windows) = assets.get("windows-x86_64") {
                 let windows: AssetRef = serde_json::from_value(windows.clone())
                     .unwrap_or_else(|_| panic!("invalid Windows asset for release {version}"));
-                assert!(windows.url.ends_with("/shepherd-windows-x86_64.zip"));
+                assert!(
+                    windows.url.ends_with("/herdr-windows-x86_64.zip")
+                        || windows.url.ends_with("/shepherd-windows-x86_64.zip")
+                );
                 let checksums = release
                     .get("sha256")
                     .and_then(serde_json::Value::as_object)
