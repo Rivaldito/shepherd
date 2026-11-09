@@ -25,7 +25,7 @@ pub struct ShepherdTasksHits {
     pub empty_hits: Option<EmptyStateHits>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ShepherdTasksSectionState {
     pub selected: usize,
     pub filter_index: usize, // 0: Todas, 1: Abiertas, 2: Completadas
@@ -37,23 +37,6 @@ pub struct ShepherdTasksSectionState {
     pub confirm_archive: Option<u32>,
     pub last_action: Option<ShepherdTasksAction>,
     pub error: Option<String>,
-}
-
-impl Default for ShepherdTasksSectionState {
-    fn default() -> Self {
-        Self {
-            selected: 0,
-            filter_index: 0,
-            list_scroll: 0,
-            detail_scroll: 0,
-            tasks: Vec::new(),
-            form: None,
-            import_gh: None,
-            confirm_archive: None,
-            last_action: None,
-            error: None,
-        }
-    }
 }
 
 impl ShepherdTasksSectionState {

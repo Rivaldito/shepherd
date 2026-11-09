@@ -1076,6 +1076,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)] // test setup reads clearer as field assignments
     fn test_events_section_pattern_runs_view_and_stop_guard() {
         let mut state = ShepherdEventsSectionState::default();
         state.active_subtab = ShepherdEventsSubTab::PatternRuns;

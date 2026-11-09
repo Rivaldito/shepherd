@@ -392,7 +392,7 @@ mod tests {
 
         // capture twice (second after an edit)
         let a = rig.snaps().start_capture().unwrap();
-        assert_eq!(rig.snaps().busy.as_deref(), Some("capturando…"));
+        assert_eq!(rig.snaps().busy.as_deref(), Some("capturing…"));
         rig.drive(a);
         assert!(!rig.snaps().is_busy());
         assert!(rig.snaps().notice.as_deref().unwrap().contains("coder-1/1"));
@@ -457,7 +457,9 @@ mod tests {
         let a = rig.snaps().confirm().unwrap();
         rig.drive(a);
         assert_eq!(
-            std::fs::read_to_string(rig.dir.join("f.txt")).unwrap(),
+            std::fs::read_to_string(rig.dir.join("f.txt"))
+                .unwrap()
+                .replace("\r\n", "\n"),
             "v1\n"
         );
         assert!(rig.dir.join("new.txt").exists());
@@ -489,7 +491,9 @@ mod tests {
         let a = rig.snaps().confirm().unwrap();
         rig.drive(a);
         assert_eq!(
-            std::fs::read_to_string(rig.dir.join("f.txt")).unwrap(),
+            std::fs::read_to_string(rig.dir.join("f.txt"))
+                .unwrap()
+                .replace("\r\n", "\n"),
             "v1\n"
         );
         assert!(rig.dir.join("new.txt").exists(), "extra files are kept");

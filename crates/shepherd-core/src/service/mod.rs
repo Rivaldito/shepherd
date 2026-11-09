@@ -286,6 +286,9 @@ pub(crate) struct ScreenQuietTracker {
 }
 
 /// Core Shepherd orchestration service.
+/// (consumer group, topic) -> (offset last announced, when), so wake-up notices are not repeated.
+type TopicWakeNotified = Mutex<HashMap<(String, String), (u64, u64)>>;
+
 #[derive(Clone)]
 pub struct OrchestrationService {
     pub(crate) service_config: ServiceConfig,
@@ -305,7 +308,7 @@ pub struct OrchestrationService {
     pub(crate) nudged: Arc<Mutex<HashMap<String, i64>>>,
     pub(crate) quiet_screens: Arc<Mutex<HashMap<String, ScreenQuietTracker>>>,
     pub(crate) failed_requests: Arc<Mutex<Vec<FailedRequestLogEntry>>>,
-    pub(crate) topic_wake_notified: Arc<Mutex<HashMap<(String, String), (u64, u64)>>>,
+    pub(crate) topic_wake_notified: Arc<TopicWakeNotified>,
     /// Run id -> ms since which the run has been continuously quiescent.
     pub(crate) run_quiet_since: Arc<Mutex<HashMap<String, (u64, usize)>>>,
     /// True while a pattern run is still `running`: its quiet period is counted in reconcile ticks, so

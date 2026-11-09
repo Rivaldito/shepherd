@@ -11,7 +11,7 @@ fn test_topology_diagram_orchestrator_worker() {
     assert!(!wide.is_empty());
     assert!(wide
         .iter()
-        .any(|l| l.contains("[Orquestador]") || l.contains("brain")));
+        .any(|l| l.contains("[Orchestrator]") || l.contains("brain")));
     assert!(wide
         .iter()
         .any(|l| l.contains("Worker") || l.contains("coder")));
@@ -34,10 +34,10 @@ fn test_topology_diagram_hierarchical() {
     let wide = generate_topology_diagram(&pat, 80);
     assert!(wide
         .iter()
-        .any(|l| l.contains("Director") || l.contains("Nivel 0")));
+        .any(|l| l.contains("Director") || l.contains("Level 0")));
     assert!(wide
         .iter()
-        .any(|l| l.contains("Managers") || l.contains("Nivel 1")));
+        .any(|l| l.contains("Managers") || l.contains("Level 1")));
 
     let narrow = generate_topology_diagram(&pat, 40);
     for line in &narrow {
@@ -51,7 +51,7 @@ fn test_topology_diagram_blackboard() {
     let wide = generate_topology_diagram(&pat, 80);
     assert!(wide
         .iter()
-        .any(|l| l.contains("PIZARRA") || l.contains("blackboard")));
+        .any(|l| l.contains("BLACKBOARD") || l.contains("blackboard")));
 
     let narrow = generate_topology_diagram(&pat, 40);
     for line in &narrow {

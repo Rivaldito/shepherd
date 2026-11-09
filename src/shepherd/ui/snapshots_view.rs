@@ -268,7 +268,7 @@ fn detail_blocks(state: &ShepherdSnapshotsState, snap: &SnapshotInfo) -> Vec<Det
     let mut blocks = Vec::new();
     if let Some(b) = &state.busy {
         blocks.push(DetailContentBlock::Notice {
-            text: format!("⏳ Trabajando… ({b})"),
+            text: format!("⏳ Working… ({b})"),
             level: AlertLevel::Info,
         });
     }
@@ -519,7 +519,7 @@ pub fn render_snapshots_section(
         };
         let mut msg = message;
         if let Some(b) = &state.busy {
-            msg.push_str(&format!("\n⏳ Trabajando… ({b})"));
+            msg.push_str(&format!("\n⏳ Working… ({b})"));
         }
         if let Some(e) = &state.error {
             msg.push_str(&format!("\nError: {e}"));

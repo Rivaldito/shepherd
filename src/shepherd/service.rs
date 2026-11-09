@@ -818,7 +818,12 @@ mod tests {
             r["result"]["result"]["pre_restore"]["reason"],
             "pre-restore"
         );
-        assert_eq!(std::fs::read_to_string(dir.join("f.txt")).unwrap(), "v1\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("f.txt"))
+                .unwrap()
+                .replace("\r\n", "\n"),
+            "v1\n"
+        );
 
         let r = call(Method::ShepherdSnapshotList(ShepherdSnapshotListParams {
             root: root.clone(),
