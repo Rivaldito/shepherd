@@ -526,7 +526,7 @@ mod tests {
                 !form.options.replan,
                 "Replan must NOT toggle without saved plan"
             );
-            assert!(form.error.as_ref().unwrap().contains("plan guardado"));
+            assert!(form.error.as_ref().unwrap().contains("saved plan"));
         }
 
         // Now test with saved plan

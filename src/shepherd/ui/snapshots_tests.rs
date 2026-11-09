@@ -246,7 +246,7 @@ fn busy_error_and_notice_are_shown_inside_the_panel() {
     let (buf, _) = render(&mut st, 120, 40);
     let t = text(&buf);
     assert!(t.contains("Error: git exploded"));
-    assert!(!t.contains("Trabajando…"));
+    assert!(!t.contains("Working…"));
 }
 
 #[test]
@@ -329,7 +329,7 @@ fn diff_is_coloured_and_truncated_with_notice() {
         .scrollbar
         .is_some());
     // the truncation notice sits above the (long) patch, visible without scrolling
-    assert!(text(&buf).contains("Diff truncado"));
+    assert!(text(&buf).contains("Diff truncated"));
 }
 
 #[test]

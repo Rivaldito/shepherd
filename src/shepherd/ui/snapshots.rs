@@ -401,7 +401,7 @@ impl ShepherdSnapshotsState {
             root: self.root.clone(),
             agent: self.agent_id.clone(),
         };
-        self.slow("capturando…", a)
+        self.slow("capturing…", a)
     }
 
     pub fn start_diff(&mut self, mode: DiffMode) -> Option<ShepherdSnapshotsAction> {
@@ -507,7 +507,7 @@ impl ShepherdSnapshotsState {
             agent: self.agent_id.clone(),
             keep,
         };
-        self.slow("podando…", a)
+        self.slow("pruning…", a)
     }
 
     /// Run the pending confirmation (stripe button or Enter).
@@ -533,7 +533,7 @@ impl ShepherdSnapshotsState {
             }
             SnapSub::ConfirmDelete(id) => {
                 let root = self.root_for_id(&id);
-                self.slow("borrando…", ShepherdSnapshotsAction::Delete { root, id })
+                self.slow("deleting…", ShepherdSnapshotsAction::Delete { root, id })
             }
             other => {
                 self.sub = other;
