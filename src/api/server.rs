@@ -1066,7 +1066,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("shepherd-{name}-{}-{nanos}", std::process::id()))
+        std::env::temp_dir().join(format!("shp-{name}-{}-{nanos}", std::process::id()))
     }
 
     fn read_line(stream: &mut LocalStream) -> String {

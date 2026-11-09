@@ -1090,7 +1090,7 @@ command = ["sh", "-c", "echo bootstrap"]
     assert_eq!(plugin["plugin_id"], "example.worktree-bootstrap");
     assert_eq!(plugin["source"]["kind"], "github");
     assert_eq!(plugin["source"]["owner"], "ogulcancelik");
-    assert_eq!(plugin["source"]["repo"], "shepherd-plugin-examples");
+    assert_eq!(plugin["source"]["repo"], "herdr-plugin-examples");
     assert_eq!(plugin["source"]["subdir"], "worktree-bootstrap");
     assert_eq!(plugin["source"]["requested_ref"], "v0.43.0");
     assert!(plugin["source"]["resolved_commit"].as_str().is_some());
