@@ -342,14 +342,11 @@ impl ShepherdPatternsSectionState {
     }
 
     pub fn validate_selected(&mut self) -> Option<ShepherdPatternsAction> {
-        if let Some(sum) = self.selected_summary() {
-            Some(ShepherdPatternsAction::Validate {
+        self.selected_summary()
+            .map(|sum| ShepherdPatternsAction::Validate {
                 name: Some(sum.name.clone()),
                 pattern: None,
             })
-        } else {
-            None
-        }
     }
 
     pub fn start_run(&mut self) {
@@ -1000,11 +997,9 @@ impl ShepherdPatternsSectionState {
 
         if let Some(ref eh) = hits.empty_hits {
             for (rect, idx) in &eh.actions {
-                if rect.contains(ratatui::layout::Position { x: col, y: row }) {
-                    if *idx == 0 {
-                        self.start_new_from_template();
-                        return (true, None);
-                    }
+                if rect.contains(ratatui::layout::Position { x: col, y: row }) && *idx == 0 {
+                    self.start_new_from_template();
+                    return (true, None);
                 }
             }
         }

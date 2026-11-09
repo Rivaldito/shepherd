@@ -727,10 +727,10 @@ impl App {
                 std::env::temp_dir()
                     .join(format!("shepherd-shep-test-{}-{nonce}", std::process::id())),
             )
-        } else if let Some(ref s) = session {
-            Some(crate::session::data_dir_for(Some(s)).join("shepherd"))
         } else {
-            None
+            session
+                .as_ref()
+                .map(|s| crate::session::data_dir_for(Some(s)).join("shepherd"))
         };
         match crate::shepherd::ShepherdRuntimeService::start_for_app(
             api_tx,

@@ -32,7 +32,7 @@ pub struct ShepherdAgentsHits {
     pub snapshots: Option<ShepherdSnapshotsHits>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ShepherdAgentsSectionState {
     pub selected: usize,
     pub list_scroll: usize,
@@ -46,24 +46,6 @@ pub struct ShepherdAgentsSectionState {
     pub error: Option<String>,
     /// Snapshot timeline (F11c); a sub-view of this tab.
     pub snapshots: ShepherdSnapshotsState,
-}
-
-impl Default for ShepherdAgentsSectionState {
-    fn default() -> Self {
-        Self {
-            selected: 0,
-            list_scroll: 0,
-            detail_scroll: 0,
-            agents: Vec::new(),
-            spawn_form: None,
-            confirm_kill: None,
-            confirm_clean: None,
-            confirm_clean_all: None,
-            last_action: None,
-            error: None,
-            snapshots: ShepherdSnapshotsState::default(),
-        }
-    }
 }
 
 impl ShepherdAgentsSectionState {

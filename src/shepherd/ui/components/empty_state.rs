@@ -29,7 +29,7 @@ pub fn render_empty_state(
     let mut current_y = area.y + area.height / 4;
 
     // Centered title
-    let title_len = text_width(&title);
+    let title_len = text_width(title);
     let title_x = area.x + (area.width.saturating_sub(title_len)) / 2;
     put_str(
         buffer,
@@ -49,7 +49,7 @@ pub fn render_empty_state(
             break;
         }
         let line = line.as_str();
-        let line_len = text_width(&line);
+        let line_len = text_width(line);
         let line_x = area.x + (area.width.saturating_sub(line_len)) / 2;
         put_str(
             buffer,

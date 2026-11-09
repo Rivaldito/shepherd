@@ -106,7 +106,7 @@ fn render_orchestrator_worker_diagram(
         lines.push("  ▼".into());
         lines.push(format!("[Orquestador: {orch_role}] (cierra bucle)"));
     } else {
-        let box_w = max_w.min(46).max(34);
+        let box_w = max_w.clamp(34, 46);
         let orch_txt = format!("[Orquestador] {} (x{})", orch_role, orch_count);
         let (t1, m1, b1) = box_line(&orch_txt, box_w);
         lines.push(t1);
@@ -199,7 +199,7 @@ fn render_hierarchical_diagram(pattern: &Pattern, narrow: bool, max_w: usize) ->
         }
         lines.push("  ◄── returns via result topics".into());
     } else {
-        let box_w = max_w.min(52).max(36);
+        let box_w = max_w.clamp(36, 52);
         for (idx, (lvl, ags)) in levels.iter().enumerate() {
             let role_desc = ags
                 .iter()
@@ -261,7 +261,7 @@ fn render_blackboard_diagram(pattern: &Pattern, narrow: bool, max_w: usize) -> V
             lines.push(format!("  ◄──► {} ({})", agent.id, agent.role));
         }
     } else {
-        let box_w = max_w.min(50).max(36);
+        let box_w = max_w.clamp(36, 50);
         let header = format!("PIZARRA COMPARTIDA: {} (p:{})", topic_name, partitions);
         let (t, m, b) = box_line(&header, box_w);
         lines.push(t);
