@@ -44,28 +44,21 @@ jobs:
       LIBGHOSTTY_VT_SIMD: ${{ matrix.libghostty_vt_simd }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
 
-      - name: Verify tag matches Cargo.toml version
-        shell: bash
-        run: |
-          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
-            echo "error: tag $GITHUB_REF_NAME doesn't match Cargo.toml version $CARGO_VERSION"
-            exit 1
-          fi
+      # No tag-vs-Cargo.toml version check on purpose: the package version is still herdr's 0.9.5 (issue #2)
+      # and the check would reject every v0.1.x tag. Add it back once the version scheme is decided.
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@v1
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
           targets: ${{ matrix.target }}
 
       - name: Install Zig
-        uses: vercel-labs/setup-zig@v1
+        uses: vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943 # v1.0.2
         with:
           version: 0.16.0
 
@@ -92,7 +85,7 @@ jobs:
         run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: release-${{ matrix.target }}
 
@@ -114,7 +107,7 @@ jobs:
           fi
 
       - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             ${{ matrix.name }}
