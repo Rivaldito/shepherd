@@ -18,7 +18,7 @@ INSTALL_DIR="${SHEPHERD_INSTALL_DIR:-$HOME/.local/bin}"
 main() {
     echo ""
     echo "  shepherd installer"
-    echo "  https://shepherdr.rivaldito.com"
+    echo "  https://shepherd.rivaldito.com"
     echo ""
 
     case "$(uname -s)" in
