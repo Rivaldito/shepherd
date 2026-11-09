@@ -1,6 +1,7 @@
 //! Small adapter for Shepherd's local NDJSON socket API.
 //! PTYs, workspaces, agent detection, and terminal attach remain owned by Shepherd.
 
+#[cfg(unix)]
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -39,6 +40,7 @@ impl From<std::io::Error> for ShepherdError {
     }
 }
 
+#[cfg(unix)]
 #[derive(Serialize)]
 struct Request<'a> {
     id: String,
@@ -46,6 +48,7 @@ struct Request<'a> {
     params: Value,
 }
 
+#[cfg(unix)]
 #[derive(Deserialize)]
 struct Response {
     id: String,
@@ -53,6 +56,7 @@ struct Response {
     error: Option<ApiError>,
 }
 
+#[cfg(unix)]
 #[derive(Deserialize)]
 struct ApiError {
     code: String,
