@@ -879,7 +879,7 @@ mod tests {
     fn topic_groups_table_shows_real_members_committed_total_and_lag() {
         let dir = std::env::temp_dir().join(format!("shep-f8f-groups-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let bus = MessageBus::open(&dir.join("messages.jsonl")).unwrap();
+        let bus = MessageBus::open(dir.join("messages.jsonl")).unwrap();
         bus.topic_create("results", 1).unwrap();
         bus.subscribe("coder-1", "results", None).unwrap();
         for _ in 0..3 {

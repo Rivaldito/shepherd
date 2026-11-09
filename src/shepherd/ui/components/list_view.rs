@@ -244,7 +244,7 @@ pub fn render_list_view(
 
         // Badge (if present)
         if let Some((badge_text, badge_style)) = &items[idx].badge {
-            let b_w = text_width(&badge_text);
+            let b_w = text_width(badge_text);
             if text_x + b_w < area.x + content_w {
                 put_str(
                     buffer,

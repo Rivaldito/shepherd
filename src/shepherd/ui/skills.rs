@@ -782,6 +782,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)] // test setup reads clearer as field assignments
     fn test_skills_section_navigation_and_mode_toggle() {
         let mut state = ShepherdSkillsSectionState::default();
         state.catalog_skills = vec![
@@ -814,6 +815,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)] // test setup reads clearer as field assignments
     fn test_skills_section_destructive_guard_delete_skill() {
         let mut state = ShepherdSkillsSectionState::default();
         state.catalog_skills = vec![

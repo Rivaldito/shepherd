@@ -657,7 +657,7 @@ impl ShepherdSnapshotsState {
             }
             Some(_) => return, // answer for another agent (stale)
             None => {
-                snaps.retain(|s| !self.active_agents.iter().any(|a| *a == s.agent));
+                snaps.retain(|s| !self.active_agents.contains(&s.agent));
                 Self::sort_newest_first(&mut snaps);
                 self.finished_snaps = snaps;
             }

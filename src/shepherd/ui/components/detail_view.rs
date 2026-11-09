@@ -74,7 +74,7 @@ pub fn render_detail_view(
             None => format!("[ {action_label} ]"),
         };
         let w = text_width(&label);
-        if action_right >= area.x + w + 1 {
+        if action_right > area.x + w {
             let x = action_right - w;
             let rect = Rect::new(x, current_y, w, 1);
             hits.header_actions.push((rect, i));
@@ -110,7 +110,7 @@ pub fn render_detail_view(
     title_x += text_width(&header.title) + 1;
 
     for (badge_text, badge_style) in &header.badges {
-        let bw = text_width(&badge_text);
+        let bw = text_width(badge_text);
         if title_x + bw < area.x + title_limit {
             put_str(buffer, title_x, current_y, bw, badge_text, *badge_style);
             title_x += bw + 1;
