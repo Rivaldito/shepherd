@@ -1491,7 +1491,7 @@ mod tests {
     fn github_plugin_source_parses_root_repo() {
         let source = GithubPluginSource::parse("ogulcancelik/herdr-plugin-examples").unwrap();
         assert_eq!(source.owner, "ogulcancelik");
-        assert_eq!(source.repo, "shepherd-plugin-examples");
+        assert_eq!(source.repo, "herdr-plugin-examples");
         assert_eq!(source.subdir, None);
         assert_eq!(
             source.remote_url(),
@@ -1505,7 +1505,7 @@ mod tests {
             GithubPluginSource::parse("ogulcancelik/herdr-plugin-examples/worktree-bootstrap")
                 .unwrap();
         assert_eq!(source.owner, "ogulcancelik");
-        assert_eq!(source.repo, "shepherd-plugin-examples");
+        assert_eq!(source.repo, "herdr-plugin-examples");
         assert_eq!(source.subdir.as_deref(), Some("worktree-bootstrap"));
     }
 
@@ -1534,13 +1534,13 @@ mod tests {
             github_plugin(
                 "examples.github-link-preview",
                 "ogulcancelik",
-                "shepherd-plugin-examples",
+                "herdr-plugin-examples",
                 Some("github-link-preview"),
             ),
             github_plugin(
                 "examples.agent-telegram-notify",
                 "ogulcancelik",
-                "shepherd-plugin-examples",
+                "herdr-plugin-examples",
                 Some("agent-telegram-notify"),
             ),
         ];
@@ -1555,7 +1555,7 @@ mod tests {
         let plugins = vec![github_plugin(
             "examples.agent-telegram-notify",
             "ogulcancelik",
-            "shepherd-plugin-examples",
+            "herdr-plugin-examples",
             Some("agent-telegram-notify"),
         )];
 
@@ -1564,11 +1564,11 @@ mod tests {
 
     #[test]
     fn github_source_lookup_ignores_owner_and_repo_case() {
-        let source = GithubPluginSource::parse("OGULCANCELIK/SHEPHERD-PLUGIN-EXAMPLES").unwrap();
+        let source = GithubPluginSource::parse("OGULCANCELIK/HERDR-PLUGIN-EXAMPLES").unwrap();
         let plugins = vec![github_plugin(
             "examples.root",
             "ogulcancelik",
-            "shepherd-plugin-examples",
+            "herdr-plugin-examples",
             None,
         )];
 
@@ -1584,7 +1584,7 @@ mod tests {
         let mut plugin = github_plugin(
             "examples.local",
             "ogulcancelik",
-            "shepherd-plugin-examples",
+            "herdr-plugin-examples",
             None,
         );
         plugin.source = PluginSourceInfo::default();

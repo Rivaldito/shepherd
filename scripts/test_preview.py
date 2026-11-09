@@ -52,7 +52,7 @@ class PreviewNotesTests(unittest.TestCase):
             )
             self.assertEqual(
                 data["assets"]["windows-x86_64"]["url"],
-                "https://github.com/herdrdev/herdr/releases/download/preview-2026-06-02-abcdef123456/herdr-windows-x86_64.zip",
+                "https://github.com/herdrdev/herdr/releases/download/preview-2026-06-02-abcdef123456/shepherd-windows-x86_64.zip",
             )
             self.assertEqual(
                 data["assets"]["windows-x86_64"]["sha256"],
