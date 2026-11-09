@@ -750,7 +750,7 @@ fn server_start_restores_legacy_session_through_api_identity() {
     let shepherd_cwd = shepherd_cwd.to_str().expect("test cwd should be UTF-8");
     let legacy_session = include_str!("../fixtures/session/legacy-pre-tabs-v2.json")
         .replace("/tmp/pion", pion_cwd)
-        .replace("/tmp/shepherd", shepherd_cwd);
+        .replace("/tmp/herdr", shepherd_cwd);
     fs::write(data_dir.join("session.json"), legacy_session).unwrap();
 
     let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);

@@ -312,10 +312,10 @@ pub fn render_patterns_section(
                     desc.push_str(&format!(" | grupo: {}", g));
                 }
                 if !a.publishes.is_empty() {
-                    desc.push_str(&format!(" | publica: [{}]", a.publishes.join(", ")));
+                    desc.push_str(&format!(" | publishes: [{}]", a.publishes.join(", ")));
                 }
                 if !a.consumes.is_empty() {
-                    desc.push_str(&format!(" | consume: [{}]", a.consumes.join(", ")));
+                    desc.push_str(&format!(" | consumes: [{}]", a.consumes.join(", ")));
                 }
                 if let Some(ref p) = a.prompt {
                     let prompt_snippet = truncate_line(p, 40);

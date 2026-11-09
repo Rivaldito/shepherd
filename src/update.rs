@@ -4251,14 +4251,19 @@ mod tests {
                 url.contains(&format!("/releases/download/v{}/", manifest.version)),
                 "unexpected release URL for {target}: {url}"
             );
+            // the checked-in manifest is herdr's published one (herdr-<target>); Shepherd's own releases use shepherd-<target>
             assert!(
-                url.ends_with(&format!("shepherd-{target}")),
+                url.ends_with(&format!("herdr-{target}"))
+                    || url.ends_with(&format!("shepherd-{target}")),
                 "unexpected asset name for {target}: {url}"
             );
         }
 
         if let Some(windows) = manifest.assets.get("windows-x86_64") {
-            assert!(windows.url.ends_with("/shepherd-windows-x86_64.zip"));
+            assert!(
+                windows.url.ends_with("/herdr-windows-x86_64.zip")
+                    || windows.url.ends_with("/shepherd-windows-x86_64.zip")
+            );
             assert_eq!(
                 manifest.sha256.get("windows-x86_64").map(String::len),
                 Some(64),

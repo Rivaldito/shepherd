@@ -392,7 +392,7 @@ mod tests {
 
         // capture twice (second after an edit)
         let a = rig.snaps().start_capture().unwrap();
-        assert_eq!(rig.snaps().busy.as_deref(), Some("capturando…"));
+        assert_eq!(rig.snaps().busy.as_deref(), Some("capturing…"));
         rig.drive(a);
         assert!(!rig.snaps().is_busy());
         assert!(rig.snaps().notice.as_deref().unwrap().contains("coder-1/1"));
