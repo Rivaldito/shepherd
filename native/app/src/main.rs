@@ -88,11 +88,30 @@ fn client_socket() -> PathBuf {
     if let Some(path) = std::env::var_os("SHEPHERD_CLIENT_SOCKET_PATH") {
         return PathBuf::from(path);
     }
-    match std::env::var_os("SHEPHERD_SOCKET_PATH").map(PathBuf::from) {
-        Some(api) => sessions::client_socket_for(&api),
-        None => PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-            .join(".config/shepherd-dev/shepherd-client.sock"),
+    if let Some(api) = std::env::var_os("SHEPHERD_SOCKET_PATH").map(PathBuf::from) {
+        return sessions::client_socket_for(&api);
     }
+    // nothing says where the server is: ask `shepherd status server` (a found socket is kept; a miss is
+    // retried every few seconds, so the app can be opened before the server and connect once it is up)
+    static FOUND: Mutex<Option<(std::time::Instant, Option<PathBuf>)>> = Mutex::new(None);
+    if let Ok(mut found) = FOUND.lock() {
+        let stale = match &*found {
+            Some((_, Some(_))) => false,
+            Some((when, None)) => when.elapsed() > Duration::from_secs(3),
+            None => true,
+        };
+        if stale {
+            *found = Some((
+                std::time::Instant::now(),
+                sessions::discover_client_socket(),
+            ));
+        }
+        if let Some((_, Some(path))) = &*found {
+            return path.clone();
+        }
+    }
+    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+        .join(".config/shepherd-dev/shepherd-client.sock")
 }
 
 #[derive(Clone)]
