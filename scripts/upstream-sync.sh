@@ -169,6 +169,10 @@ fi
 
 git fetch "$UPSTREAM_REMOTE"
 
+# Shepherd has its own package version. Remember it so an upstream version bump cannot replace it.
+OWN_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+UPSTREAM_PKG_VERSION="$(git show "$TARGET:Cargo.toml" 2>/dev/null | sed -n 's/^version = "\(.*\)"/\1/p' | head -n 1)"
+
 echo "==> Merging '$TARGET' into '$SYNC_BRANCH'..."
 MERGE_FAILED=0
 if ! git merge "$TARGET" --no-edit; then
@@ -187,11 +191,20 @@ if [ "$MERGE_FAILED" -eq 1 ]; then
     echo "1. Resolve the conflicts above manually."
     echo "2. Stage the resolved files with 'git add <files>'."
     echo "3. Complete the merge with 'git commit'."
+    echo "   In Cargo.toml keep Shepherd's own 'version' line (herdr's is $UPSTREAM_PKG_VERSION), and set"
+    echo "   UPSTREAM_VERSION in src/build_info.rs to \"$UPSTREAM_PKG_VERSION\"."
     echo "4. Run './scripts/rename-from-herdr.sh' and './scripts/rename-from-herdr.sh --check'."
     echo "5. Run './cargo-fork.sh build' and the test suite."
     echo "6. See docs/UPSTREAM-SYNC.md for guidance on common conflicts."
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
     exit 2
+fi
+
+echo "==> Keeping Shepherd's version ($OWN_VERSION) and recording herdr's ($UPSTREAM_PKG_VERSION)..."
+if [ -n "$OWN_VERSION" ] && [ -n "$UPSTREAM_PKG_VERSION" ]; then
+    # perl, not sed -i: the same command has to work with GNU and BSD userlands
+    OWN_VERSION="$OWN_VERSION" perl -0pi -e 's/^version = ".*?"/version = "$ENV{OWN_VERSION}"/m' Cargo.toml
+    UPSTREAM_PKG_VERSION="$UPSTREAM_PKG_VERSION" perl -pi -e 's/^(pub const UPSTREAM_VERSION: &str = ").*(";)/$1$ENV{UPSTREAM_PKG_VERSION}$2/' src/build_info.rs
 fi
 
 echo "==> Step (d): Re-running automated rename script..."

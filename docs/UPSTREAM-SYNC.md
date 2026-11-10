@@ -121,7 +121,15 @@ When merging new upstream changes, certain files and areas are known collision p
   - Shepherd intentionally disables upstream update downloads from `herdr.dev` to protect users from having the fork binary overwritten by upstream releases.
   - Preserve Shepherd's update stubs in `src/update.rs`.
 
-### 6. Configuration Fallback (`src/config/io.rs`)
+### 6. Package Version (`Cargo.toml`, `src/build_info.rs`)
+- **Symptom**: Every herdr release changes the `version` line of `Cargo.toml`, so it conflicts on each merge.
+- **Resolution**:
+  - Shepherd has its own version. `Cargo.toml` keeps the numeric part only (for example `0.2.2`), because the updater parses it as `X.Y.Z`. The `-beta` suffix comes from the build channel: a tag such as `v0.2.2-beta` makes the release workflow set `SHEPHERD_BUILD_CHANNEL=beta`, and `shepherd --version` prints `0.2.2-beta (herdr 0.9.5)`.
+  - Keep Shepherd's `version` line and set `UPSTREAM_VERSION` in `src/build_info.rs` to the herdr version you merged. `scripts/upstream-sync.sh` does both when the merge applies cleanly and prints the values when it does not.
+  - Release tags must be `v<Cargo.toml version>` plus an optional `-suffix`; the release workflow fails otherwise.
+  - Update checks are disabled (`auto_update` in `src/update.rs`), so herdr's `latest.json` is never offered as an update.
+
+### 7. Configuration Fallback (`src/config/io.rs`)
 - **Symptom**: Upstream alters configuration loading paths.
 - **Resolution**:
   - Ensure Shepherd continues to look in `~/.config/shepherd` first and gracefully falls back to `~/.config/herdr` in read-only mode if the former does not exist.

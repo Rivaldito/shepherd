@@ -741,7 +741,7 @@ fn main() -> io::Result<()> {
 
     if args.iter().any(|a| a == "--version" || a == "-V") {
         platform::begin_cli_output();
-        println!("shepherd {}", crate::build_info::version());
+        println!("{}", crate::build_info::version_line());
         return Ok(());
     }
 

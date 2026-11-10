@@ -1740,7 +1740,7 @@ mod tests {
         let path = temp_config_path("startup-stale-update-notes");
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
 
-        crate::release_notes::save_pending("0.4.9", "### Changed\n- One").unwrap();
+        crate::release_notes::save_pending("0.1.0", "### Changed\n- One").unwrap();
 
         let app = test_app();
 
