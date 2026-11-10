@@ -22,7 +22,7 @@ On Linux and macOS (x86_64 and arm64) the quickest way is the installer, which d
 curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh | sh
 ```
 
-Set `SHEPHERD_INSTALL_DIR` to install somewhere else, or `SHEPHERD_VERSION=v0.1.0-beta` to pick a release. You can also download a binary from the [releases page](https://github.com/Rivaldito/shepherd/releases). If you installed the binary, skip the build below.
+Set `SHEPHERD_INSTALL_DIR` to install somewhere else, or `SHEPHERD_VERSION=v0.2.0-beta` to pick a release. You can also download a binary from the [releases page](https://github.com/Rivaldito/shepherd/releases). If you installed the binary, skip the build below.
 
 ## 2b. Build from source
 

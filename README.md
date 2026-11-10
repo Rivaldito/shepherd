@@ -16,7 +16,7 @@ build teams of claude, codex and gemini agents, give them roles, and let them wo
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-19D3FF?labelColor=0B0B10" alt="Apache 2.0 license" /></a>
   <a href="https://github.com/herdrdev/herdr"><img src="https://img.shields.io/badge/fork%20of-herdr%200.9.5-FF8A1F?labelColor=0B0B10" alt="fork of herdr 0.9.5" /></a>
-  <a href="https://github.com/Rivaldito/shepherd/releases"><img src="https://img.shields.io/badge/release-0.1.0--beta-7CF29A?labelColor=0B0B10" alt="release 0.1.0-beta" /></a>
+  <a href="https://github.com/Rivaldito/shepherd/releases"><img src="https://img.shields.io/badge/release-0.2.0--beta-7CF29A?labelColor=0B0B10" alt="release 0.2.0-beta" /></a>
   <img src="https://img.shields.io/badge/status-beta-B98CFF?labelColor=0B0B10" alt="beta" />
 </p>
 
@@ -31,6 +31,14 @@ build teams of claude, codex and gemini agents, give them roles, and let them wo
 > **a fork of [herdr](https://github.com/herdrdev/herdr)** (apache-2.0), forked from herdr 0.9.5 at upstream commit `ee5bfb5`. the herdr history is preserved below the shepherd commit; shepherd is not affiliated with the herdr project.
 
 shepherd adds multi-agent orchestration on top of herdr's terminal runtime. you keep the native terminal of every agent; shepherd decides who works on what, in which worktree, and how they talk to each other. not sure it is for you? read [why shepherd](docs/shepherd/why-shepherd.md), which also says when it is not. more at **[shepherd.rivaldito.com](https://shepherd.rivaldito.com)**.
+
+**install** on linux or macos (x86_64 and arm64), one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh | sh
+```
+
+it downloads the prebuilt binary of the latest [release](https://github.com/Rivaldito/shepherd/releases), checks its sha-256 and puts it in `~/.local/bin`. no rust or zig needed. building from source is described in [try it from scratch](#try-it-from-scratch).
 
 ---
 
@@ -195,7 +203,7 @@ a complete walk from an empty machine to a team of agents. it takes about ten mi
 curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh | sh
 ```
 
-it downloads the binary of the latest release, checks its sha-256 and puts it in `~/.local/bin` (set `SHEPHERD_INSTALL_DIR` to change it, or `SHEPHERD_VERSION=v0.1.0-beta` to pick a release). you can also download a binary from the [releases](https://github.com/Rivaldito/shepherd/releases) page. or build it from source:
+it downloads the binary of the latest release, checks its sha-256 and puts it in `~/.local/bin` (set `SHEPHERD_INSTALL_DIR` to change it, or `SHEPHERD_VERSION=v0.2.0-beta` to pick a release). you can also download a binary from the [releases](https://github.com/Rivaldito/shepherd/releases) page. or build it from source:
 
 ```bash
 git clone https://github.com/Rivaldito/shepherd.git
