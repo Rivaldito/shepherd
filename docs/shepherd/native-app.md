@@ -9,27 +9,36 @@ The window has two modes, and a switch at the top moves between them:
 
 Press `Ctrl+Shift+S` to switch between the two, or click the `Terminal | Shepherd` switch in the top bar.
 
-## 1. Build and run
+## 1. Install and run
 
-The app lives in its own Cargo workspace, `native/`:
+### Install
+
+The installer puts the app next to the core, as `shepherd-native` in `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh | sh
+```
+
+Use `SHEPHERD_NO_GUI=1` to skip it (for example on a server without a screen). The app needs a desktop session (Wayland or X11 on Linux) and, on Linux, glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later). It uses the GPU when there is one.
+
+To build it from source instead, from its own Cargo workspace:
 
 ```bash
 cd native
-cargo build --release -p shepherd-native
+cargo build --release -p shepherd-native     # the binary is native/target/release/shepherd-native
 ```
-
-The binary is `native/target/release/shepherd-native`. It needs a running server. You can run it two ways.
 
 ### Against your own server
 
-Start the server as usual (`shepherd`, or `shepherd server` in the background), then give the app the server's client socket. `shepherd status server` prints the API socket; the client socket sits next to it with `-client` added to the name (`shepherd.sock` becomes `shepherd-client.sock`).
+Start the server as usual (`shepherd`, or `shepherd server` in the background), then run the app:
 
 ```bash
-SOCKET=$(shepherd status server | awk '/^socket:/{print $2}' | sed 's/shepherd.sock$/shepherd-client.sock/')
-SHEPHERD_BIN=$(command -v shepherd) SHEPHERD_CLIENT_SOCKET_PATH="$SOCKET" native/target/release/shepherd-native
+shepherd-native
 ```
 
-`SHEPHERD_BIN` tells the app which binary to ask for the session list.
+It finds the running server by itself: it asks `shepherd status server` (the `shepherd` binary from `SHEPHERD_BIN`, or the one on your `PATH`) and uses the client socket next to the API socket. If you open it before the server is up, it keeps trying every few seconds and connects once the server starts.
+
+To point it somewhere else, set `SHEPHERD_CLIENT_SOCKET_PATH` (the client socket, `shepherd-client.sock`) or `SHEPHERD_SOCKET_PATH` (the API socket). The `Sessions` row at the top switches between named sessions.
 
 ### Against a throwaway demo server
 
