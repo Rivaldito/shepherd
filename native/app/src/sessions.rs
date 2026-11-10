@@ -59,6 +59,35 @@ fn binary() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("shepherd"))
 }
 
+/// The client socket of the running default server, from the output of `shepherd status server`
+/// (`status: running` and a `socket: <api socket>` line). `None` when the server is not running.
+pub fn client_socket_from_status(output: &str) -> Option<PathBuf> {
+    let mut running = false;
+    let mut socket = None;
+    for line in output.lines() {
+        if let Some(status) = line.strip_prefix("status:") {
+            running = status.trim() == "running";
+        } else if let Some(path) = line.strip_prefix("socket:") {
+            socket = Some(PathBuf::from(path.trim()));
+        }
+    }
+    running
+        .then_some(socket)
+        .flatten()
+        .map(|api| client_socket_for(&api))
+}
+
+/// Asks the binary where the running server's client socket is. Blocking (it starts a process).
+pub fn discover_client_socket() -> Option<PathBuf> {
+    let output = Command::new(binary())
+        .args(["status", "server"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    client_socket_from_status(&String::from_utf8_lossy(&output.stdout))
+}
+
 /// Asks the binary for the sessions. Blocking: call it off the UI thread.
 pub fn list() -> Result<Vec<Session>, String> {
     let output = Command::new(binary())
@@ -201,6 +230,26 @@ mod tests {
         assert!(validate_name(&"x".repeat(65), &existing).is_err());
         assert!(validate_name("default", &existing).is_err());
         assert!(validate_name("work", &existing).is_err(), "already listed");
+    }
+
+    #[test]
+    fn the_server_status_gives_the_client_socket_only_when_it_runs() {
+        let running = "status: running\nversion: 0.9.5\nsocket: /run/user/1000/shepherd.sock\n";
+        assert_eq!(
+            client_socket_from_status(running),
+            Some(PathBuf::from("/run/user/1000/shepherd-client.sock"))
+        );
+        let custom = "status: running\nsocket: /tmp/s.sock\n";
+        assert_eq!(
+            client_socket_from_status(custom),
+            Some(PathBuf::from("/tmp/s-client.sock"))
+        );
+        assert_eq!(
+            client_socket_from_status("status: stopped\nsocket: /tmp/s.sock\n"),
+            None
+        );
+        assert_eq!(client_socket_from_status("status: running\n"), None);
+        assert_eq!(client_socket_from_status(""), None);
     }
 
     #[test]

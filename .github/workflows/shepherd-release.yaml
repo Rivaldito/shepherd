@@ -114,3 +114,70 @@ jobs:
           files: |
             ${{ matrix.name }}
             ${{ matrix.name }}.sha256
+
+  # The native desktop app. It is a dynamic binary (it loads Wayland, X11 and Vulkan at run time), so Linux is
+  # built on Ubuntu 22.04 (glibc 2.35) to run on as many distributions as possible.
+  build-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            name: shepherd-native-linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+            name: shepherd-native-linux-aarch64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: shepherd-native-macos-x86_64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: shepherd-native-macos-aarch64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: native
+          key: native-${{ matrix.target }}
+
+      - name: Build
+        working-directory: native
+        run: cargo build --release --locked --target ${{ matrix.target }} -p shepherd-native
+
+      - name: Package artifact and create checksum
+        shell: bash
+        run: |
+          cp native/target/${{ matrix.target }}/release/shepherd-native ${{ matrix.name }}
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            shasum -a 256 ${{ matrix.name }} > ${{ matrix.name }}.sha256
+          else
+            sha256sum ${{ matrix.name }} > ${{ matrix.name }}.sha256
+          fi
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            ${{ matrix.name }}
+            ${{ matrix.name }}.sha256
