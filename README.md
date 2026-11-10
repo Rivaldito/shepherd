@@ -18,6 +18,7 @@ build teams of claude, codex and gemini agents, give them roles, and let them wo
   <a href="https://github.com/herdrdev/herdr"><img src="https://img.shields.io/badge/fork%20of-herdr%200.9.5-FF8A1F?labelColor=0B0B10" alt="fork of herdr 0.9.5" /></a>
   <a href="https://github.com/Rivaldito/shepherd/releases"><img src="https://img.shields.io/badge/release-0.2.1--beta-7CF29A?labelColor=0B0B10" alt="release 0.2.1-beta" /></a>
   <img src="https://img.shields.io/badge/status-beta-B98CFF?labelColor=0B0B10" alt="beta" />
+  <a href="https://buymeacoffee.com/fqhst2qucv"><img src="https://img.shields.io/badge/buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black&labelColor=0B0B10" alt="Buy me a coffee" /></a>
 </p>
 
 <p align="center">
