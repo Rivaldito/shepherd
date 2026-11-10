@@ -2780,7 +2780,7 @@ dependencies = [
 
 [[package]]
 name = "shepherd-app-core"
-version = "0.1.0"
+version = "0.2.2"
 dependencies = [
  "bincode",
  "notify",
@@ -2805,7 +2805,7 @@ dependencies = [
 
 [[package]]
 name = "shepherd-native"
-version = "0.1.0"
+version = "0.2.2"
 dependencies = [
  "iced",
  "serde_json",

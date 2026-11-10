@@ -48,8 +48,22 @@ jobs:
         with:
           persist-credentials: false
 
-      # No tag-vs-Cargo.toml version check on purpose: the package version is still herdr's 0.9.5 (issue #2)
-      # and the check would reject every v0.1.x tag. Add it back once the version scheme is decided.
+      # The tag is v<Cargo.toml version>, optionally followed by -<suffix> (for example v0.2.2-beta).
+      # Cargo.toml keeps the numeric part (the updater parses it); the suffix becomes the build
+      # channel, so `shepherd --version` prints 0.2.2-beta. See docs/UPSTREAM-SYNC.md.
+      - name: Check the tag against the package version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          base="${tag%%-*}"
+          want="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          if [ "$base" != "$want" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the package version $want in Cargo.toml"
+            exit 1
+          fi
+          if [ "$tag" != "$base" ]; then
+            echo "SHEPHERD_BUILD_CHANNEL=${tag#*-}" >> "$GITHUB_ENV"
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1

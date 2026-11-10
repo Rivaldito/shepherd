@@ -1,6 +1,6 @@
 [package]
 name = "shepherd"
-version = "0.9.5"
+version = "0.2.2"
 edition = "2021"
 build = "build.rs"
 description = "terminal workspace manager for AI coding agents"

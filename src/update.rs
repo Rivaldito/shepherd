@@ -89,6 +89,12 @@ impl Version {
     pub fn current() -> Self {
         Self::parse(crate::build_info::BASE_VERSION).expect("invalid CARGO_PKG_VERSION")
     }
+
+    /// The herdr version this fork is based on. Plugins are written against herdr's
+    /// numbering, so their `min_shepherd_version` is compared with this one.
+    pub fn upstream() -> Self {
+        Self::parse(crate::build_info::UPSTREAM_VERSION).expect("invalid UPSTREAM_VERSION")
+    }
 }
 
 impl std::fmt::Display for Version {
@@ -2438,6 +2444,13 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
                 install_command: update_install_command().to_string(),
             });
         }
+        return;
+    }
+
+    // Shepherd has its own version line and no update manifest yet. The manifests below
+    // belong to herdr, so reading them would offer herdr releases as "updates".
+    tracing::info!("update checks are disabled in Shepherd");
+    if true {
         return;
     }
 

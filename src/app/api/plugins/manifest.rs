@@ -245,11 +245,14 @@ fn validate_min_shepherd_version(value: Option<&str>) -> Result<String, (&'stati
             ),
         )
     })?;
-    let current = crate::update::Version::current();
+    // Plugins use herdr's version numbers, so compare with the herdr base, not Shepherd's own.
+    let current = crate::update::Version::upstream();
     if required > current {
         return Err((
             "plugin_requires_newer_shepherd",
-            format!("plugin requires Shepherd {required} or newer; current Shepherd is {current}"),
+            format!(
+                "plugin requires Shepherd {required} or newer; this Shepherd is based on herdr {current}"
+            ),
         ));
     }
     Ok(required.to_string())
