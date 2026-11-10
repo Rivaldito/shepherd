@@ -38,16 +38,26 @@ shepherd adds multi-agent orchestration on top of herdr's terminal runtime. you 
 curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh | sh
 ```
 
-it downloads the prebuilt binary of the latest [release](https://github.com/Rivaldito/shepherd/releases), checks its sha-256 and puts it in `~/.local/bin`. no rust or zig needed. building from source is described in [try it from scratch](#try-it-from-scratch).
+it downloads the prebuilt binaries of the latest [release](https://github.com/Rivaldito/shepherd/releases), checks their sha-256 and puts them in `~/.local/bin`. no rust or zig needed.
 
-**what it installs:** one binary, `shepherd`: the server, the cli and the terminal ui with the shepherd section. the **native desktop app is not included in the binaries yet**; it is built from source (see [the native app](#try-it-from-scratch), step 9).
+**what it installs**
 
-**run it:**
+| binary | what it is |
+|---|---|
+| `shepherd` | the server, the cli and the terminal ui with the shepherd section |
+| `shepherd-native` | the native desktop app (the ten views, the pattern graph editor, the event feed) |
+
+on a server without a screen, install only the first one: `curl -fsSL .../install.sh | SHEPHERD_NO_GUI=1 sh`. the desktop app needs a desktop session (wayland or x11 on linux) and, on linux, glibc 2.35 or newer (ubuntu 22.04, debian 12, fedora 36 or later). it uses the gpu when there is one. to build from source instead, see [try it from scratch](#try-it-from-scratch).
+
+**run it**
 
 ```bash
 mkdir -p ~/.config/shepherd && printf '[shepherd]\nenabled = true\n' > ~/.config/shepherd/config.toml   # once
 cd ~/your-repo && shepherd      # ctrl+b a opens the shepherd section, ctrl+b q detaches, `shepherd` reattaches
+shepherd-native                 # in a second terminal: the desktop app, on the same running server
 ```
+
+`shepherd-native` finds the running server by itself (it asks `shepherd status server`), and it keeps trying if you open it before the server is up. `ctrl+shift+s` switches between the terminal and the shepherd panel inside the app.
 
 ---
 
@@ -266,18 +276,12 @@ shepherd topic tail results
 
 **8. make it yours.** add a role to `.shepherd/config.yaml`, point a pattern at it, and validate (see [roles](#roles-who-does-what) and [patterns](#patterns-your-agent-teams) above).
 
-**9. optional: the native app.**
+**9. the desktop app.** if you installed with the one-liner you already have it: run `shepherd-native` while `shepherd` is running. to build it from source instead:
 
 ```bash
 (cd native && cargo build --release -p shepherd-native)
-native/dev/demo.sh         # opens the window against a throwaway server with sample data
-```
-
-to open it on your own running server instead (start `shepherd` first):
-
-```bash
-SOCKET=$(shepherd status server | awk '/^socket:/{print $2}' | sed 's/shepherd.sock$/shepherd-client.sock/')
-SHEPHERD_BIN=$(command -v shepherd) SHEPHERD_CLIENT_SOCKET_PATH="$SOCKET" native/target/release/shepherd-native
+native/target/release/shepherd-native        # on your running server
+native/dev/demo.sh                           # or on a throwaway server with sample data
 ```
 
 details in [docs/shepherd/native-app.md](docs/shepherd/native-app.md). to explore without touching your own configuration at all, use `scripts/shepherd-iso.sh start` for an isolated session. every step in detail: [docs/shepherd/getting-started.md](docs/shepherd/getting-started.md).

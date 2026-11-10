@@ -1,18 +1,19 @@
 #!/bin/sh
-# Shepherd installer: downloads the prebuilt binary for your system from a GitHub release
-# (shepherd-<linux|macos>-<x86_64|aarch64> and its .sha256 file), checks its SHA-256 and installs it
-# into ~/.local/bin.
+# Shepherd installer: downloads the prebuilt binaries for your system from a GitHub release, checks their
+# SHA-256 and installs them into ~/.local/bin:
+#   shepherd         the server, the cli and the terminal ui
+#   shepherd-native  the native desktop app (skipped with SHEPHERD_NO_GUI=1)
 #
 #   curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh | sh
 #
 # Variables:
-#   SHEPHERD_VERSION      release tag to install (default: the newest release, including betas), e.g. v0.1.0-beta
-#   SHEPHERD_INSTALL_DIR  where to put the binary (default: ~/.local/bin)
+#   SHEPHERD_VERSION      release tag to install (default: the newest release, including betas), e.g. v0.2.0-beta
+#   SHEPHERD_INSTALL_DIR  where to put the binaries (default: ~/.local/bin)
+#   SHEPHERD_NO_GUI=1     install only `shepherd`, not the desktop app (for servers without a screen)
 #   SHEPHERD_RELEASE_BASE base URL holding the assets, for mirrors and tests (skips the GitHub lookup)
 set -eu
 
 REPO="Rivaldito/shepherd"
-BIN="shepherd"
 INSTALL_DIR="${SHEPHERD_INSTALL_DIR:-$HOME/.local/bin}"
 
 main() {
@@ -31,11 +32,19 @@ main() {
         aarch64|arm64) arch="aarch64" ;;
         *)             err "unsupported architecture: $(uname -m)" ;;
     esac
-    ASSET="${BIN}-${os}-${arch}"
     log "detected ${os}/${arch}"
 
     need curl
     need awk
+    if command -v sha256sum >/dev/null 2>&1; then
+        SHA_TOOL="sha256sum"
+    elif command -v shasum >/dev/null 2>&1; then
+        SHA_TOOL="shasum"
+    elif command -v openssl >/dev/null 2>&1; then
+        SHA_TOOL="openssl"
+    else
+        err "checking the downloads needs sha256sum, shasum or openssl"
+    fi
 
     if [ -n "${SHEPHERD_RELEASE_BASE:-}" ]; then
         BASE="${SHEPHERD_RELEASE_BASE%/}"
@@ -57,32 +66,20 @@ main() {
 
     TMP="$(mktemp -d)"
     trap 'rm -rf "$TMP"' EXIT
-
-    curl -fsSL --retry 3 --connect-timeout 10 --max-time 180 "${BASE}/${ASSET}" -o "${TMP}/${ASSET}" \
-        || err "download failed: ${BASE}/${ASSET} (does release ${TAG} have a binary for ${os}/${arch}?)"
-    # each binary has a "<asset>.sha256" file next to it (the output of sha256sum / shasum -a 256)
-    curl -fsSL --retry 3 --connect-timeout 10 --max-time 20 "${BASE}/${ASSET}.sha256" -o "${TMP}/${ASSET}.sha256" \
-        || err "download failed: ${BASE}/${ASSET}.sha256"
-
-    EXPECTED="$(awk '{ print tolower($1); exit }' "${TMP}/${ASSET}.sha256")"
-    [ "${#EXPECTED}" -eq 64 ] || err "${ASSET}.sha256 does not hold a valid checksum"
-
-    if command -v sha256sum >/dev/null 2>&1; then
-        ACTUAL="$(sha256sum < "${TMP}/${ASSET}" | awk '{ print $1 }')"
-    elif command -v shasum >/dev/null 2>&1; then
-        ACTUAL="$(shasum -a 256 < "${TMP}/${ASSET}" | awk '{ print $1 }')"
-    elif command -v openssl >/dev/null 2>&1; then
-        ACTUAL="$(openssl dgst -sha256 < "${TMP}/${ASSET}" | awk '{ print $NF }')"
-    else
-        err "checking the download needs sha256sum, shasum or openssl"
-    fi
-    [ "$ACTUAL" = "$EXPECTED" ] || err "the downloaded file does not match its checksum; nothing was installed"
-    log "checksum ok"
-
     mkdir -p "$INSTALL_DIR"
-    mv "${TMP}/${ASSET}" "${INSTALL_DIR}/${BIN}"
-    chmod +x "${INSTALL_DIR}/${BIN}"
-    log "installed ${INSTALL_DIR}/${BIN}"
+
+    # the core is required
+    fetch "shepherd-${os}-${arch}" "shepherd" required
+
+    # the desktop app is optional: a release without it (or a failed download) does not stop the install
+    GUI=0
+    if [ "${SHEPHERD_NO_GUI:-0}" = "1" ]; then
+        log "skipping the desktop app (SHEPHERD_NO_GUI=1)"
+    elif fetch "shepherd-native-${os}-${arch}" "shepherd-native" optional; then
+        GUI=1
+    else
+        warn "the desktop app was not installed; the terminal ui in 'shepherd' works without it"
+    fi
 
     case ":${PATH}:" in
         *":${INSTALL_DIR}:"*) ;;
@@ -95,14 +92,42 @@ main() {
     esac
 
     echo ""
-    log "next: enable the orchestrator and start it"
+    log "next: enable the orchestrator once, then start it in a git repository"
     echo "    mkdir -p ~/.config/shepherd && printf '[shepherd]\\nenabled = true\\n' > ~/.config/shepherd/config.toml"
-    echo "    shepherd"
+    echo "    cd ~/your-repo && shepherd"
+    if [ "$GUI" = "1" ]; then
+        echo "    shepherd-native      # the desktop app, in a second terminal while shepherd runs"
+    fi
     echo ""
 }
 
+# fetch <asset> <installed name> <required|optional>: download, verify the SHA-256 and install one binary.
+fetch() {
+    asset="$1"; name="$2"; mode="$3"
+    fail() { if [ "$mode" = "required" ]; then err "$1"; else warn "$1"; return 1; fi; }
+
+    curl -fsSL --retry 3 --connect-timeout 10 --max-time 180 "${BASE}/${asset}" -o "${TMP}/${asset}" \
+        || { fail "download failed: ${BASE}/${asset} (does release ${TAG} have it for this system?)"; return 1; }
+    # each binary has a "<asset>.sha256" file next to it (the output of sha256sum / shasum -a 256)
+    curl -fsSL --retry 3 --connect-timeout 10 --max-time 20 "${BASE}/${asset}.sha256" -o "${TMP}/${asset}.sha256" \
+        || { fail "download failed: ${BASE}/${asset}.sha256"; return 1; }
+
+    expected="$(awk '{ print tolower($1); exit }' "${TMP}/${asset}.sha256")"
+    [ "${#expected}" -eq 64 ] || { fail "${asset}.sha256 does not hold a valid checksum"; return 1; }
+    case "$SHA_TOOL" in
+        sha256sum) actual="$(sha256sum < "${TMP}/${asset}" | awk '{ print $1 }')" ;;
+        shasum)    actual="$(shasum -a 256 < "${TMP}/${asset}" | awk '{ print $1 }')" ;;
+        openssl)   actual="$(openssl dgst -sha256 < "${TMP}/${asset}" | awk '{ print $NF }')" ;;
+    esac
+    [ "$actual" = "$expected" ] || { fail "${asset} does not match its checksum; it was not installed"; return 1; }
+
+    mv "${TMP}/${asset}" "${INSTALL_DIR}/${name}"
+    chmod +x "${INSTALL_DIR}/${name}"
+    log "installed ${INSTALL_DIR}/${name} (checksum ok)"
+}
+
 log()  { printf '  \033[32m>\033[0m %s\n' "$1"; }
-warn() { printf '  \033[33m!\033[0m %s\n' "$1"; }
+warn() { printf '  \033[33m!\033[0m %s\n' "$1" >&2; }
 err()  { printf '  \033[31m✗\033[0m %s\n' "$1" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || err "requires '$1'; install it first"; }
 
