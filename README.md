@@ -40,6 +40,15 @@ curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh 
 
 it downloads the prebuilt binary of the latest [release](https://github.com/Rivaldito/shepherd/releases), checks its sha-256 and puts it in `~/.local/bin`. no rust or zig needed. building from source is described in [try it from scratch](#try-it-from-scratch).
 
+**what it installs:** one binary, `shepherd`: the server, the cli and the terminal ui with the shepherd section. the **native desktop app is not included in the binaries yet**; it is built from source (see [the native app](#try-it-from-scratch), step 9).
+
+**run it:**
+
+```bash
+mkdir -p ~/.config/shepherd && printf '[shepherd]\nenabled = true\n' > ~/.config/shepherd/config.toml   # once
+cd ~/your-repo && shepherd      # ctrl+b a opens the shepherd section, ctrl+b q detaches, `shepherd` reattaches
+```
+
 ---
 
 ## what you get
@@ -264,7 +273,14 @@ shepherd topic tail results
 native/dev/demo.sh         # opens the window against a throwaway server with sample data
 ```
 
-to connect it to your own server instead, see [docs/shepherd/native-app.md](docs/shepherd/native-app.md). to explore without touching your own configuration at all, use `scripts/shepherd-iso.sh start` for an isolated session. every step in detail: [docs/shepherd/getting-started.md](docs/shepherd/getting-started.md).
+to open it on your own running server instead (start `shepherd` first):
+
+```bash
+SOCKET=$(shepherd status server | awk '/^socket:/{print $2}' | sed 's/shepherd.sock$/shepherd-client.sock/')
+SHEPHERD_BIN=$(command -v shepherd) SHEPHERD_CLIENT_SOCKET_PATH="$SOCKET" native/target/release/shepherd-native
+```
+
+details in [docs/shepherd/native-app.md](docs/shepherd/native-app.md). to explore without touching your own configuration at all, use `scripts/shepherd-iso.sh start` for an isolated session. every step in detail: [docs/shepherd/getting-started.md](docs/shepherd/getting-started.md).
 
 ---
 
