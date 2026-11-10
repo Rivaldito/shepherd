@@ -93,8 +93,11 @@ main() {
 
     echo ""
     log "next: enable the orchestrator once, then start it in a git repository"
-    echo "    mkdir -p ~/.config/shepherd && printf '[shepherd]\\nenabled = true\\n' > ~/.config/shepherd/config.toml"
-    echo "    cd ~/your-repo && shepherd"
+    # a quoted heredoc prints the text as is (echo would turn the \n in the printf into real newlines in some shells)
+    cat <<'HINT'
+    mkdir -p ~/.config/shepherd && printf '[shepherd]\nenabled = true\n' > ~/.config/shepherd/config.toml
+    cd ~/your-repo && shepherd
+HINT
     if [ "$GUI" = "1" ]; then
         echo "    shepherd-native      # the desktop app, in a second terminal while shepherd runs"
     fi
