@@ -78,7 +78,7 @@ The desktop app (GUI), the terminal UI (TUI) and the CLI are three front ends fo
 | Function | GUI | TUI | CLI |
 |---|---|---|---|
 | Status of worktrees | ✔ | ✔ | ✔ `git status` |
-| Create a branch or a worktree, remove a worktree | ✘ | ✔ (#19) | ✔ (#21) |
+| Create a branch or a worktree, remove a worktree | ✔ (#30) | ✔ (#19) | ✔ (#21) |
 | Push a branch and open its PR | only by approving a gate | ✔ (#20) | ✔ `git publish` (#21) |
 
 `publish` never adds a push path of its own: it approves the gate of the subtask waiting on that branch, and refuses a branch with no gate waiting.
