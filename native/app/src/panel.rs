@@ -272,6 +272,25 @@ fn state_badge(state: PatternRunState) -> (&'static str, Color) {
     }
 }
 
+/// What an agent's Skills card says: the skills installed for it, and what was changed for this agent alone.
+fn agent_skill_lines(a: &shepherd_app_core::shepherd_core::Agent) -> Vec<String> {
+    let mut lines = vec![if a.active_skills.is_empty() {
+        "No skills were installed for this agent.".to_owned()
+    } else {
+        format!("Active: {}", a.active_skills.join(", "))
+    }];
+    if !a.skills.add.is_empty() {
+        lines.push(format!("Added for this agent: {}", a.skills.add.join(", ")));
+    }
+    if !a.skills.remove.is_empty() {
+        lines.push(format!(
+            "Removed for this agent: {}",
+            a.skills.remove.join(", ")
+        ));
+    }
+    lines
+}
+
 fn agent_status(state: &str) -> Status {
     match state {
         "working" | "starting" => Status::Working,
@@ -2216,6 +2235,17 @@ impl Panel {
                 text(a.task_text.clone()).size(13).into(),
             ));
         }
+        col = col.push(card(
+            "SKILLS",
+            None,
+            column(
+                agent_skill_lines(a)
+                    .into_iter()
+                    .map(|line| text(line).size(12.5).into()),
+            )
+            .spacing(4)
+            .into(),
+        ));
         if !a.result.is_empty() {
             col = col.push(card("RESULT", None, text(a.result.clone()).size(13).into()));
         }
@@ -3024,6 +3054,32 @@ mod tests {
                 ..ctx
             })
             .is_none());
+    }
+
+    #[test]
+    fn an_agents_skills_card_lists_what_is_active_and_what_was_changed_for_it() {
+        use shepherd_app_core::shepherd_core::{Agent, SkillAdjust};
+        let none = Agent::default();
+        assert_eq!(
+            agent_skill_lines(&none),
+            ["No skills were installed for this agent."]
+        );
+        let agent = Agent {
+            active_skills: vec!["shepherd-comms".into(), "debug".into()],
+            skills: SkillAdjust {
+                add: vec!["debug".into()],
+                remove: vec!["review".into()],
+            },
+            ..Agent::default()
+        };
+        assert_eq!(
+            agent_skill_lines(&agent),
+            [
+                "Active: shepherd-comms, debug",
+                "Added for this agent: debug",
+                "Removed for this agent: review"
+            ]
+        );
     }
 
     #[test]
