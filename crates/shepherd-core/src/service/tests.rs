@@ -3159,3 +3159,58 @@ fn assign_agent_task_links_and_unlinks_both_sides() {
         )
         .is_err());
 }
+
+/// Every operation the terminal UI and the desktop app send through `shepherd.call` must exist in the server.
+/// Several did not (the TUI's skill, git and issue buttons, the app's task edit and run delete) and answered
+/// "unknown shepherd operation" only when a person pressed the button.
+#[test]
+fn every_operation_a_surface_sends_is_known_to_the_server() {
+    let tui = include_str!("../../../../src/client/shell/shepherd.rs");
+    let gui = [
+        include_str!("../../../../native/app-core/src/actions.rs"),
+        include_str!("../../../../native/app-core/src/config_data.rs"),
+    ]
+    .concat();
+    let mut ops = std::collections::BTreeSet::new();
+    let mut take = |text: &str, marker: &str| {
+        for part in text.split(marker).skip(1) {
+            let name: String = part
+                .trim_start()
+                .strip_prefix('"')
+                .map(|r| {
+                    r.chars()
+                        .take_while(|c| c.is_ascii_lowercase() || *c == '_')
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !name.is_empty() {
+                ops.insert(name);
+            }
+        }
+    };
+    take(tui, "shepherd_op_to_method(");
+    take(&gui, "\"op\":");
+    assert!(ops.len() > 15, "the scan found too few operations: {ops:?}");
+
+    let tmp = TestDir::new("surface-ops");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let root = tmp.path().to_str().unwrap();
+    // Known gaps, waiting for a decision on what they should do to a running agent. Remove an entry when it is
+    // implemented (the test fails if one is listed here and works).
+    const KNOWN_GAPS: [&str; 2] = ["skills_restore", "skills_toggle"]; // sorted
+    let unknown: Vec<_> = ops
+        .iter()
+        .filter(|op| {
+            service
+                .handle_call(op, serde_json::json!({ "root": root }))
+                .err()
+                .is_some_and(|e| e.contains("unknown shepherd operation"))
+        })
+        .collect();
+    let expected: Vec<String> = KNOWN_GAPS.iter().map(|s| s.to_string()).collect();
+    assert_eq!(
+        unknown.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        expected,
+        "operations a surface sends but the server does not know (left: found, right: allowed gaps)"
+    );
+}

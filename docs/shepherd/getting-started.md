@@ -207,3 +207,4 @@ If a pattern run would exceed `max_concurrent`, `shepherd pattern run` asks for 
 - [patterns.md](patterns.md): design your own team.
 - [topics-and-events.md](topics-and-events.md): understand and watch the bus.
 - [native-app.md](native-app.md): the desktop app.
+- [parity.md](parity.md): what the desktop app, the terminal UI and the CLI each can do.
