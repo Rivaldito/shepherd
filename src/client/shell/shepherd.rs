@@ -527,6 +527,15 @@ impl ClientShellState {
             ShepherdAgentsAction::Refresh => {
                 self.refresh_shepherd_views(outcome);
             }
+            ShepherdAgentsAction::ResumeAll => {
+                self.push_endpoint_method_with_kind(
+                    shepherd_op_to_method("resume", serde_json::json!({})),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "resume".to_string(),
+                    },
+                    outcome,
+                );
+            }
             ShepherdAgentsAction::Snapshots(action) => {
                 self.dispatch_shepherd_snapshots_action(action, outcome);
             }
@@ -583,6 +592,19 @@ impl ClientShellState {
                     method,
                     PendingEndpointKind::ShepherdCall {
                         op: "import_task".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdTasksAction::DeleteTask { task_id } => {
+                let method = shepherd_op_to_method(
+                    "task_delete",
+                    serde_json::json!({ "id": task_id, "confirm": true }),
+                );
+                self.push_endpoint_method_with_kind(
+                    method,
+                    PendingEndpointKind::ShepherdCall {
+                        op: "task_delete".to_string(),
                     },
                     outcome,
                 );
@@ -1061,6 +1083,19 @@ impl ClientShellState {
                     outcome,
                 );
             }
+            ShepherdEventsAction::CleanRuns | ShepherdEventsAction::CleanBus => {
+                let (op, args) = if action == ShepherdEventsAction::CleanRuns {
+                    ("runs_clean", serde_json::json!({}))
+                } else {
+                    // the confirmation stripe already said agents lose the history
+                    ("bus_clean", serde_json::json!({ "force": true }))
+                };
+                self.push_endpoint_method_with_kind(
+                    shepherd_op_to_method(op, args),
+                    PendingEndpointKind::ShepherdCall { op: op.to_string() },
+                    outcome,
+                );
+            }
             ShepherdEventsAction::StopRun { id, confirm } => {
                 self.push_endpoint_method_with_kind(
                     crate::api::schema::Method::ShepherdPatternRunStop(
@@ -1519,7 +1554,7 @@ impl ClientShellState {
                         }
                     }
                     "archive_task" | "create_task" | "import_task" | "task_create"
-                    | "task_archive" => {
+                    | "task_archive" | "task_delete" => {
                         let msg = format!("Task updated ({op})");
                         if let Some(ref mut section) = self.shepherd_section {
                             section.status_message = Some(msg);
@@ -1571,7 +1606,7 @@ impl ClientShellState {
                         self.refresh_shepherd_views(outcome);
                     }
                     "pattern_run_start" | "pattern_run_pause" | "pattern_run_resume"
-                    | "pattern_run_stop" => {
+                    | "pattern_run_stop" | "runs_clean" | "bus_clean" => {
                         let msg = format!("Run operation completed ({op})");
                         if let Some(ref mut section) = self.shepherd_section {
                             section.status_message = Some(msg);

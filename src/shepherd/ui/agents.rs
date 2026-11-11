@@ -451,6 +451,7 @@ impl ShepherdAgentsSectionState {
                 (true, act)
             }
             KeyCode::Char('r') | KeyCode::Char('R') => (true, Some(ShepherdAgentsAction::Refresh)),
+            KeyCode::Char('u') => (true, Some(ShepherdAgentsAction::ResumeAll)),
             _ => (false, None),
         }
     }
@@ -901,5 +902,14 @@ mod tests {
         assert!(hits2.empty_hits.is_none());
         assert_eq!(state.agents[0].id, "coder-1");
         assert_eq!(state.agents[0].state, "working");
+    }
+
+    #[test]
+    fn test_agents_section_resume_key() {
+        let mut state = ShepherdAgentsSectionState::default();
+        let (handled, act) =
+            state.handle_key(&KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        assert!(handled);
+        assert_eq!(act, Some(ShepherdAgentsAction::ResumeAll));
     }
 }

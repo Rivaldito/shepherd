@@ -36,6 +36,8 @@ pub enum ShepherdAgentsAction {
         workspace: Option<String>,
     },
     Refresh,
+    /// Reconciles the registry after a server restart (marks leftovers; starts nothing).
+    ResumeAll,
     /// Snapshot timeline request (F11c).
     Snapshots(crate::shepherd::ui::snapshots::ShepherdSnapshotsAction),
 }
