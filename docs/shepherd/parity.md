@@ -78,7 +78,7 @@ The desktop app (GUI), the terminal UI (TUI) and the CLI are three front ends fo
 | Function | GUI | TUI | CLI |
 |---|---|---|---|
 | Status of worktrees | ✔ | ✔ | ✔ `git status` |
-| Create a branch or a worktree, remove a worktree | ✔ (#30) | ✔ (#19) | ✔ (#21) |
+| Create a branch or a worktree, remove a worktree | ✘ | ✔ (#19) | ✔ (#21) |
 | Push a branch and open its PR | only by approving a gate | ✔ (#20) | ✔ `git publish` (#21) |
 
 `publish` never adds a push path of its own: it approves the gate of the subtask waiting on that branch, and refuses a branch with no gate waiting.
@@ -86,7 +86,7 @@ The desktop app (GUI), the terminal UI (TUI) and the CLI are three front ends fo
 ## Known gaps
 
 - **Per-agent skills.** The TUI sends `skills_toggle` and `skills_restore`, but the server has no such operations, so those two actions fail with "unknown shepherd operation". What they should do to an agent that is already running (change its installed copy now, or only apply at its next start) is not decided.
-- **GUI:** a reason when rejecting a gate (#29), snapshot prune and diff against the current worktree, and the bus-topic create/publish.
+- **GUI:** git actions (branch, worktree), a reason when rejecting a gate, snapshot prune and diff against the current worktree, and the bus-topic create/publish.
 - **TUI:** linking an agent to a task, creating a topic or publishing to it.
 
 ## How this is kept true
