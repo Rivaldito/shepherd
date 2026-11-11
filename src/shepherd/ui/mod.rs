@@ -351,7 +351,7 @@ pub fn render_shepherd_section(
             };
             let help = match state.events.active_subtab {
                 events::ShepherdEventsSubTab::Topics => {
-                    "Tab: switch view | Space: pause/resume | r: replay | /: filter | C: clear bus | Esc: quit"
+                    "Tab: switch view | Space: pause/resume | r: replay | n: new topic | m: message | /: filter | C: clear bus | Esc: quit"
                 }
                 events::ShepherdEventsSubTab::PatternRuns => {
                     "Tab: switch view | p: pause/resume | x: stop | D: delete | C: clean | ↑/↓: list | Esc: quit"
