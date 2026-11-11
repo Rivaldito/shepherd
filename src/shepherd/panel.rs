@@ -38,6 +38,11 @@ pub enum ShepherdAgentsAction {
     Refresh,
     /// Reconciles the registry after a server restart (marks leftovers; starts nothing).
     ResumeAll,
+    /// Links an agent to a task, or detaches it when `task` is `None`.
+    AssignTask {
+        agent_id: String,
+        task: Option<String>,
+    },
     /// Snapshot timeline request (F11c).
     Snapshots(crate::shepherd::ui::snapshots::ShepherdSnapshotsAction),
 }

@@ -536,6 +536,18 @@ impl ClientShellState {
                     outcome,
                 );
             }
+            ShepherdAgentsAction::AssignTask { agent_id, task } => {
+                self.push_endpoint_method_with_kind(
+                    shepherd_op_to_method(
+                        "assign_agent_task",
+                        serde_json::json!({ "agentId": agent_id, "task": task }),
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "assign_agent_task".to_string(),
+                    },
+                    outcome,
+                );
+            }
             ShepherdAgentsAction::Snapshots(action) => {
                 self.dispatch_shepherd_snapshots_action(action, outcome);
             }
