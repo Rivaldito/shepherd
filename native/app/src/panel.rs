@@ -55,6 +55,8 @@ pub enum Armed {
     RejectGate(u32, Gate),
     RestoreSnapshot(String),
     DeleteSnapshot(String),
+    /// Deletes an agent's oldest snapshots.
+    PruneSnapshots(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +96,11 @@ pub enum PanelMsg {
         Result<Box<shepherd_app_core::shepherd_core::snapshot::ShowResult>, String>,
     ),
     SnapCapture(String),
+    SnapCompare(String),
+    SnapCompared(
+        String,
+        Result<Box<shepherd_app_core::shepherd_core::snapshot::DiffResult>, String>,
+    ),
     ShowMonitor(String),
     Feed(Vec<BusMessage>),
     Cfg(crate::config_panel::CfgMsg),
@@ -181,6 +188,11 @@ pub struct Panel {
         String,
         Result<Box<shepherd_app_core::shepherd_core::snapshot::ShowResult>, String>,
     )>,
+    /// The shown snapshot compared with the worktree as it is now (asked for, not loaded on its own).
+    snap_compare: Option<(
+        String,
+        Result<Box<shepherd_app_core::shepherd_core::snapshot::DiffResult>, String>,
+    )>,
     pub notice: String,
     monitor: Option<String>,
     feed: Vec<BusMessage>,
@@ -245,6 +257,7 @@ impl Default for Panel {
             armed: None,
             snap: None,
             snap_detail: None,
+            snap_compare: None,
             notice: String::new(),
             monitor: None,
             feed: Vec::new(),
@@ -810,6 +823,7 @@ impl Panel {
                     }
                     Armed::RestoreSnapshot(id) => {
                         self.snap_detail = None;
+                        self.snap_compare = None;
                         let root = snapshots::restore_root(ctx.data, &id);
                         return Task::perform(
                             async move {
@@ -830,10 +844,31 @@ impl Panel {
                             self.snap = None;
                         }
                         self.snap_detail = None;
+                        self.snap_compare = None;
                         return Task::perform(
                             async move {
                                 actions::snapshot_delete(&api, &id, &root)
                                     .map(|_| format!("Deleted snapshot {id}"))
+                            },
+                            |r| Message::Panel(PanelMsg::Done(r)),
+                        );
+                    }
+                    Armed::PruneSnapshots(agent) => {
+                        self.snap_detail = None;
+                        self.snap_compare = None;
+                        let root = snapshots::restore_root(
+                            ctx.data,
+                            &self.snap_id(ctx).unwrap_or_default(),
+                        );
+                        return Task::perform(
+                            async move {
+                                actions::snapshot_prune(&api, &agent, &root).map(|r| {
+                                    format!(
+                                        "Pruned {} old snapshot(s) of {agent}; kept {}",
+                                        r.pruned.len(),
+                                        r.kept
+                                    )
+                                })
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
                         );
@@ -901,6 +936,7 @@ impl Panel {
             PanelMsg::SnapSelect(id) => {
                 self.snap = Some(id);
                 self.snap_detail = None;
+                self.snap_compare = None;
                 return self.snap_show(ctx);
             }
             PanelMsg::SnapShown(id, shown) => {
@@ -909,6 +945,23 @@ impl Panel {
                 }
             }
             PanelMsg::SnapCapture(agent) => return self.snap_capture(agent, ctx),
+            PanelMsg::SnapCompare(id) => {
+                self.snap_compare = None;
+                let api = ctx.api.clone();
+                let root = snapshots::restore_root(ctx.data, &id);
+                return Task::perform(
+                    async move {
+                        let diff = actions::snapshot_compare(&api, &id, &root).map(Box::new);
+                        (id, diff)
+                    },
+                    |(id, diff)| Message::Panel(PanelMsg::SnapCompared(id, diff)),
+                );
+            }
+            PanelMsg::SnapCompared(id, diff) => {
+                if self.snap_id(ctx).as_deref() == Some(id.as_str()) {
+                    self.snap_compare = Some((id, diff));
+                }
+            }
             PanelMsg::ShowMonitor(run) => {
                 self.tab = Tab::Monitor;
                 self.monitor = Some(run);
@@ -3160,6 +3213,22 @@ mod tests {
         assert_eq!(panel.armed, Some(restore));
         let _ = panel.update(PanelMsg::Tab(Tab::Snapshots), &ctx);
         assert_eq!(panel.armed, None, "anything else disarms it");
+
+        // pruning also asks twice; a comparison belongs to the snapshot it was asked for
+        let prune = Armed::PruneSnapshots("coder-1".into());
+        let _ = panel.update(PanelMsg::Arm(prune.clone()), &ctx);
+        assert_eq!(panel.armed, Some(prune));
+        panel.snap_compare = Some(("coder-1/2".into(), Err("x".into())));
+        let _ = panel.update(PanelMsg::SnapSelect("coder-1/1".into()), &ctx);
+        assert!(panel.snap_compare.is_none());
+        let _ = panel.update(
+            PanelMsg::SnapCompared("coder-1/2".into(), Err("late answer".into())),
+            &ctx,
+        );
+        assert!(
+            panel.snap_compare.is_none(),
+            "another snapshot's answer is dropped"
+        );
         assert!(Panel::default()
             .snap_id(&Ctx {
                 data: &Data::default(),
