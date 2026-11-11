@@ -221,6 +221,40 @@ pub fn archive_task(
     Ok(destination)
 }
 
+/// What `update_task` changes; `spec` stays as it is when `None`.
+pub struct TaskEdit<'a> {
+    pub title: &'a str,
+    pub description: &'a str,
+    pub spec: Option<&'a str>,
+    pub criteria: &'a [String],
+}
+
+/// Rewrites a task's title, description (`issue.md`), acceptance criteria and, when given, spec. The folder name
+/// and the state stay as they are.
+pub fn update_task(
+    root: impl AsRef<Path>,
+    reference: &str,
+    edit: TaskEdit<'_>,
+) -> Result<CreatedTask, Box<dyn std::error::Error + Send + Sync>> {
+    if edit.title.trim().is_empty() {
+        return Err("a task needs a title".into());
+    }
+    let mut task = find_task(root.as_ref(), reference)?;
+    let issue = format!("# {}\n\n{}\n", edit.title.trim(), edit.description.trim());
+    atomic_write(&task.directory.join("issue.md"), issue.as_bytes())?;
+    atomic_write(
+        &task.directory.join("acceptance.md"),
+        acceptance_markdown(edit.criteria).as_bytes(),
+    )?;
+    if let Some(spec) = edit.spec {
+        atomic_write(&task.directory.join("spec.md"), spec.as_bytes())?;
+    }
+    task.status.title = edit.title.trim().to_owned();
+    task.status.updated = now_rfc3339();
+    save_task_status(task.directory.join("status.json"), &task.status)?;
+    Ok(task)
+}
+
 /// Deletes a task's folder for good (an active one, or an archived one when `archived`), after checking that
 /// `live_agents` holds none of the agents linked to it. Returns the id and slug that were removed.
 pub fn delete_task(

@@ -283,6 +283,7 @@ agents
   focus <agent>                           focus an agent's pane
   kill <agent>                            close an agent
   clean [<agent>...] [--workspace <name>] remove finished or killed agents
+  assign <agent> <task-id|none>           link an agent to a task, or detach it
   resume                                  what the server does at start: mark agents left over by a restart
   reconcile                               check the agents against their terminals now
 
@@ -304,6 +305,7 @@ patterns (teams)
   pattern run <name> [--task <task>] [--worktree <path>] [--confirm-over-limit]
   pattern runs | pause <id> | resume <id> | stop <id> [--confirm]
   pattern clean                           forget finished pattern runs
+  pattern delete-run <id> [--confirm]     remove one run (an active one is stopped, which needs --confirm)
 
 event bus
   topic list | create <name> [--partitions <n>] | groups [topic]

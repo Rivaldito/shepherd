@@ -1291,6 +1291,61 @@ impl OrchestrationService {
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!({ "deleted": name }))
             }
+            "task_update" | "run_delete" | "assign_agent_task" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let text = |key: &str| args.get(key).and_then(Value::as_str);
+                // ids come as strings or numbers
+                let id_of = |key: &str| {
+                    args.get(key).and_then(|v| {
+                        v.as_str()
+                            .map(str::to_owned)
+                            .or_else(|| v.as_u64().map(|n| n.to_string()))
+                    })
+                };
+                match op {
+                    "task_update" => {
+                        let id = id_of("id").ok_or("missing 'id' for task_update")?;
+                        let criteria: Vec<String> = args
+                            .get("criteria")
+                            .and_then(Value::as_array)
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(Value::as_str)
+                                    .map(str::to_owned)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let edit = crate::tasks::TaskEdit {
+                            title: text("title").unwrap_or(""),
+                            description: text("description").unwrap_or(""),
+                            spec: text("spec"),
+                            criteria: &criteria,
+                        };
+                        let task = crate::tasks::update_task(&root, &id, edit)
+                            .map_err(|e| e.to_string())?;
+                        serde_json::to_value(task).map_err(|e| e.to_string())
+                    }
+                    "run_delete" => {
+                        let id = id_of("id").ok_or("missing 'id' for run_delete")?;
+                        let confirm = args.get("confirm").and_then(Value::as_bool) == Some(true);
+                        let run = self.delete_pattern_run(&root, &id, confirm)?;
+                        serde_json::to_value(run).map_err(|e| e.to_string())
+                    }
+                    _ => {
+                        let agent = text("agentId")
+                            .or_else(|| text("agent_id"))
+                            .ok_or("missing 'agentId' for assign_agent_task")?;
+                        let task = id_of("task").filter(|t| !t.is_empty());
+                        self.assign_agent_task(&root, agent, task.as_deref())
+                    }
+                }
+            }
             "runs_clean" => {
                 let root = args
                     .get("root")

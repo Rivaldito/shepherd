@@ -3047,3 +3047,115 @@ fn task_delete_needs_confirmation_and_no_live_agent() {
     ask(serde_json::json!({ "root": root, "id": 2, "confirm": true, "archived": true })).unwrap();
     assert!(crate::list_tasks(tmp.path(), true).unwrap().is_empty());
 }
+
+fn make_task(service: &OrchestrationService, root: &str, title: &str) {
+    service
+        .handle_call(
+            "task_create",
+            serde_json::json!({
+                "root": root, "title": title, "description": "d", "criteria": [], "attachments": []
+            }),
+        )
+        .unwrap();
+}
+
+#[test]
+fn task_update_rewrites_the_text_and_keeps_the_rest() {
+    let tmp = TestDir::new("task-update");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let root = tmp.path().to_str().unwrap();
+    make_task(&service, root, "Old title");
+    let before = crate::find_task(tmp.path(), "1").unwrap();
+
+    let out = service
+        .handle_call(
+            "task_update",
+            serde_json::json!({
+                "root": root, "id": "1", "title": "New title", "description": "Fresh text",
+                "spec": "the spec", "criteria": ["it works", "it is fast"]
+            }),
+        )
+        .unwrap();
+    assert_eq!(out["status"]["title"], "New title");
+    let after = crate::find_task(tmp.path(), "1").unwrap();
+    assert_eq!(after.directory, before.directory, "the folder name stays");
+    assert_eq!(after.status.state, before.status.state);
+    let read = |f: &str| std::fs::read_to_string(after.directory.join(f)).unwrap();
+    assert!(read("issue.md").contains("# New title") && read("issue.md").contains("Fresh text"));
+    assert_eq!(read("spec.md"), "the spec");
+    assert!(read("acceptance.md").contains("it is fast"));
+
+    // without `spec` the spec is left alone
+    service
+        .handle_call(
+            "task_update",
+            serde_json::json!({ "root": root, "id": 1, "title": "T3", "description": "x", "criteria": [] }),
+        )
+        .unwrap();
+    assert_eq!(read("spec.md"), "the spec");
+    for bad in [
+        serde_json::json!({ "root": root, "id": "1", "title": "  " }),
+        serde_json::json!({ "root": root, "id": "9", "title": "x" }),
+        serde_json::json!({ "root": root, "title": "x" }),
+    ] {
+        assert!(service.handle_call("task_update", bad).is_err());
+    }
+}
+
+#[test]
+fn assign_agent_task_links_and_unlinks_both_sides() {
+    let tmp = TestDir::new("assign-agent");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let root = tmp.path().to_str().unwrap();
+    make_task(&service, root, "First");
+    make_task(&service, root, "Second");
+    let agent = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "brain".into(),
+            task: "plan".into(),
+            deliver_prompt: false,
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    let assign = |task: serde_json::Value| {
+        service.handle_call(
+            "assign_agent_task",
+            serde_json::json!({ "root": root, "agentId": agent.id, "task": task }),
+        )
+    };
+    let agent_of = |n: &str| crate::find_task(tmp.path(), n).unwrap().status.agents;
+    let linked = || {
+        service
+            .load_registry()
+            .unwrap()
+            .agents
+            .iter()
+            .find(|a| a.id == agent.id)
+            .unwrap()
+            .task_id
+            .clone()
+    };
+
+    assign(serde_json::json!("1")).unwrap();
+    assert_eq!(
+        (linked().as_str(), agent_of("1")),
+        ("1", vec![agent.id.clone()])
+    );
+    // moving it to task 2 takes it off task 1
+    assign(serde_json::json!("2")).unwrap();
+    assert_eq!(
+        (linked().as_str(), agent_of("1").len(), agent_of("2")),
+        ("2", 0, vec![agent.id.clone()])
+    );
+    // null detaches
+    assign(serde_json::Value::Null).unwrap();
+    assert_eq!((linked().as_str(), agent_of("2").len()), ("", 0));
+    assert!(assign(serde_json::json!("99")).is_err(), "unknown task");
+    assert!(service
+        .handle_call(
+            "assign_agent_task",
+            serde_json::json!({ "root": root, "agentId": "nope", "task": "1" })
+        )
+        .is_err());
+}
