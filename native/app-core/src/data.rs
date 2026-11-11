@@ -31,6 +31,40 @@ pub struct TaskRow {
     pub spec: String,
 }
 
+/// What a task run waits for a person to decide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Gate {
+    /// The planner's plan, before any coding starts.
+    Plan,
+    /// A finished subtask whose branch may be published and opened as a pull request.
+    PushPr(u32),
+}
+
+impl Gate {
+    /// The `target` of `shepherd.run.approve` / `shepherd.run.reject`: `plan` or the subtask number.
+    pub fn target(&self) -> String {
+        match self {
+            Gate::Plan => "plan".to_owned(),
+            Gate::PushPr(n) => n.to_string(),
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Gate::Plan => "the plan".to_owned(),
+            Gate::PushPr(n) => format!("publishing subtask #{n} and opening its PR"),
+        }
+    }
+}
+
+/// A task run that waits for approval.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateRow {
+    pub task_id: u32,
+    pub task_title: String,
+    pub gate: Gate,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Models {
     pub vendors: BTreeMap<String, Vendor>,
@@ -43,6 +77,8 @@ pub struct Data {
     pub agents: Vec<Agent>,
     pub runs: Vec<RunRow>,
     pub tasks: Vec<TaskRow>,
+    /// Task runs waiting for a person to approve or reject a step.
+    pub gates: Vec<GateRow>,
     pub patterns: Vec<PatternSummary>,
     pub models: Models,
 }
@@ -154,6 +190,10 @@ impl Data {
         Self {
             runs,
             tasks: parse_tasks(&ask("shepherd.task.list", json!({ "root": root_text }))),
+            gates: parse_gates(&ask(
+                "shepherd.call",
+                json!({ "op": "runs", "args": { "root": root_text } }),
+            )),
             patterns: parse_list(
                 &ask("shepherd.pattern.list", json!({ "root": root_text })),
                 "patterns",
@@ -213,6 +253,30 @@ pub fn parse_runs(list: &Value, mut show: impl FnMut(&str) -> Value) -> Vec<RunR
 }
 
 /// `shepherd.task.list`: each task has its status and the folder the server keeps its text in.
+/// The task runs with a pending gate, from the `runs` op of `shepherd.call`. The gate is the string
+/// `"plan"` or `{"kind": "push_pr", "subtask": n}`; anything else is not a gate.
+pub fn parse_gates(reply: &Value) -> Vec<GateRow> {
+    reply["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|run| {
+            let gate = match &run["pending_gate"] {
+                Value::String(s) if s == "plan" => Gate::Plan,
+                Value::Object(o) if o.get("kind").and_then(Value::as_str) == Some("push_pr") => {
+                    Gate::PushPr(o.get("subtask")?.as_u64()? as u32)
+                }
+                _ => return None,
+            };
+            Some(GateRow {
+                task_id: run["task_id"].as_u64()? as u32,
+                task_title: run["task_title"].as_str().unwrap_or_default().to_owned(),
+                gate,
+            })
+        })
+        .collect()
+}
+
 pub fn parse_tasks(reply: &Value) -> Vec<TaskRow> {
     parse_list::<CreatedTask>(reply, "tasks")
         .into_iter()
@@ -455,6 +519,37 @@ mod tests {
             parse_list(&serde_json::from_str(PATTERNS).unwrap(), "patterns");
         assert_eq!(patterns.len(), 2);
         assert!(patterns.iter().any(|p| p.name == "duo"));
+    }
+
+    #[test]
+    fn only_runs_with_a_pending_gate_need_an_answer() {
+        let reply = json!({"data": [
+            {"task_id": 1, "task_title": "Plan me", "status": "planning", "pending_gate": "plan"},
+            {"task_id": 2, "task_title": "Ship it", "status": "running",
+             "pending_gate": {"kind": "push_pr", "subtask": 3}},
+            {"task_id": 3, "task_title": "Busy", "status": "running", "pending_gate": null},
+            {"task_id": 4, "task_title": "Odd", "pending_gate": {"kind": "other"}},
+            {"task_title": "no id", "pending_gate": "plan"}
+        ]});
+        let gates = parse_gates(&reply);
+        assert_eq!(
+            gates,
+            vec![
+                GateRow {
+                    task_id: 1,
+                    task_title: "Plan me".into(),
+                    gate: Gate::Plan
+                },
+                GateRow {
+                    task_id: 2,
+                    task_title: "Ship it".into(),
+                    gate: Gate::PushPr(3)
+                },
+            ]
+        );
+        assert_eq!(gates[0].gate.target(), "plan");
+        assert_eq!(gates[1].gate.target(), "3");
+        assert!(parse_gates(&Value::Null).is_empty());
     }
 
     #[test]

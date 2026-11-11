@@ -233,6 +233,31 @@ pub fn spawn_agent(
         .map(|out| out["data"].clone())
 }
 
+/// Approves a gate of a task run: the plan, or publishing a subtask's branch and opening its PR.
+pub fn approve_gate(api: &Path, task_id: u32, target: &str, root: &str) -> Result<(), String> {
+    call(
+        api,
+        "shepherd.run.approve",
+        json!({ "task": task_id.to_string(), "target": target, "root": root }),
+    )
+    .map(|_| ())
+}
+
+/// Rejects a gate of a task run, with the reason the planner or coder will read.
+pub fn reject_gate(
+    api: &Path,
+    task_id: u32,
+    target: &str,
+    reason: Option<&str>,
+    root: &str,
+) -> Result<(), String> {
+    let mut params = json!({ "task": task_id.to_string(), "target": target, "root": root });
+    if let Some(reason) = reason {
+        params["reason"] = json!(reason);
+    }
+    call(api, "shepherd.run.reject", params).map(|_| ())
+}
+
 /// Kills an agent (if not already in a terminal state) and cleans it from the registry.
 pub fn kill_and_clean_agent(api: &Path, id: &str) -> Result<(), String> {
     // Kill if still alive
@@ -303,6 +328,30 @@ mod tests {
             seen
         });
         (path, handle)
+    }
+
+    #[test]
+    fn a_gate_is_approved_or_rejected_with_the_task_and_target_the_server_expects() {
+        let (path, server) = fake_server(vec![
+            r#"{"id":"1","result":{"type":"shepherd_run_approve"}}"#,
+            r#"{"id":"2","result":{"type":"shepherd_run_reject"}}"#,
+            r#"{"id":"3","error":{"code":"shepherd_error","message":"nothing is waiting"}}"#,
+        ]);
+        approve_gate(&path, 7, "plan", "/p").unwrap();
+        reject_gate(&path, 7, "2", Some("too broad"), "/p").unwrap();
+        assert_eq!(
+            reject_gate(&path, 7, "plan", None, "/p").unwrap_err(),
+            "nothing is waiting"
+        );
+        let seen = server.join().unwrap();
+        assert_eq!(seen[0]["method"], "shepherd.run.approve");
+        assert_eq!(seen[0]["params"]["task"], "7");
+        assert_eq!(seen[0]["params"]["target"], "plan");
+        assert_eq!(seen[0]["params"]["root"], "/p");
+        assert_eq!(seen[1]["method"], "shepherd.run.reject");
+        assert_eq!(seen[1]["params"]["target"], "2");
+        assert_eq!(seen[1]["params"]["reason"], "too broad");
+        assert!(seen[2]["params"].get("reason").is_none());
     }
 
     #[test]
