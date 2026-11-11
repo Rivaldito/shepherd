@@ -3195,9 +3195,9 @@ fn every_operation_a_surface_sends_is_known_to_the_server() {
     let tmp = TestDir::new("surface-ops");
     let (service, _terminals, _clock) = test_service(tmp.path());
     let root = tmp.path().to_str().unwrap();
-    // Known gaps, waiting for a decision on what they should do to a running agent. Remove an entry when it is
-    // implemented (the test fails if one is listed here and works).
-    const KNOWN_GAPS: [&str; 2] = ["skills_restore", "skills_toggle"]; // sorted
+    // Known gaps: operations a surface sends that are not served yet. Add an entry only with a reason; the test
+    // fails if one is listed here and works.
+    const KNOWN_GAPS: [&str; 0] = [];
     let unknown: Vec<_> = ops
         .iter()
         .filter(|op| {
@@ -3213,4 +3213,81 @@ fn every_operation_a_surface_sends_is_known_to_the_server() {
         expected,
         "operations a surface sends but the server does not know (left: found, right: allowed gaps)"
     );
+}
+
+#[test]
+fn agent_skills_are_recorded_for_the_next_start() {
+    let tmp = TestDir::new("agent-skills");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let root = tmp.path().to_str().unwrap();
+    let agent = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "brain".into(),
+            task: "plan".into(),
+            deliver_prompt: false,
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    let call = |op: &str, extra: serde_json::Value| {
+        let mut args = serde_json::json!({ "root": root, "agent_id": agent.id });
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        service.handle_call(op, args)
+    };
+    let adjust = || {
+        service
+            .load_registry()
+            .unwrap()
+            .agents
+            .iter()
+            .find(|a| a.id == agent.id)
+            .unwrap()
+            .skills
+            .clone()
+    };
+
+    call(
+        "skills_toggle",
+        serde_json::json!({ "skill": "shepherd-comms", "enable": true }),
+    )
+    .unwrap();
+    assert_eq!(adjust().add, ["shepherd-comms"]);
+    // turning it off moves it from one list to the other, never both
+    let reply = call(
+        "skills_toggle",
+        serde_json::json!({ "skill": "shepherd-comms", "enable": false }),
+    )
+    .unwrap();
+    assert_eq!(reply["applies"], "next start");
+    assert_eq!(
+        (adjust().add.len(), adjust().remove),
+        (0, vec!["shepherd-comms".to_string()])
+    );
+    call(
+        "skills_restore",
+        serde_json::json!({ "skill": "shepherd-comms" }),
+    )
+    .unwrap();
+    assert_eq!(adjust(), crate::SkillAdjust::default());
+
+    assert!(
+        call(
+            "skills_toggle",
+            serde_json::json!({ "skill": "no-such-skill", "enable": true })
+        )
+        .is_err(),
+        "an unknown skill cannot be turned on"
+    );
+    assert!(
+        call("skills_toggle", serde_json::json!({ "skill": "x" })).is_err(),
+        "needs enable"
+    );
+    assert!(service
+        .handle_call(
+            "skills_restore",
+            serde_json::json!({ "root": root, "agent_id": "nope", "skill": "x" })
+        )
+        .is_err());
 }

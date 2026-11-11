@@ -1171,6 +1171,34 @@ impl OrchestrationService {
                     .ok_or("missing 'task' for cancel_run")?;
                 self.cancel_run(root, task)
             }
+            "skills_toggle" | "skills_restore" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let text = |a: &str, b: &str| {
+                    args.get(a)
+                        .or_else(|| args.get(b))
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                };
+                let agent = text("agent_id", "agentId")
+                    .ok_or_else(|| format!("missing 'agent_id' for {op}"))?;
+                let skill =
+                    text("skill", "name").ok_or_else(|| format!("missing 'skill' for {op}"))?;
+                let enable = match op {
+                    "skills_toggle" => Some(
+                        args.get("enable")
+                            .and_then(Value::as_bool)
+                            .ok_or("missing 'enable' (true or false) for skills_toggle")?,
+                    ),
+                    _ => None,
+                };
+                self.adjust_agent_skill(&root, agent, skill, enable)
+            }
             "skills_create" | "skills_delete" | "skills_global" => {
                 use crate::skills::Scope;
                 use crate::skills_admin as admin;

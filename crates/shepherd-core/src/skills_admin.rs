@@ -9,6 +9,11 @@ fn catalog(root: &Path, user_dir: &Path) -> Catalog {
     Catalog::load(Some(root), Some(user_dir))
 }
 
+/// Whether the catalog (defaults, the user's and the project's) has a skill called `name`.
+pub fn exists(root: &Path, name: &str) -> bool {
+    catalog(root, &user_skills_dir()).get(name).is_some()
+}
+
 /// Creates `<skills dir>/<name>/SKILL.md` in the project (`Scope::Repo`) or for the user, and returns the file.
 /// A non-empty `description` replaces the template's placeholder.
 pub fn create(root: &Path, name: &str, description: &str, scope: Scope) -> Result<PathBuf, String> {

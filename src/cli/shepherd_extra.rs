@@ -128,6 +128,22 @@ pub(crate) fn parse_extra(args: &[String]) -> Result<Option<ShepherdOperation>, 
                 json!({ "name": w.one()?, "global": !w.flag("--off") }),
             )
         }
+        ("skills", Some("agent")) => {
+            let w = words(rest, &[]);
+            match w.positional.as_slice() {
+                [agent, skill, state @ ("on" | "off")] => call(
+                    "skill:agent",
+                    "skills_toggle",
+                    json!({ "agent_id": agent, "skill": skill, "enable": *state == "on" }),
+                ),
+                [agent, skill, "default"] => call(
+                    "skill:agent",
+                    "skills_restore",
+                    json!({ "agent_id": agent, "skill": skill }),
+                ),
+                _ => Err(usage()),
+            }
+        }
         ("git", Some("branch")) => {
             let w = words(rest, &["--base"]);
             call(
@@ -232,6 +248,10 @@ pub(crate) fn render_call(
                 "no longer"
             }
         ),
+        "skills_toggle" | "skills_restore" => format!(
+            "skills of {} saved; they apply the next time it starts",
+            text("agent")
+        ),
         "create_branch" => format!("created branch {}", text("branch")),
         "create_worktree" => format!(
             "worktree {} on {}",
@@ -277,6 +297,9 @@ mod tests {
             ("skills create my-skill --repo --global", "skills_create"),
             ("skills delete my-skill", "skills_delete"),
             ("skills global my-skill --off", "skills_global"),
+            ("skills agent coder-1 debug on", "skills_toggle"),
+            ("skills agent coder-1 debug off", "skills_toggle"),
+            ("skills agent coder-1 debug default", "skills_restore"),
             ("git branch feat/x --base main", "create_branch"),
             ("git worktree add ../wt --branch feat/x", "create_worktree"),
             ("git worktree remove ../wt", "remove_worktree"),

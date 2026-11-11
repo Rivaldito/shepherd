@@ -58,6 +58,43 @@ impl OrchestrationService {
         Ok(serde_json::json!({ "agent": agent_id, "task": found.map(|t| t.status.id) }))
     }
 
+    /// Changes the skills one agent gets: `Some(true)` turns `skill` on, `Some(false)` turns it off, `None` puts it
+    /// back to what its role gives. It is recorded in the agent's registry entry and applies the next time the
+    /// agent is started; the copy installed for a running agent is not touched.
+    pub fn adjust_agent_skill(
+        &self,
+        root: &std::path::Path,
+        agent_id: &str,
+        skill: &str,
+        enable: Option<bool>,
+    ) -> Result<Value, String> {
+        if enable == Some(true) && !crate::skills_admin::exists(root, skill) {
+            return Err(format!("unknown skill `{skill}`"));
+        }
+        let mut registry = self.load_registry()?;
+        let agent = registry
+            .agents
+            .iter_mut()
+            .find(|a| a.id == agent_id)
+            .ok_or_else(|| format!("unknown agent {agent_id:?}"))?;
+        agent.skills.add.retain(|s| s != skill);
+        agent.skills.remove.retain(|s| s != skill);
+        match enable {
+            Some(true) => agent.skills.add.push(skill.to_owned()),
+            Some(false) => agent.skills.remove.push(skill.to_owned()),
+            None => {}
+        }
+        agent.updated = self.clock.now_rfc3339();
+        let adjust = agent.skills.clone();
+        crate::save_agent_registry(self.service_config.registry_path(), &registry)
+            .map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({
+            "agent": agent_id,
+            "skills": adjust,
+            "applies": "next start",
+        }))
+    }
+
     /// Stops a task's run: closes the agents linked to it that are still alive and marks the task `cancelled`.
     /// Work already committed stays on its branches. A task that is finished or already cancelled is refused.
     pub fn cancel_run(&self, root: PathBuf, task: &str) -> Result<Value, String> {
