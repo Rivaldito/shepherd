@@ -287,6 +287,10 @@ pub fn handle_shepherd_section_mouse(
                                         state.tasks.start_import_gh();
                                         return ShepherdSectionOutcome::Handled;
                                     }
+                                    3 => {
+                                        state.tasks.start_delete_task();
+                                        return ShepherdSectionOutcome::Handled;
+                                    }
                                     _ => {}
                                 }
                             }

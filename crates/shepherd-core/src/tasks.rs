@@ -221,6 +221,36 @@ pub fn archive_task(
     Ok(destination)
 }
 
+/// Deletes a task's folder for good (an active one, or an archived one when `archived`), after checking that
+/// `live_agents` holds none of the agents linked to it. Returns the id and slug that were removed.
+pub fn delete_task(
+    root: impl AsRef<Path>,
+    reference: &str,
+    archived: bool,
+    live_agents: &[String],
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let tasks_dir = root.as_ref().join(".shepherd").join("tasks");
+    let task = if archived {
+        list_tasks(root.as_ref(), true)?
+            .into_iter()
+            .find(|t| {
+                t.status.id.to_string() == reference
+                    || format!("{}-{}", t.status.id, t.status.slug) == reference
+            })
+            .ok_or_else(|| format!("no archived task {reference:?}"))?
+    } else {
+        find_task(root.as_ref(), reference)?
+    };
+    if let Some(agent) = task.status.agents.iter().find(|a| live_agents.contains(a)) {
+        return Err(format!("agent {agent} is still working on this task: kill it first").into());
+    }
+    if !task.directory.starts_with(&tasks_dir) {
+        return Err("the task is outside .shepherd/tasks".into());
+    }
+    std::fs::remove_dir_all(&task.directory)?;
+    Ok(format!("{}-{}", task.status.id, task.status.slug))
+}
+
 pub fn task_slug(title: &str) -> String {
     let mut slug = String::new();
     let mut separator = false;

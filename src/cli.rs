@@ -33,6 +33,7 @@ mod server;
 mod server_not_running;
 pub(crate) mod shepherd;
 pub(crate) mod shepherd_bindings;
+pub(crate) mod shepherd_extra;
 mod spec;
 mod status;
 pub(crate) mod tab;
@@ -117,9 +118,34 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
     }
 
     const SHEPHERD_DIRECT_COMMANDS: &[&str] = &[
-        "agents", "spawn", "kill", "clean", "focus", "task", "tasks", "skills", "runs", "roles",
-        "vendors", "run", "approve", "git", "mcp", "msg", "messages", "attach", "pattern",
-        "patterns", "topic", "topics", "snapshot",
+        "agents",
+        "spawn",
+        "kill",
+        "clean",
+        "focus",
+        "task",
+        "tasks",
+        "skills",
+        "runs",
+        "roles",
+        "vendors",
+        "run",
+        "approve",
+        "git",
+        "mcp",
+        "msg",
+        "messages",
+        "attach",
+        "pattern",
+        "patterns",
+        "topic",
+        "topics",
+        "snapshot",
+        "reject",
+        "resume",
+        "reconcile",
+        "cancel",
+        "bus",
     ];
     if SHEPHERD_DIRECT_COMMANDS.contains(&command) {
         return shepherd::run_shepherd_command(&args[1..]).map(CommandOutcome::Handled);

@@ -7,6 +7,7 @@ pub mod bus;
 pub mod cli;
 pub mod config;
 pub mod git;
+pub mod git_admin;
 pub mod mcp;
 pub mod patterns;
 pub mod plan;

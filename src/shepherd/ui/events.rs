@@ -45,8 +45,19 @@ impl ShepherdEventsSubTab {
     }
 }
 
+/// What the clean-up confirmation is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventsClean {
+    /// Forget the pattern runs that are done, failed or stopped.
+    Runs,
+    /// Delete every message of the event bus.
+    Bus,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ShepherdEventsAction {
+    CleanRuns,
+    CleanBus,
     RefreshTopics,
     RefreshRuns,
     ShowRun {
@@ -119,6 +130,7 @@ pub struct ShepherdEventsSectionState {
     pub editing_replay_offset: bool,
     pub editing_agent_filter: bool,
     pub confirm_stop_run: Option<String>,
+    pub confirm_clean: Option<EventsClean>,
     pub last_action: Option<ShepherdEventsAction>,
     pub error: Option<String>,
 }
@@ -142,6 +154,7 @@ impl Default for ShepherdEventsSectionState {
             editing_replay_offset: false,
             editing_agent_filter: false,
             confirm_stop_run: None,
+            confirm_clean: None,
             last_action: None,
             error: None,
         }
@@ -262,13 +275,30 @@ impl ShepherdEventsSectionState {
         }
     }
 
+    pub fn start_clean(&mut self) {
+        self.confirm_stop_run = None;
+        self.confirm_clean = Some(match self.active_subtab {
+            ShepherdEventsSubTab::Topics => EventsClean::Bus,
+            ShepherdEventsSubTab::PatternRuns => EventsClean::Runs,
+        });
+    }
+
+    /// Confirms whatever the stripe asks: stopping a run or cleaning up.
     pub fn confirm_stop(&mut self) {
-        if let Some(id) = self.confirm_stop_run.take() {
+        if let Some(kind) = self.confirm_clean.take() {
+            self.last_action = Some(match kind {
+                EventsClean::Runs => ShepherdEventsAction::CleanRuns,
+                EventsClean::Bus => ShepherdEventsAction::CleanBus,
+            });
+        } else if let Some(id) = self.confirm_stop_run.take() {
             self.last_action = Some(ShepherdEventsAction::StopRun { id, confirm: true });
         }
     }
 
     pub fn cancel_sub_action(&mut self) -> bool {
+        if self.confirm_clean.take().is_some() {
+            return true;
+        }
         if self.confirm_stop_run.is_some() {
             self.confirm_stop_run = None;
             return true;
@@ -283,7 +313,7 @@ impl ShepherdEventsSectionState {
 
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         // Confirmation stripe takes precedence
-        if self.confirm_stop_run.is_some() {
+        if self.confirm_stop_run.is_some() || self.confirm_clean.is_some() {
             match key.code {
                 KeyCode::Enter => {
                     self.confirm_stop();
@@ -291,6 +321,7 @@ impl ShepherdEventsSectionState {
                 }
                 KeyCode::Esc => {
                     self.confirm_stop_run = None;
+                    self.confirm_clean = None;
                     return true;
                 }
                 _ => return true,
@@ -411,6 +442,10 @@ impl ShepherdEventsSectionState {
                     false
                 }
             }
+            KeyCode::Char('C') => {
+                self.start_clean();
+                true
+            }
             KeyCode::Char('x') => {
                 if self.active_subtab == ShepherdEventsSubTab::PatternRuns {
                     self.start_stop_run();
@@ -468,7 +503,28 @@ pub fn render_events_section(
     }
 
     // If confirmation stripe active
-    let (main_area, stripe_area) = if let Some(ref run_id) = state.confirm_stop_run {
+    let (main_area, stripe_area) = if let Some(kind) = state.confirm_clean {
+        let prompt = match kind {
+            EventsClean::Runs => {
+                "Forget the runs that are done, failed or stopped? Running ones stay."
+            }
+            EventsClean::Bus => "Delete every message of the event bus? Agents lose its history.",
+        };
+        let parts = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(4), Constraint::Length(3)])
+            .split(content_area);
+        hits.confirm_stripe_hits = Some(render_confirm_stripe(
+            buffer,
+            parts[1],
+            prompt,
+            "Confirm clean (Enter)",
+            "Cancel (Esc)",
+            true,
+            palette,
+        ));
+        (parts[0], Some(parts[1]))
+    } else if let Some(ref run_id) = state.confirm_stop_run {
         let run_summary = state.runs.iter().find(|r| &r.id == run_id);
         let agents_count = run_summary.map(|r| r.agents_count).unwrap_or(0);
         let prompt = format!(
@@ -1150,5 +1206,44 @@ mod tests {
 
         let hits = render_events_section(&mut buffer, area, &mut state, &palette);
         assert!(hits.empty_hits.is_some());
+    }
+
+    #[test]
+    fn test_events_clean_asks_before_it_acts() {
+        use crossterm::event::KeyModifiers;
+        let key = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let mut state = ShepherdEventsSectionState::default();
+
+        // on the topics view C is about the bus
+        assert!(state.handle_key(key('C')));
+        assert_eq!(state.confirm_clean, Some(EventsClean::Bus));
+        assert_eq!(state.last_action, None);
+        assert!(state.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert_eq!(
+            (state.confirm_clean, state.last_action.clone()),
+            (None, None)
+        );
+
+        state.handle_key(key('C'));
+        state.handle_key(enter);
+        assert_eq!(
+            state.last_action.take(),
+            Some(ShepherdEventsAction::CleanBus)
+        );
+
+        // on the runs view it is about finished runs
+        state.active_subtab = ShepherdEventsSubTab::PatternRuns;
+        state.handle_key(key('C'));
+        assert_eq!(state.confirm_clean, Some(EventsClean::Runs));
+        // other keys do nothing while the stripe is up
+        state.handle_key(key('j'));
+        assert_eq!(state.confirm_clean, Some(EventsClean::Runs));
+        state.handle_key(enter);
+        assert_eq!(
+            state.last_action.take(),
+            Some(ShepherdEventsAction::CleanRuns)
+        );
+        assert_eq!(state.confirm_clean, None);
     }
 }

@@ -2903,3 +2903,147 @@ fn skill_admin_ops_require_a_name() {
         assert!(err.contains("missing 'name'"), "{op}: {err}");
     }
 }
+
+#[test]
+fn git_admin_ops_run_in_the_given_root() {
+    let tmp = TestDir::new("git-admin-ops");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let root = tmp.path().to_str().unwrap();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "i",
+        ],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(tmp.path())
+            .status()
+            .unwrap()
+            .success());
+    }
+    service
+        .handle_call(
+            "create_branch",
+            serde_json::json!({ "root": root, "branch": "b1" }),
+        )
+        .unwrap();
+    let wt = tmp.path().join("wt");
+    let made = service
+        .handle_call(
+            "create_worktree",
+            serde_json::json!({ "root": root, "path": "wt", "branch": "b1" }),
+        )
+        .unwrap();
+    assert_eq!(made["branch"], "b1");
+    assert!(wt.exists());
+    service
+        .handle_call(
+            "remove_worktree",
+            serde_json::json!({ "root": root, "path": "wt" }),
+        )
+        .unwrap();
+    assert!(!wt.exists());
+    assert!(service
+        .handle_call("remove_worktree", serde_json::json!({ "root": root }))
+        .unwrap_err()
+        .contains("missing 'path'"));
+}
+
+#[test]
+fn publish_branch_needs_a_gate_waiting_on_that_branch() {
+    let tmp = TestDir::new("publish-gate");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let root = tmp.path().to_str().unwrap();
+    service
+        .handle_call(
+            "task_create",
+            serde_json::json!({
+                "root": root, "title": "T", "description": "d", "criteria": [], "attachments": []
+            }),
+        )
+        .unwrap();
+    let mut t = crate::find_task(tmp.path(), "1").unwrap();
+    t.status.subtasks = vec![crate::Subtask {
+        number: 1,
+        title: "s".into(),
+        body: String::new(),
+        depends_on: vec![],
+        verify: vec![],
+        state: "coding".into(), // not awaiting approval yet
+        note: None,
+        coder: "coder-1".into(),
+        reviewer: String::new(),
+        round: 0,
+        branch: "shep/1-x".into(),
+        pr: String::new(),
+    }];
+    crate::save_task_status(t.directory.join("status.json"), &t.status).unwrap();
+    for branch in ["shep/1-x", "main", "nope"] {
+        let err = service
+            .handle_call(
+                "publish_branch",
+                serde_json::json!({ "root": root, "branch": branch }),
+            )
+            .unwrap_err();
+        assert!(err.contains("no task is waiting"), "{branch}: {err}");
+    }
+    assert!(service
+        .handle_call("publish_branch", serde_json::json!({ "root": root }))
+        .unwrap_err()
+        .contains("missing 'branch'"));
+    assert!(service
+        .handle_call(
+            "import_task",
+            serde_json::json!({ "root": root, "issue_ref": "--web" })
+        )
+        .unwrap_err()
+        .contains("not an issue"));
+}
+
+#[test]
+fn task_delete_needs_confirmation_and_no_live_agent() {
+    let tmp = TestDir::new("task-delete");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let root = tmp.path().to_str().unwrap();
+    for title in ["A", "B"] {
+        service
+            .handle_call(
+                "task_create",
+                serde_json::json!({
+                    "root": root, "title": title, "description": "d", "criteria": [], "attachments": []
+                }),
+            )
+            .unwrap();
+    }
+    let ask = |args: serde_json::Value| service.handle_call("task_delete", args);
+    let err = ask(serde_json::json!({ "root": root, "id": 1 })).unwrap_err();
+    assert!(err.contains("confirmation_required"), "{err}");
+    assert_eq!(crate::list_tasks(tmp.path(), false).unwrap().len(), 2);
+
+    let out = ask(serde_json::json!({ "root": root, "id": 1, "confirm": true })).unwrap();
+    assert_eq!(out["deleted"], "1-a");
+    let left = crate::list_tasks(tmp.path(), false).unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].status.id, 2);
+    assert!(ask(serde_json::json!({ "root": root, "id": 1, "confirm": true })).is_err());
+
+    // an archived task is deleted only when asked for as archived
+    service
+        .handle_call(
+            "task_archive",
+            serde_json::json!({ "root": root, "id": "2" }),
+        )
+        .unwrap();
+    assert!(ask(serde_json::json!({ "root": root, "id": 2, "confirm": true })).is_err());
+    ask(serde_json::json!({ "root": root, "id": 2, "confirm": true, "archived": true })).unwrap();
+    assert!(crate::list_tasks(tmp.path(), true).unwrap().is_empty());
+}

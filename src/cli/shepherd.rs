@@ -194,6 +194,17 @@ fn print_human_api_response(
         return Ok(());
     }
     match method {
+        Method::ShepherdCall(params)
+            if super::shepherd_extra::render_call(writer, params, result)? => {}
+        Method::ShepherdAgentResume(_) | Method::ShepherdAgentReconcile(_) => {
+            let agents = result["agents"].as_array().map_or(0, Vec::len);
+            let verb = if matches!(method, Method::ShepherdAgentResume(_)) {
+                "resumed"
+            } else {
+                "reconciled"
+            };
+            writeln!(writer, "{verb} {agents} agent(s)")?;
+        }
         Method::ShepherdAgentList(_) => {
             let agents = result.get("agents").and_then(Value::as_array);
             let list = agents.map(|a| a.as_slice()).unwrap_or(&[]);

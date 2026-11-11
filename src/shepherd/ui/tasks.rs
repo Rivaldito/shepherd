@@ -35,6 +35,8 @@ pub struct ShepherdTasksSectionState {
     pub form: Option<CreateTaskFormState>,
     pub import_gh: Option<ImportGhFormState>,
     pub confirm_archive: Option<u32>,
+    /// While `confirm_archive` is set: the confirmation is for deleting the task, not archiving it.
+    pub confirm_is_delete: bool,
     pub last_action: Option<ShepherdTasksAction>,
     pub error: Option<String>,
 }
@@ -96,9 +98,15 @@ impl ShepherdTasksSectionState {
         self.error = None;
     }
 
+    pub fn start_delete_task(&mut self) {
+        self.start_archive_task();
+        self.confirm_is_delete = self.confirm_archive.is_some();
+    }
+
     pub fn start_archive_task(&mut self) {
-        if let Some(task) = self.selected_task() {
-            self.confirm_archive = Some(task.id);
+        if let Some(id) = self.selected_task().map(|t| t.id) {
+            self.confirm_is_delete = false;
+            self.confirm_archive = Some(id);
             self.form = None;
             self.import_gh = None;
             self.error = None;
@@ -164,7 +172,11 @@ impl ShepherdTasksSectionState {
 
     pub fn confirm_archive_task(&mut self) -> Option<ShepherdTasksAction> {
         if let Some(task_id) = self.confirm_archive.take() {
-            let action = ShepherdTasksAction::ArchiveTask { task_id };
+            let action = if std::mem::take(&mut self.confirm_is_delete) {
+                ShepherdTasksAction::DeleteTask { task_id }
+            } else {
+                ShepherdTasksAction::ArchiveTask { task_id }
+            };
             self.last_action = Some(action.clone());
             Some(action)
         } else {
@@ -259,6 +271,8 @@ impl ShepherdTasksSectionState {
                     self.confirm_archive = None;
                     return (true, None);
                 }
+                // `a` confirms an archive only: a delete needs Enter or `y`
+                KeyCode::Char('a') if self.confirm_is_delete => return (true, None),
                 KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('a') => {
                     let act = self.confirm_archive_task();
                     return (true, act);
@@ -287,6 +301,10 @@ impl ShepherdTasksSectionState {
             }
             KeyCode::Char('a') => {
                 self.start_archive_task();
+                (true, None)
+            }
+            KeyCode::Char('D') => {
+                self.start_delete_task();
                 (true, None)
             }
             KeyCode::Char('e') => {
@@ -540,6 +558,7 @@ pub fn render_tasks_section(
                 ("Start Run", "r", true),
                 ("Archive Task", "a", false),
                 ("Importar GitHub", "i", false),
+                ("Delete Task", "D", false),
             ];
 
             hits.detail_hits = Some(render_detail_view(
@@ -562,8 +581,18 @@ pub fn render_tasks_section(
                 hits.stripe_hits = Some(render_confirm_stripe(
                     buffer,
                     stripe_area,
-                    &format!("Archive task #{archive_id}? It will be hidden from the active list."),
-                    "Confirm Archive (Enter)",
+                    &if state.confirm_is_delete {
+                        format!("Delete task #{archive_id}? Its folder is removed for good (Archive keeps it).")
+                    } else {
+                        format!(
+                            "Archive task #{archive_id}? It will be hidden from the active list."
+                        )
+                    },
+                    if state.confirm_is_delete {
+                        "Confirm Delete (Enter)"
+                    } else {
+                        "Confirm Archive (Enter)"
+                    },
                     "Cancel (Esc)",
                     true,
                     palette,
@@ -673,5 +702,36 @@ mod tests {
         assert!(hits.empty_hits.is_some());
         let empty_hits = hits.empty_hits.unwrap();
         assert_eq!(empty_hits.actions.len(), 2);
+    }
+
+    #[test]
+    fn test_tasks_delete_needs_its_own_confirmation() {
+        let key = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        let mut state = ShepherdTasksSectionState::default();
+        state.tasks = vec![ShepherdTaskRow {
+            id: 7,
+            title: "Doomed".into(),
+            state: "open".into(),
+            ..Default::default()
+        }];
+
+        // D asks first, and nothing is sent until it is confirmed
+        assert_eq!(state.handle_key(&key('D')), (true, None));
+        assert_eq!(state.confirm_archive, Some(7));
+        assert!(state.confirm_is_delete);
+        // `a` confirms an archive, never a delete
+        assert_eq!(state.handle_key(&key('a')), (true, None));
+        assert_eq!(state.confirm_archive, Some(7));
+        let (_, act) = state.handle_key(&key('y'));
+        assert_eq!(act, Some(ShepherdTasksAction::DeleteTask { task_id: 7 }));
+        assert_eq!(state.confirm_archive, None);
+
+        // Esc cancels, and the next archive is an archive again (no stale delete mode)
+        state.handle_key(&key('D'));
+        state.handle_key(&KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(state.confirm_archive, None);
+        state.handle_key(&key('a'));
+        let (_, act) = state.handle_key(&key('a'));
+        assert_eq!(act, Some(ShepherdTasksAction::ArchiveTask { task_id: 7 }));
     }
 }

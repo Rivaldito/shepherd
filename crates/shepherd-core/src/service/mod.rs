@@ -1210,6 +1210,87 @@ impl OrchestrationService {
                     }
                 }
             }
+            "create_branch" | "create_worktree" | "remove_worktree" => {
+                use crate::git_admin as g;
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let text = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("");
+                match op {
+                    "create_branch" => {
+                        g::create_branch(&root, text("branch"), text("base"))?;
+                        Ok(serde_json::json!({ "branch": text("branch") }))
+                    }
+                    "create_worktree" => {
+                        let path = g::create_worktree(&root, text("path"), text("branch"))?;
+                        Ok(serde_json::json!({ "path": path, "branch": text("branch") }))
+                    }
+                    _ => {
+                        let live: Vec<String> = self
+                            .load_registry()?
+                            .live()
+                            .iter()
+                            .map(|a| a.worktree.clone())
+                            .collect();
+                        g::remove_worktree(&root, text("path"), &live)?;
+                        Ok(serde_json::json!({ "path": text("path"), "removed": true }))
+                    }
+                }
+            }
+            "import_task" | "publish_branch" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let text = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("");
+                if op == "import_task" {
+                    self.import_task(&root, text("issue_ref"))
+                } else {
+                    self.publish_branch(root, text("branch"))
+                }
+            }
+            "task_delete" | "delete_task" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let id = args
+                    .get("id")
+                    .and_then(|v| {
+                        v.as_str()
+                            .map(str::to_owned)
+                            .or_else(|| v.as_u64().map(|n| n.to_string()))
+                    })
+                    .ok_or("missing 'id' for task_delete")?;
+                if args.get("confirm").and_then(Value::as_bool) != Some(true) {
+                    return Err(format!(
+                        "confirmation_required: deleting task {id} removes its folder and cannot be undone (archive keeps it)"
+                    ));
+                }
+                let archived = args
+                    .get("archived")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let live: Vec<String> = self
+                    .load_registry()?
+                    .live()
+                    .iter()
+                    .map(|a| a.id.clone())
+                    .collect();
+                let name = crate::tasks::delete_task(&root, &id, archived, &live)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({ "deleted": name }))
+            }
             "runs_clean" => {
                 let root = args
                     .get("root")
@@ -1391,6 +1472,7 @@ impl OrchestrationService {
 
 pub mod delivery;
 pub mod gates;
+pub mod import_publish;
 pub(crate) mod pattern_prompt;
 pub mod patterns_run;
 pub mod reconcile;
