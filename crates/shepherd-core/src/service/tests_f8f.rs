@@ -206,3 +206,41 @@ fn consumer_groups_report_total_messages_and_lag_per_partition() {
     );
     assert_eq!(json[1]["committed_offsets"], serde_json::json!({"0": 1}));
 }
+
+#[test]
+fn run_delete_removes_a_finished_run_and_asks_before_an_active_one() {
+    let tmp = TestDir::new("run-delete");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let run = start_run(&service, tmp.path());
+    let root = tmp.path().to_str().unwrap();
+    let ask = |confirm: bool| {
+        service.handle_call(
+            "run_delete",
+            serde_json::json!({ "root": root, "id": run.id, "confirm": confirm }),
+        )
+    };
+    // still running: refused without confirm, and nothing changed
+    let err = ask(false).unwrap_err();
+    assert!(err.contains("confirmation_required"), "{err}");
+    assert!(service.get_pattern_run(tmp.path(), &run.id).is_ok());
+
+    // with confirm it is stopped (agents closed) and removed; the answer lists its agents
+    let gone = ask(true).unwrap();
+    assert_eq!(gone["id"], run.id.as_str());
+    assert!(!gone["agents"].as_array().unwrap().is_empty());
+    assert!(service.get_pattern_run(tmp.path(), &run.id).is_err());
+    assert!(ask(true).unwrap_err().contains("not found"));
+
+    // a finished run needs no confirmation
+    let second = start_run(&service, tmp.path());
+    service
+        .stop_pattern_run(tmp.path(), &second.id, true)
+        .unwrap();
+    service
+        .handle_call(
+            "run_delete",
+            serde_json::json!({ "root": root, "id": second.id }),
+        )
+        .unwrap();
+    assert!(service.get_pattern_run(tmp.path(), &second.id).is_err());
+}

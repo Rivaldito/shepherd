@@ -5,7 +5,59 @@ use crate::find_task;
 use serde_json::Value;
 use std::path::PathBuf;
 
+fn agent_task(found: &Option<crate::CreatedTask>) -> String {
+    found
+        .as_ref()
+        .map(|t| t.status.id.to_string())
+        .unwrap_or_default()
+}
+
 impl OrchestrationService {
+    /// Links an agent to a task (or detaches it with `task: None`): sets the agent's task in the registry and
+    /// keeps the task's list of agents in step.
+    pub fn assign_agent_task(
+        &self,
+        root: &std::path::Path,
+        agent_id: &str,
+        task: Option<&str>,
+    ) -> Result<Value, String> {
+        let found = match task {
+            Some(t) => Some(find_task(root, t).map_err(|e| e.to_string())?),
+            None => None,
+        };
+        let mut registry = self.load_registry()?;
+        let agent = registry
+            .agents
+            .iter_mut()
+            .find(|a| a.id == agent_id)
+            .ok_or_else(|| format!("unknown agent {agent_id:?}"))?;
+        let previous = std::mem::take(&mut agent.task_id);
+        match &found {
+            Some(t) => {
+                agent.task_id = t.status.id.to_string();
+                agent.task_text = t.status.title.clone();
+            }
+            None => agent.task_text.clear(),
+        }
+        agent.updated = self.clock.now_rfc3339();
+        crate::save_agent_registry(self.service_config.registry_path(), &registry)
+            .map_err(|e| e.to_string())?;
+        // the task lists of the old and the new task
+        for (reference, add) in [(previous.as_str(), false), (&agent_task(&found), true)] {
+            if reference.is_empty() {
+                continue;
+            }
+            if let Ok(mut t) = find_task(root, reference) {
+                t.status.agents.retain(|a| a != agent_id);
+                if add {
+                    t.status.agents.push(agent_id.to_owned());
+                }
+                let _ = crate::save_task_status(t.directory.join("status.json"), &t.status);
+            }
+        }
+        Ok(serde_json::json!({ "agent": agent_id, "task": found.map(|t| t.status.id) }))
+    }
+
     /// Stops a task's run: closes the agents linked to it that are still alive and marks the task `cancelled`.
     /// Work already committed stays on its branches. A task that is finished or already cancelled is refused.
     pub fn cancel_run(&self, root: PathBuf, task: &str) -> Result<Value, String> {

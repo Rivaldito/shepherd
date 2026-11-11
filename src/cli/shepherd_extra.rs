@@ -164,6 +164,25 @@ pub(crate) fn parse_extra(args: &[String]) -> Result<Option<ShepherdOperation>, 
                 json!({ "branch": w.one()? }),
             )
         }
+        ("assign", _) => {
+            let w = words(&args[1..], &[]);
+            match w.positional.as_slice() {
+                [agent, task] => call(
+                    "agent:assign",
+                    "assign_agent_task",
+                    json!({ "agentId": agent, "task": if *task == "none" { Value::Null } else { json!(task) } }),
+                ),
+                _ => Err(usage()),
+            }
+        }
+        ("pattern", Some("delete-run")) => {
+            let w = words(rest, &[]);
+            call(
+                "pattern:delete-run",
+                "run_delete",
+                json!({ "id": w.one()?, "confirm": w.flag("--confirm") }),
+            )
+        }
         ("pattern", Some("clean")) => call("pattern:clean", "runs_clean", json!({})),
         ("bus", Some("clean")) => {
             let w = words(rest, &[]);
@@ -221,6 +240,11 @@ pub(crate) fn render_call(
         ),
         "remove_worktree" => format!("removed worktree {}", text("path")),
         "publish_branch" => format!("pushed; PR {}", text("url")),
+        "assign_agent_task" => match d["task"].as_u64() {
+            Some(t) => format!("agent {} is now on task {t}", text("agent")),
+            None => format!("agent {} is detached from its task", text("agent")),
+        },
+        "run_delete" => format!("deleted pattern run {}", text("id")),
         "runs_clean" => format!("removed {} finished pattern run(s)", d["removed"]),
         "bus_clean" => format!("removed {} bus message(s)", d["removed"]),
         _ => return Ok(false),
@@ -258,6 +282,9 @@ mod tests {
             ("git worktree remove ../wt", "remove_worktree"),
             ("git publish feat/x", "publish_branch"),
             ("pattern clean", "runs_clean"),
+            ("assign coder-1 3", "assign_agent_task"),
+            ("assign coder-1 none", "assign_agent_task"),
+            ("pattern delete-run run-1 --confirm", "run_delete"),
             ("bus clean --force", "bus_clean"),
         ];
         for (line, op) in cases {
@@ -318,6 +345,28 @@ mod tests {
         ] {
             let args: Vec<String> = line.split_whitespace().map(str::to_owned).collect();
             assert!(parse_extra(&args).unwrap().is_none(), "{line}");
+        }
+    }
+
+    #[test]
+    fn every_command_of_this_file_is_routed_to_it() {
+        // a command missing from the router answers "unknown command" before it is ever parsed
+        for line in [
+            "resume",
+            "reconcile",
+            "cancel 1",
+            "assign a 1",
+            "task delete 1",
+            "skills create s",
+            "git branch b",
+            "pattern clean",
+            "bus clean",
+        ] {
+            let first = line.split_whitespace().next().unwrap();
+            assert!(
+                crate::cli::SHEPHERD_DIRECT_COMMANDS.contains(&first),
+                "`{first}` is not in SHEPHERD_DIRECT_COMMANDS"
+            );
         }
     }
 

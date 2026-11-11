@@ -293,6 +293,47 @@ impl OrchestrationService {
     }
 
     /// Forgets the runs that are over (done, failed or stopped); running, paused and stalled ones stay.
+    /// Removes one pattern run from the list and returns it. A run that is still active is stopped first (that
+    /// closes its agents), which needs `confirm`.
+    pub fn delete_pattern_run(
+        &self,
+        root: &Path,
+        id: &str,
+        confirm: bool,
+    ) -> Result<PatternRun, String> {
+        let path = pattern_runs_path(root, &self.state_dir_for_runs());
+        let runs = load_pattern_runs(&path)?;
+        let run = runs
+            .iter()
+            .find(|r| r.id == id)
+            .ok_or_else(|| format!("pattern run '{id}' not found"))?;
+        let finished = matches!(
+            run.state,
+            PatternRunState::Done | PatternRunState::Failed | PatternRunState::Stopped
+        );
+        if !finished {
+            if !confirm {
+                return Err(format!(
+                    "confirmation_required: pattern run '{id}' is still {:?}; deleting it stops it and closes its agents",
+                    run.state
+                ));
+            }
+            self.stop_pattern_run(root, id, true)?;
+        }
+        let mut runs = load_pattern_runs(&path)?;
+        let at = runs
+            .iter()
+            .position(|r| r.id == id)
+            .ok_or_else(|| format!("pattern run '{id}' not found"))?;
+        let removed = runs.remove(at);
+        save_pattern_runs(&path, &runs)?;
+        Ok(removed)
+    }
+
+    fn state_dir_for_runs(&self) -> PathBuf {
+        self.service_config.state_dir.clone()
+    }
+
     pub fn clean_pattern_runs(&self, root: &Path) -> Result<usize, String> {
         let path = pattern_runs_path(root, &self.service_config.state_dir);
         let runs = load_pattern_runs(&path)?;
