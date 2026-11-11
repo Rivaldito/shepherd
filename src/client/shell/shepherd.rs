@@ -1083,6 +1083,18 @@ impl ClientShellState {
                     outcome,
                 );
             }
+            ShepherdEventsAction::DeleteRun { id } => {
+                self.push_endpoint_method_with_kind(
+                    shepherd_op_to_method(
+                        "run_delete",
+                        serde_json::json!({ "id": id, "confirm": true }),
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "run_delete".to_string(),
+                    },
+                    outcome,
+                );
+            }
             ShepherdEventsAction::CleanRuns | ShepherdEventsAction::CleanBus => {
                 let (op, args) = if action == ShepherdEventsAction::CleanRuns {
                     ("runs_clean", serde_json::json!({}))
@@ -1606,7 +1618,7 @@ impl ClientShellState {
                         self.refresh_shepherd_views(outcome);
                     }
                     "pattern_run_start" | "pattern_run_pause" | "pattern_run_resume"
-                    | "pattern_run_stop" | "runs_clean" | "bus_clean" => {
+                    | "pattern_run_stop" | "runs_clean" | "bus_clean" | "run_delete" => {
                         let msg = format!("Run operation completed ({op})");
                         if let Some(ref mut section) = self.shepherd_section {
                             section.status_message = Some(msg);
