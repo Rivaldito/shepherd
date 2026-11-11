@@ -2903,3 +2903,57 @@ fn skill_admin_ops_require_a_name() {
         assert!(err.contains("missing 'name'"), "{op}: {err}");
     }
 }
+
+#[test]
+fn git_admin_ops_run_in_the_given_root() {
+    let tmp = TestDir::new("git-admin-ops");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let root = tmp.path().to_str().unwrap();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "i",
+        ],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(tmp.path())
+            .status()
+            .unwrap()
+            .success());
+    }
+    service
+        .handle_call(
+            "create_branch",
+            serde_json::json!({ "root": root, "branch": "b1" }),
+        )
+        .unwrap();
+    let wt = tmp.path().join("wt");
+    let made = service
+        .handle_call(
+            "create_worktree",
+            serde_json::json!({ "root": root, "path": "wt", "branch": "b1" }),
+        )
+        .unwrap();
+    assert_eq!(made["branch"], "b1");
+    assert!(wt.exists());
+    service
+        .handle_call(
+            "remove_worktree",
+            serde_json::json!({ "root": root, "path": "wt" }),
+        )
+        .unwrap();
+    assert!(!wt.exists());
+    assert!(service
+        .handle_call("remove_worktree", serde_json::json!({ "root": root }))
+        .unwrap_err()
+        .contains("missing 'path'"));
+}
