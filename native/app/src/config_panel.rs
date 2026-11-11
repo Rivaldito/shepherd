@@ -61,6 +61,12 @@ pub enum CfgMsg {
     /// The first click on Remove warns, the second one removes the worktree.
     WorktreeRemove(String),
     GitDone(Result<String, String>),
+    TopicFormOpen(bool),
+    TopicFormFirst(String),
+    TopicFormSecond(String),
+    TopicFormSubmit,
+    TopicFormCancel,
+    TopicDone(Result<String, String>),
     OpenAgent(String),
     SelectTopic(String),
     SelectVendor(String),
@@ -170,6 +176,7 @@ pub struct ConfigPanel {
     worktree: Option<String>,
     /// The new-branch or new-worktree form, while it is open.
     git_form: Option<GitForm>,
+    topic_form: Option<TopicForm>,
     /// The worktree whose Remove was clicked once.
     armed_worktree: Option<String>,
     topics: Vec<TopicRow>,
@@ -192,6 +199,14 @@ pub struct ConfigPanel {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GitForm {
     worktree: bool,
+    first: String,
+    second: String,
+}
+
+/// What the topic forms hold: a new topic (name, partitions) or a message (text) for the open topic.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TopicForm {
+    publish: bool,
     first: String,
     second: String,
 }
@@ -670,6 +685,75 @@ impl ConfigPanel {
                     },
                     |r| cfg(CfgMsg::GitDone(r)),
                 );
+            }
+            CfgMsg::TopicFormOpen(publish) => {
+                if publish && self.topic.is_none() {
+                    self.notice = "Select a topic first".into();
+                    return Task::none();
+                }
+                self.topic_form = Some(TopicForm {
+                    publish,
+                    ..TopicForm::default()
+                });
+            }
+            CfgMsg::TopicFormFirst(text) => {
+                if let Some(form) = &mut self.topic_form {
+                    form.first = text;
+                }
+            }
+            CfgMsg::TopicFormSecond(text) => {
+                if let Some(form) = &mut self.topic_form {
+                    form.second = text;
+                }
+            }
+            CfgMsg::TopicFormCancel => self.topic_form = None,
+            CfgMsg::TopicFormSubmit => {
+                let Some(form) = self.topic_form.clone() else {
+                    return Task::none();
+                };
+                let api = self.api.clone();
+                if form.publish {
+                    let (Some(topic), false) = (self.topic.clone(), form.first.trim().is_empty())
+                    else {
+                        self.notice = "A message cannot be empty".into();
+                        return Task::none();
+                    };
+                    self.topic_form = None;
+                    return Task::perform(
+                        async move {
+                            actions::topic_publish(&api, &topic, &form.first)
+                                .map(|_| format!("Sent to #{topic}"))
+                        },
+                        |r| cfg(CfgMsg::TopicDone(r)),
+                    );
+                }
+                let partitions = match form.second.trim() {
+                    "" => Some(1),
+                    n => n.parse::<u32>().ok().filter(|n| *n > 0),
+                };
+                let (name, Some(partitions)) = (form.first.trim().to_owned(), partitions) else {
+                    self.notice = "Partitions is a number, 1 or more".into();
+                    return Task::none();
+                };
+                if name.is_empty() {
+                    self.notice = "A topic needs a name".into();
+                    return Task::none();
+                }
+                self.topic_form = None;
+                return Task::perform(
+                    async move {
+                        actions::topic_create(&api, &name, partitions)
+                            .map(|_| format!("Topic #{name} created"))
+                    },
+                    |r| cfg(CfgMsg::TopicDone(r)),
+                );
+            }
+            CfgMsg::TopicDone(result) => {
+                self.notice = match result {
+                    Ok(done) => done,
+                    Err(why) => why,
+                };
+                return self.reload_events();
             }
             CfgMsg::GitDone(result) => {
                 self.notice = match result {
@@ -1526,10 +1610,80 @@ impl ConfigPanel {
                 col.max_width(1000).into()
             }
         };
+        let detail = match &self.topic_form {
+            Some(form) => self.topic_form_view(form),
+            None => detail,
+        };
+        let footer = vec![
+            cfg_btn("+ Topic", CfgMsg::TopicFormOpen(false), false),
+            cfg_btn("Send message", CfgMsg::TopicFormOpen(true), false),
+            refresh_button(),
+        ];
         column![
             summary,
-            row![list_box(items, vec![refresh_button()]), detail_box(detail)].height(Length::Fill),
+            row![list_box(items, footer), detail_box(detail)].height(Length::Fill),
         ]
+        .into()
+    }
+
+    /// The one form for a new topic (name, partitions) or a message for the open topic.
+    fn topic_form_view<'a>(&'a self, form: &'a TopicForm) -> Element<'a, Message> {
+        let input = |hint: &'static str, value: &'a str, on: fn(String) -> CfgMsg| {
+            text_input(hint, value)
+                .on_input(move |t| cfg(on(t)))
+                .on_submit(cfg(CfgMsg::TopicFormSubmit))
+                .style(crate::theme::input_style)
+                .padding([8, 10])
+                .size(13)
+        };
+        let mut col = column![].spacing(12);
+        if form.publish {
+            let topic = self.topic.as_deref().unwrap_or("");
+            col = col
+                .push(
+                    text(format!("Message for #{topic}"))
+                        .size(18)
+                        .color(crate::theme::HI),
+                )
+                .push(
+                    column![
+                        crate::theme::label("MESSAGE"),
+                        input("hello", &form.first, CfgMsg::TopicFormFirst)
+                    ]
+                    .spacing(6),
+                );
+        } else {
+            col = col
+                .push(text("New topic").size(18).color(crate::theme::HI))
+                .push(
+                    column![
+                        crate::theme::label("NAME"),
+                        input("news", &form.first, CfgMsg::TopicFormFirst)
+                    ]
+                    .spacing(6),
+                )
+                .push(
+                    column![
+                        crate::theme::label("PARTITIONS · EMPTY FOR 1"),
+                        input("1", &form.second, CfgMsg::TopicFormSecond)
+                    ]
+                    .spacing(6),
+                );
+        }
+        container(
+            col.push(
+                row![
+                    cfg_btn(
+                        if form.publish { "Send" } else { "Create" },
+                        CfgMsg::TopicFormSubmit,
+                        true
+                    ),
+                    cfg_btn("Cancel", CfgMsg::TopicFormCancel, false),
+                ]
+                .spacing(10),
+            ),
+        )
+        .max_width(600)
         .into()
     }
 
@@ -2231,5 +2385,37 @@ mod tests {
             root,
         );
         assert_eq!(panel.notice, "the main checkout cannot be removed");
+    }
+
+    #[test]
+    fn the_topic_forms_check_their_fields_before_asking_the_server() {
+        let root = Path::new("/p");
+        let mut panel = ConfigPanel::default();
+        // a message needs an open topic
+        let _ = panel.update(CfgMsg::TopicFormOpen(true), root);
+        assert_eq!(panel.topic_form, None);
+        assert_eq!(panel.notice, "Select a topic first");
+
+        let _ = panel.update(CfgMsg::TopicFormOpen(false), root);
+        let _ = panel.update(CfgMsg::TopicFormSubmit, root);
+        assert!(panel.topic_form.is_some(), "no name, nothing sent");
+        let _ = panel.update(CfgMsg::TopicFormFirst("news".into()), root);
+        let _ = panel.update(CfgMsg::TopicFormSecond("x".into()), root);
+        let _ = panel.update(CfgMsg::TopicFormSubmit, root);
+        assert!(panel.topic_form.is_some(), "partitions must be a number");
+        let _ = panel.update(CfgMsg::TopicFormSecond("2".into()), root);
+        let _ = panel.update(CfgMsg::TopicFormSubmit, root);
+        assert_eq!(panel.topic_form, None);
+
+        panel.topic = Some("news".into());
+        let _ = panel.update(CfgMsg::TopicFormOpen(true), root);
+        let _ = panel.update(CfgMsg::TopicFormSubmit, root);
+        assert!(panel.topic_form.is_some(), "an empty message is not sent");
+        let _ = panel.update(CfgMsg::TopicFormFirst("hi".into()), root);
+        let _ = panel.update(CfgMsg::TopicFormSubmit, root);
+        assert_eq!(panel.topic_form, None);
+
+        let _ = panel.update(CfgMsg::TopicDone(Ok("Topic #news created".into())), root);
+        assert_eq!(panel.notice, "Topic #news created");
     }
 }
