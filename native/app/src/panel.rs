@@ -113,6 +113,7 @@ pub enum PanelMsg {
     AssignAgentTask(String, Option<u32>),
     // Task form
     TaskNew,
+    RejectReason(String),
     ImportOpen,
     ImportInput(String),
     ImportSubmit,
@@ -200,6 +201,8 @@ pub struct Panel {
     task_form: Option<TaskForm>,
     /// The issue reference being typed to import a GitHub issue as a task, while that form is open.
     importing: Option<String>,
+    /// Why a gate is being rejected (optional): the planner or coder reads it.
+    reject_reason: String,
 }
 
 /// What the panel needs from the app to act.
@@ -259,6 +262,7 @@ impl Default for Panel {
             task_form: (std::env::var("SHEPHERD_NATIVE_TASKFORM").as_deref() == Ok("new"))
                 .then(TaskForm::new),
             importing: None,
+            reject_reason: String::new(),
         }
     }
 }
@@ -307,6 +311,11 @@ fn agent_status(state: &str) -> Status {
         "idle" => Status::Idle,
         _ => Status::Unknown,
     }
+}
+
+/// The reason typed for a rejection, or nothing when it is blank.
+fn reason_of(typed: &str) -> Option<String> {
+    Some(typed.trim().to_owned()).filter(|r| !r.is_empty())
 }
 
 /// A task whose run can still be cancelled: it has started and has not ended.
@@ -839,10 +848,17 @@ impl Panel {
                         );
                     }
                     Armed::RejectGate(id, gate) => {
+                        let reason = reason_of(&std::mem::take(&mut self.reject_reason));
                         return Task::perform(
                             async move {
-                                actions::reject_gate(&api, id, &gate.target(), None, &root)
-                                    .map(|_| format!("Rejected {} of task #{id}", gate.label()))
+                                actions::reject_gate(
+                                    &api,
+                                    id,
+                                    &gate.target(),
+                                    reason.as_deref(),
+                                    &root,
+                                )
+                                .map(|_| format!("Rejected {} of task #{id}", gate.label()))
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
                         );
@@ -988,6 +1004,7 @@ impl Panel {
                 self.importing = None;
                 self.task_form = Some(TaskForm::new());
             }
+            PanelMsg::RejectReason(text) => self.reject_reason = text,
             PanelMsg::ImportOpen => {
                 self.launching = false;
                 self.task_form = None;
@@ -1561,6 +1578,12 @@ impl Panel {
                 .size(12)
                 .color(theme::HI)
                 .width(Length::Fill),
+                text_input("Reason for rejecting (optional)", &self.reject_reason)
+                    .on_input(|t| Message::Panel(PanelMsg::RejectReason(t)))
+                    .style(theme::input_style)
+                    .padding([6, 8])
+                    .size(12)
+                    .width(Length::Fixed(280.0)),
                 self.arm_button(
                     Armed::ApproveGate(g.task_id, g.gate.clone()),
                     "Approve",
@@ -3281,5 +3304,23 @@ mod tests {
         );
         let _ = panel.update(PanelMsg::ImportCancel, &ctx);
         assert_eq!(panel.importing, None);
+    }
+
+    #[test]
+    fn a_rejection_carries_the_reason_once_and_a_blank_one_is_not_sent() {
+        assert_eq!(reason_of("  too broad \n").as_deref(), Some("too broad"));
+        assert_eq!(reason_of("   "), None);
+        assert_eq!(reason_of(""), None);
+
+        let (data, snapshot) = (Data::default(), Snapshot::default());
+        let ctx = ctx_of(&data, &snapshot);
+        let mut panel = Panel::default();
+        let _ = panel.update(PanelMsg::RejectReason("split it".into()), &ctx);
+        assert_eq!(panel.reject_reason, "split it");
+        // arming does not use it up; confirming does, so the next rejection starts empty
+        let _ = panel.update(PanelMsg::Arm(Armed::RejectGate(4, Gate::Plan)), &ctx);
+        assert_eq!(panel.reject_reason, "split it");
+        let _ = panel.update(PanelMsg::Confirm, &ctx);
+        assert_eq!(panel.reject_reason, "");
     }
 }
