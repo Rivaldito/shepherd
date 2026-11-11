@@ -53,7 +53,7 @@ The desktop app (GUI), the terminal UI (TUI) and the CLI are three front ends fo
 | List, show, create, edit, validate, delete | ✔ | ✔ | ✔ `pattern …` |
 | Start a pattern run | ✔ | ✔ | ✔ `pattern run` |
 | Pause, resume, stop a run | ✔ | ✔ | ✔ |
-| Delete one run | ✔ (#24) | ✘ | ✔ `pattern delete-run` (#24) |
+| Delete one run | ✔ (#24) | ✔ `D` (#31) | ✔ `pattern delete-run` (#24) |
 | Forget finished runs | ✔ | ✔ `C` (#22) | ✔ `pattern clean` (#21) |
 
 ## Event bus
@@ -87,7 +87,7 @@ The desktop app (GUI), the terminal UI (TUI) and the CLI are three front ends fo
 
 - **Per-agent skills.** The TUI sends `skills_toggle` and `skills_restore`, but the server has no such operations, so those two actions fail with "unknown shepherd operation". What they should do to an agent that is already running (change its installed copy now, or only apply at its next start) is not decided.
 - **GUI:** git actions (branch, worktree), a reason when rejecting a gate, snapshot prune and diff against the current worktree, and the bus-topic create/publish.
-- **TUI:** creating a topic or publishing to it.
+- **TUI:** linking an agent to a task, creating a topic or publishing to it.
 
 ## How this is kept true
 
