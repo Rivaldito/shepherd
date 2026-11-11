@@ -6,6 +6,7 @@ use crate::theme::{card_style, item_style, ACCENT, DIM, OK, WARN};
 use crate::Message;
 use iced::widget::{button, checkbox, column, container, row, text, text_editor, text_input};
 use iced::{Color, Element, Length, Task};
+use shepherd_app_core::actions;
 use shepherd_app_core::config_data::{self, Models, SkillRow, TopicRow};
 use shepherd_app_core::installed::{self, InstalledRow};
 use shepherd_app_core::shepherd_core::bus::Message as BusMessage;
@@ -51,6 +52,15 @@ pub enum CfgMsg {
     /// Make a skill global (every agent gets it) or take it out of the global ones.
     SkillGlobal(String, bool),
     SelectWorktree(String),
+    /// Open the new-branch (`false`) or new-worktree (`true`) form.
+    GitFormOpen(bool),
+    GitFormFirst(String),
+    GitFormSecond(String),
+    GitFormSubmit,
+    GitFormCancel,
+    /// The first click on Remove warns, the second one removes the worktree.
+    WorktreeRemove(String),
+    GitDone(Result<String, String>),
     OpenAgent(String),
     SelectTopic(String),
     SelectVendor(String),
@@ -158,6 +168,10 @@ pub struct ConfigPanel {
     skill: Option<String>,
     git: Option<GitRepoStatus>,
     worktree: Option<String>,
+    /// The new-branch or new-worktree form, while it is open.
+    git_form: Option<GitForm>,
+    /// The worktree whose Remove was clicked once.
+    armed_worktree: Option<String>,
     topics: Vec<TopicRow>,
     topic: Option<String>,
     feed: Vec<BusMessage>,
@@ -172,6 +186,14 @@ pub struct ConfigPanel {
     armed_delete: bool,
     pub notice: String,
     pub loading: bool,
+}
+
+/// What the git forms hold: a branch (name, base) or a worktree (folder, branch).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GitForm {
+    worktree: bool,
+    first: String,
+    second: String,
 }
 
 fn words(text: &str) -> Vec<String> {
@@ -584,7 +606,78 @@ impl ConfigPanel {
                 }
                 Err(why) => self.notice = why,
             },
-            CfgMsg::SelectWorktree(path) => self.worktree = Some(path),
+            CfgMsg::SelectWorktree(path) => {
+                self.armed_worktree = None;
+                self.worktree = Some(path);
+            }
+            CfgMsg::GitFormOpen(worktree) => {
+                self.git_form = Some(GitForm {
+                    worktree,
+                    ..GitForm::default()
+                });
+            }
+            CfgMsg::GitFormFirst(text) => {
+                if let Some(form) = &mut self.git_form {
+                    form.first = text;
+                }
+            }
+            CfgMsg::GitFormSecond(text) => {
+                if let Some(form) = &mut self.git_form {
+                    form.second = text;
+                }
+            }
+            CfgMsg::GitFormCancel => self.git_form = None,
+            CfgMsg::GitFormSubmit => {
+                let Some(form) = self.git_form.clone() else {
+                    return Task::none();
+                };
+                if form.first.trim().is_empty() || (form.worktree && form.second.trim().is_empty())
+                {
+                    self.notice = if form.worktree {
+                        "A worktree needs a folder and a branch"
+                    } else {
+                        "A branch needs a name"
+                    }
+                    .into();
+                    return Task::none();
+                }
+                self.git_form = None;
+                let (api, root) = (self.api.clone(), root.display().to_string());
+                return Task::perform(
+                    async move {
+                        if form.worktree {
+                            actions::git_worktree_add(&api, &form.first, &form.second, &root)
+                                .map(|dir| format!("Worktree created at {dir}"))
+                        } else {
+                            actions::git_branch(&api, &form.first, &form.second, &root)
+                                .map(|_| format!("Branch {} created", form.first.trim()))
+                        }
+                    },
+                    |r| cfg(CfgMsg::GitDone(r)),
+                );
+            }
+            CfgMsg::WorktreeRemove(path) => {
+                if self.armed_worktree.as_deref() != Some(path.as_str()) {
+                    self.armed_worktree = Some(path);
+                    return Task::none();
+                }
+                self.armed_worktree = None;
+                let (api, root) = (self.api.clone(), root.display().to_string());
+                return Task::perform(
+                    async move {
+                        actions::git_worktree_remove(&api, &path, &root)
+                            .map(|_| format!("Removed worktree {path}"))
+                    },
+                    |r| cfg(CfgMsg::GitDone(r)),
+                );
+            }
+            CfgMsg::GitDone(result) => {
+                self.notice = match result {
+                    Ok(done) => done,
+                    Err(why) => why,
+                };
+                return Self::load_git(root);
+            }
             CfgMsg::OpenAgent(id) => {
                 return Task::batch([
                     Task::done(Message::Panel(PanelMsg::Tab(Tab::Agents))),
@@ -1173,13 +1266,82 @@ impl ConfigPanel {
                             .color(DIM),
                     );
                 }
+                if !w.is_main {
+                    let armed = self.armed_worktree.as_deref() == Some(w.path.as_str());
+                    col = col.push(cfg_btn(
+                        if armed {
+                            "Confirm: remove this worktree (the branch stays)"
+                        } else {
+                            "Remove worktree"
+                        },
+                        CfgMsg::WorktreeRemove(w.path.clone()),
+                        armed,
+                    ));
+                }
                 col.push(note).max_width(900).into()
             }
         };
+        let detail = match &self.git_form {
+            Some(form) => self.git_form_view(form),
+            None => detail,
+        };
+        let footer = vec![
+            cfg_btn("+ Branch", CfgMsg::GitFormOpen(false), false),
+            cfg_btn("+ Worktree", CfgMsg::GitFormOpen(true), false),
+            refresh_button(),
+        ];
         column![
             summary,
-            row![list_box(items, vec![refresh_button()]), detail_box(detail)].height(Length::Fill),
+            row![list_box(items, footer), detail_box(detail)].height(Length::Fill),
         ]
+        .into()
+    }
+
+    /// The one form for a new branch (name, base) or a new worktree (folder, branch).
+    fn git_form_view<'a>(&'a self, form: &'a GitForm) -> Element<'a, Message> {
+        let (title, first, second, hint) = if form.worktree {
+            (
+                "New worktree",
+                ("FOLDER", "../my-feature"),
+                ("BRANCH", "feat/my-feature"),
+                "The branch is created from the current commit when it does not exist. A relative folder is taken from the project.",
+            )
+        } else {
+            (
+                "New branch",
+                ("NAME", "feat/my-feature"),
+                ("BASE · EMPTY FOR THE CURRENT COMMIT", "main"),
+                "Creates the branch without switching to it.",
+            )
+        };
+        let field =
+            |label: &'static str, hint: &'static str, value: &'a str, on: fn(String) -> CfgMsg| {
+                column![
+                    crate::theme::label(label),
+                    text_input(hint, value)
+                        .on_input(move |t| cfg(on(t)))
+                        .on_submit(cfg(CfgMsg::GitFormSubmit))
+                        .style(crate::theme::input_style)
+                        .padding([8, 10])
+                        .size(13),
+                ]
+                .spacing(6)
+            };
+        container(
+            column![
+                text(title).size(18).color(crate::theme::HI),
+                field(first.0, first.1, &form.first, CfgMsg::GitFormFirst),
+                field(second.0, second.1, &form.second, CfgMsg::GitFormSecond),
+                text(hint).size(11).color(DIM),
+                row![
+                    cfg_btn("Create", CfgMsg::GitFormSubmit, true),
+                    cfg_btn("Cancel", CfgMsg::GitFormCancel, false),
+                ]
+                .spacing(10),
+            ]
+            .spacing(12),
+        )
+        .max_width(600)
         .into()
     }
 
@@ -2009,5 +2171,65 @@ mod tests {
     fn lists_split_on_commas_and_spaces_and_ignore_the_empty_bits() {
         assert_eq!(words("a, b  c,,d "), ["a", "b", "c", "d"]);
         assert!(words("  , ").is_empty());
+    }
+
+    #[test]
+    fn the_git_form_checks_its_fields_before_asking_the_server() {
+        let root = Path::new("/nowhere");
+        let mut panel = ConfigPanel::default();
+        // a submit with nothing open does nothing
+        let _ = panel.update(CfgMsg::GitFormSubmit, root);
+        assert!(panel.notice.is_empty());
+
+        // a branch needs a name; the form stays open so it can be fixed
+        let _ = panel.update(CfgMsg::GitFormOpen(false), root);
+        let _ = panel.update(CfgMsg::GitFormSecond("main".into()), root);
+        let _ = panel.update(CfgMsg::GitFormSubmit, root);
+        assert_eq!(panel.notice, "A branch needs a name");
+        assert!(panel.git_form.is_some());
+        // a name is enough (the base may be empty) and closes the form
+        let _ = panel.update(CfgMsg::GitFormFirst("feat/x".into()), root);
+        let _ = panel.update(CfgMsg::GitFormSubmit, root);
+        assert_eq!(panel.git_form, None);
+
+        // a worktree needs a folder and a branch
+        let _ = panel.update(CfgMsg::GitFormOpen(true), root);
+        let _ = panel.update(CfgMsg::GitFormFirst("../wt".into()), root);
+        let _ = panel.update(CfgMsg::GitFormSubmit, root);
+        assert_eq!(panel.notice, "A worktree needs a folder and a branch");
+        assert!(panel.git_form.is_some());
+        let _ = panel.update(CfgMsg::GitFormCancel, root);
+        assert_eq!(panel.git_form, None);
+    }
+
+    #[test]
+    fn removing_a_worktree_needs_two_clicks_on_the_same_one() {
+        let root = Path::new("/nowhere");
+        let mut panel = ConfigPanel::default();
+        let _ = panel.update(CfgMsg::WorktreeRemove("/a".into()), root);
+        assert_eq!(panel.armed_worktree.as_deref(), Some("/a"));
+        // another worktree starts over instead of removing the first
+        let _ = panel.update(CfgMsg::WorktreeRemove("/b".into()), root);
+        assert_eq!(panel.armed_worktree.as_deref(), Some("/b"));
+        // selecting a worktree disarms
+        let _ = panel.update(CfgMsg::SelectWorktree("/a".into()), root);
+        assert_eq!(panel.armed_worktree, None);
+        // the second click on the same one sends the request and leaves nothing armed
+        let _ = panel.update(CfgMsg::WorktreeRemove("/a".into()), root);
+        let _ = panel.update(CfgMsg::WorktreeRemove("/a".into()), root);
+        assert_eq!(panel.armed_worktree, None);
+    }
+
+    #[test]
+    fn what_the_server_answers_becomes_the_notice() {
+        let root = Path::new("/nowhere");
+        let mut panel = ConfigPanel::default();
+        let _ = panel.update(CfgMsg::GitDone(Ok("Branch feat/x created".into())), root);
+        assert_eq!(panel.notice, "Branch feat/x created");
+        let _ = panel.update(
+            CfgMsg::GitDone(Err("the main checkout cannot be removed".into())),
+            root,
+        );
+        assert_eq!(panel.notice, "the main checkout cannot be removed");
     }
 }

@@ -324,6 +324,46 @@ pub fn snapshot_delete(api: &Path, id: &str, root: &str) -> Result<(), String> {
     .map(|_| ())
 }
 
+fn git_call(api: &Path, op: &str, args: Value) -> Result<Value, String> {
+    call(api, "shepherd.call", json!({ "op": op, "args": args })).map(|r| r["data"].clone())
+}
+
+/// Creates `branch` at `base` (the current commit when empty) without switching to it.
+pub fn git_branch(api: &Path, branch: &str, base: &str, root: &str) -> Result<(), String> {
+    git_call(
+        api,
+        "create_branch",
+        json!({ "branch": branch.trim(), "base": base.trim(), "root": root }),
+    )
+    .map(|_| ())
+}
+
+/// Adds a worktree at `path` on `branch` (created when it does not exist); returns where it is.
+pub fn git_worktree_add(
+    api: &Path,
+    path: &str,
+    branch: &str,
+    root: &str,
+) -> Result<String, String> {
+    let data = git_call(
+        api,
+        "create_worktree",
+        json!({ "path": path.trim(), "branch": branch.trim(), "root": root }),
+    )?;
+    Ok(data["path"].as_str().unwrap_or(path).to_owned())
+}
+
+/// Removes a worktree. The server refuses the main checkout, one with uncommitted changes and one a live agent
+/// works in; the branch is kept.
+pub fn git_worktree_remove(api: &Path, path: &str, root: &str) -> Result<(), String> {
+    git_call(
+        api,
+        "remove_worktree",
+        json!({ "path": path, "root": root }),
+    )
+    .map(|_| ())
+}
+
 /// Kills an agent (if not already in a terminal state) and cleans it from the registry.
 pub fn kill_and_clean_agent(api: &Path, id: &str) -> Result<(), String> {
     // Kill if still alive
@@ -477,6 +517,32 @@ mod tests {
         assert_eq!(seen[0]["params"]["args"]["root"], "/p");
         assert_eq!(seen[2]["params"]["op"], "import_task");
         assert_eq!(seen[2]["params"]["args"]["issue_ref"], "#7", "trimmed");
+    }
+
+    #[test]
+    fn git_branches_and_worktrees_are_asked_of_the_server_with_trimmed_names() {
+        let (path, server) = fake_server(vec![
+            r#"{"id":"1","result":{"type":"shepherd_call","data":{"branch":"feat/x"}}}"#,
+            r#"{"id":"2","result":{"type":"shepherd_call","data":{"path":"/p/wt","branch":"feat/x"}}}"#,
+            r#"{"id":"3","error":{"code":"shepherd_error","message":"the main checkout cannot be removed"}}"#,
+        ]);
+        git_branch(&path, " feat/x ", "", "/p").unwrap();
+        assert_eq!(
+            git_worktree_add(&path, "wt ", "feat/x", "/p").unwrap(),
+            "/p/wt"
+        );
+        assert_eq!(
+            git_worktree_remove(&path, "/p", "/p").unwrap_err(),
+            "the main checkout cannot be removed"
+        );
+        let seen = server.join().unwrap();
+        assert_eq!(seen[0]["params"]["op"], "create_branch");
+        assert_eq!(seen[0]["params"]["args"]["branch"], "feat/x");
+        assert_eq!(seen[0]["params"]["args"]["base"], "");
+        assert_eq!(seen[1]["params"]["op"], "create_worktree");
+        assert_eq!(seen[1]["params"]["args"]["path"], "wt");
+        assert_eq!(seen[2]["params"]["op"], "remove_worktree");
+        assert_eq!(seen[2]["params"]["args"]["root"], "/p");
     }
 
     #[test]
