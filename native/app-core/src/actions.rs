@@ -4,6 +4,7 @@
 
 use crate::api::call;
 use serde_json::{json, Value};
+use shepherd_core::snapshot::{CaptureResult, RestoreResult, ShowResult};
 use std::path::Path;
 
 pub struct Launched {
@@ -258,6 +259,50 @@ pub fn reject_gate(
     call(api, "shepherd.run.reject", params).map(|_| ())
 }
 
+fn typed<T: serde::de::DeserializeOwned>(reply: &Value, key: &str) -> Result<T, String> {
+    serde_json::from_value(reply[key].clone()).map_err(|e| format!("unexpected answer: {e}"))
+}
+
+/// Takes a snapshot of an agent's worktree now.
+pub fn snapshot_capture(api: &Path, agent: &str, root: &str) -> Result<CaptureResult, String> {
+    let reply = call(
+        api,
+        "shepherd.snapshot.capture",
+        json!({ "agent": agent, "reason": "manual", "root": root }),
+    )?;
+    typed(&reply, "result")
+}
+
+/// What a snapshot holds: its metadata and the files it changed over the agent's previous one.
+pub fn snapshot_show(api: &Path, id: &str, root: &str) -> Result<ShowResult, String> {
+    let reply = call(
+        api,
+        "shepherd.snapshot.show",
+        json!({ "id": id, "root": root, "full": false }),
+    )?;
+    typed(&reply, "result")
+}
+
+/// Puts the whole worktree back as the snapshot had it. The server keeps a `pre-restore` snapshot of
+/// what was there, and leaves files the snapshot does not know (it never deletes them from here).
+pub fn snapshot_restore(api: &Path, id: &str, root: &str) -> Result<RestoreResult, String> {
+    let reply = call(
+        api,
+        "shepherd.snapshot.restore",
+        json!({ "id": id, "root": root, "confirm": true, "delete_extra": false }),
+    )?;
+    typed(&reply, "result")
+}
+
+pub fn snapshot_delete(api: &Path, id: &str, root: &str) -> Result<(), String> {
+    call(
+        api,
+        "shepherd.snapshot.delete",
+        json!({ "id": id, "root": root }),
+    )
+    .map(|_| ())
+}
+
 /// Kills an agent (if not already in a terminal state) and cleans it from the registry.
 pub fn kill_and_clean_agent(api: &Path, id: &str) -> Result<(), String> {
     // Kill if still alive
@@ -352,6 +397,40 @@ mod tests {
         assert_eq!(seen[1]["params"]["target"], "2");
         assert_eq!(seen[1]["params"]["reason"], "too broad");
         assert!(seen[2]["params"].get("reason").is_none());
+    }
+
+    const INFO: &str = r#"{"id":"coder-1/2","agent":"coder-1","n":2,"commit":"abc","reason":"manual","created":100,"worktree":"/w","prev":"coder-1/1","files":1,"added":3,"removed":0}"#;
+
+    #[test]
+    fn snapshots_are_asked_for_by_id_and_restored_only_with_the_confirmation() {
+        let replies: Vec<&'static str> = vec![
+            Box::leak(format!(r#"{{"id":"1","result":{{"type":"x","result":{{"created":true,"snapshot":{INFO}}}}}}}"#).into_boxed_str()),
+            Box::leak(format!(r#"{{"id":"2","result":{{"type":"x","result":{{"snapshot":{INFO},"diff":{{"from":"coder-1/1","to":"coder-1/2","files":[{{"path":"a.rs","status":"added","added":3,"removed":0,"binary":false}}],"added":3,"removed":0}}}}}}}}"#).into_boxed_str()),
+            Box::leak(format!(r#"{{"id":"3","result":{{"type":"x","result":{{"restored":{INFO},"pre_restore":{INFO},"pre_restore_created":true,"restored_files":["a.rs"],"extra_files":[],"deleted_files":[]}}}}}}"#).into_boxed_str()),
+            r#"{"id":"4","result":{"type":"x","result":{"deleted":"coder-1/2"}}}"#,
+            r#"{"id":"5","error":{"code":"shepherd_error","message":"unknown snapshot"}}"#,
+        ];
+        let (path, server) = fake_server(replies);
+        let captured = snapshot_capture(&path, "coder-1", "/p").unwrap();
+        assert!(captured.created);
+        assert_eq!(captured.snapshot.id, "coder-1/2");
+        let shown = snapshot_show(&path, "coder-1/2", "/p").unwrap();
+        assert_eq!(shown.diff.files[0].path, "a.rs");
+        let restored = snapshot_restore(&path, "coder-1/2", "/p").unwrap();
+        assert_eq!(restored.restored_files, ["a.rs"]);
+        snapshot_delete(&path, "coder-1/2", "/p").unwrap();
+        assert_eq!(
+            snapshot_show(&path, "nope/1", "/p").unwrap_err(),
+            "unknown snapshot"
+        );
+        let seen = server.join().unwrap();
+        assert_eq!(seen[0]["method"], "shepherd.snapshot.capture");
+        assert_eq!(seen[0]["params"]["reason"], "manual");
+        assert_eq!(seen[2]["method"], "shepherd.snapshot.restore");
+        assert_eq!(seen[2]["params"]["confirm"], true);
+        assert_eq!(seen[2]["params"]["delete_extra"], false);
+        assert_eq!(seen[3]["method"], "shepherd.snapshot.delete");
+        assert_eq!(seen[3]["params"]["id"], "coder-1/2");
     }
 
     #[test]
