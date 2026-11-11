@@ -275,7 +275,7 @@ pub fn render_shepherd_section(
                 let help = "↑/↓: list | c: capture | d/D: diff | f: file | R: all | x: delete | p: prune | Tab: finished | Esc: back";
                 (sum, help)
             } else {
-                let help = "↑/↓: list | Enter: terminal | s: new | t: snapshots | K: kill | x: clean | r: refresh | Esc: quit";
+                let help = "↑/↓: list | Enter: terminal | s: new | t: snapshots | K: kill | x: clean | r: refresh | u: resume | Esc: quit";
                 (sum, help)
             }
         }
@@ -288,7 +288,8 @@ pub fn render_shepherd_section(
                 .filter(|t| t.state.to_lowercase() == "open" || t.state.to_lowercase() == "active")
                 .count();
             let sum = format!("{total} tareas ({open_count} abiertas)");
-            let help = "↑/↓: list | n: new | i: import | a: archive | e: edit | Esc: quit";
+            let help =
+                "↑/↓: list | n: new | i: import | a: archive | D: delete | e: edit | Esc: quit";
             (sum, help)
         }
         ShepherdSectionTab::Runs => {
@@ -350,10 +351,10 @@ pub fn render_shepherd_section(
             };
             let help = match state.events.active_subtab {
                 events::ShepherdEventsSubTab::Topics => {
-                    "Tab: switch view | Space: pause/resume | r: replay | /: filter | Esc: quit"
+                    "Tab: switch view | Space: pause/resume | r: replay | /: filter | C: clear bus | Esc: quit"
                 }
                 events::ShepherdEventsSubTab::PatternRuns => {
-                    "Tab: switch view | p: pause/resume | K: stop | ↑/↓: list | Esc: quit"
+                    "Tab: switch view | p: pause/resume | x: stop | C: clean | ↑/↓: list | Esc: quit"
                 }
             };
             (sum, help)

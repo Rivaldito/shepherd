@@ -27,6 +27,10 @@ pub enum ShepherdTasksAction {
     ArchiveTask {
         task_id: u32,
     },
+    /// Removes the task's folder for good (after a confirmation).
+    DeleteTask {
+        task_id: u32,
+    },
     OpenEditor {
         task_id: u32,
         file_path: PathBuf,
