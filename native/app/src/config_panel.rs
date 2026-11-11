@@ -48,6 +48,8 @@ pub enum CfgMsg {
     SkillCancel,
     /// The first click on Delete warns, the second one deletes.
     SkillDelete(String),
+    /// Make a skill global (every agent gets it) or take it out of the global ones.
+    SkillGlobal(String, bool),
     SelectWorktree(String),
     OpenAgent(String),
     SelectTopic(String),
@@ -571,6 +573,17 @@ impl ConfigPanel {
                     Err(why) => self.notice = why,
                 }
             }
+            CfgMsg::SkillGlobal(name, on) => match config_data::set_global_skill(root, &name, on) {
+                Ok(()) => {
+                    self.notice = if on {
+                        format!("{name} is now global: every agent gets it")
+                    } else {
+                        format!("{name} is no longer global")
+                    };
+                    return Self::load_skills(root);
+                }
+                Err(why) => self.notice = why,
+            },
             CfgMsg::SelectWorktree(path) => self.worktree = Some(path),
             CfgMsg::OpenAgent(id) => {
                 return Task::batch([
@@ -808,7 +821,23 @@ impl ConfigPanel {
                                 .color(DIM),
                         );
                 }
-                col.push(actions).push(markdown(&s.body)).into()
+                actions = actions.push(cfg_btn(
+                    if s.global {
+                        "Remove from global"
+                    } else {
+                        "Make global"
+                    },
+                    CfgMsg::SkillGlobal(s.name.clone(), !s.global),
+                    false,
+                ));
+                col.push(actions)
+                    .push(
+                        text("A global skill goes to every agent, whatever its role.")
+                            .size(11)
+                            .color(DIM),
+                    )
+                    .push(markdown(&s.body))
+                    .into()
             }
         };
         let footer = vec![
