@@ -678,6 +678,10 @@ pub(crate) fn parse_operation(args: &[String]) -> Result<ShepherdOperation, Pars
         return Err(ParseError::Usage(usage.to_string()));
     }
 
+    if let Some(op) = crate::cli::shepherd_extra::parse_extra(args)? {
+        return Ok(op);
+    }
+
     let cmd_name = args[0].as_str();
     let rest = &args[1..];
 

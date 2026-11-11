@@ -3008,3 +3008,42 @@ fn publish_branch_needs_a_gate_waiting_on_that_branch() {
         .unwrap_err()
         .contains("not an issue"));
 }
+
+#[test]
+fn task_delete_needs_confirmation_and_no_live_agent() {
+    let tmp = TestDir::new("task-delete");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let root = tmp.path().to_str().unwrap();
+    for title in ["A", "B"] {
+        service
+            .handle_call(
+                "task_create",
+                serde_json::json!({
+                    "root": root, "title": title, "description": "d", "criteria": [], "attachments": []
+                }),
+            )
+            .unwrap();
+    }
+    let ask = |args: serde_json::Value| service.handle_call("task_delete", args);
+    let err = ask(serde_json::json!({ "root": root, "id": 1 })).unwrap_err();
+    assert!(err.contains("confirmation_required"), "{err}");
+    assert_eq!(crate::list_tasks(tmp.path(), false).unwrap().len(), 2);
+
+    let out = ask(serde_json::json!({ "root": root, "id": 1, "confirm": true })).unwrap();
+    assert_eq!(out["deleted"], "1-a");
+    let left = crate::list_tasks(tmp.path(), false).unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].status.id, 2);
+    assert!(ask(serde_json::json!({ "root": root, "id": 1, "confirm": true })).is_err());
+
+    // an archived task is deleted only when asked for as archived
+    service
+        .handle_call(
+            "task_archive",
+            serde_json::json!({ "root": root, "id": "2" }),
+        )
+        .unwrap();
+    assert!(ask(serde_json::json!({ "root": root, "id": 2, "confirm": true })).is_err());
+    ask(serde_json::json!({ "root": root, "id": 2, "confirm": true, "archived": true })).unwrap();
+    assert!(crate::list_tasks(tmp.path(), true).unwrap().is_empty());
+}

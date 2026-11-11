@@ -1256,6 +1256,41 @@ impl OrchestrationService {
                     self.publish_branch(root, text("branch"))
                 }
             }
+            "task_delete" | "delete_task" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let id = args
+                    .get("id")
+                    .and_then(|v| {
+                        v.as_str()
+                            .map(str::to_owned)
+                            .or_else(|| v.as_u64().map(|n| n.to_string()))
+                    })
+                    .ok_or("missing 'id' for task_delete")?;
+                if args.get("confirm").and_then(Value::as_bool) != Some(true) {
+                    return Err(format!(
+                        "confirmation_required: deleting task {id} removes its folder and cannot be undone (archive keeps it)"
+                    ));
+                }
+                let archived = args
+                    .get("archived")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let live: Vec<String> = self
+                    .load_registry()?
+                    .live()
+                    .iter()
+                    .map(|a| a.id.clone())
+                    .collect();
+                let name = crate::tasks::delete_task(&root, &id, archived, &live)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({ "deleted": name }))
+            }
             "runs_clean" => {
                 let root = args
                     .get("root")
