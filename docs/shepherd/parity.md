@@ -14,7 +14,7 @@ The desktop app (GUI), the terminal UI (TUI) and the CLI are three front ends fo
 | Clean finished agents | ✔ | ✔ | ✔ `clean` |
 | Resume after a server restart | ✔ | ✔ `u` (#22) | ✔ `resume` (#21) |
 | Reconcile with the terminals | ✘ | ✘ | ✔ `reconcile` (#21) |
-| Link an agent to a task | ✔ (#24) | ✘ | ✔ `assign` (#24) |
+| Link an agent to a task | ✔ (#24) | ✔ `l` (#32) | ✔ `assign` (#24) |
 | Open an agent's terminal | `?` | ✔ | ✔ `attach`, `focus` |
 | Skills of one agent (turn on/off, restore) | read only (#17) | ✘ broken, see below | ✘ |
 
@@ -87,7 +87,7 @@ The desktop app (GUI), the terminal UI (TUI) and the CLI are three front ends fo
 
 - **Per-agent skills.** The TUI sends `skills_toggle` and `skills_restore`, but the server has no such operations, so those two actions fail with "unknown shepherd operation". What they should do to an agent that is already running (change its installed copy now, or only apply at its next start) is not decided.
 - **GUI:** git actions (branch, worktree), a reason when rejecting a gate, snapshot prune and diff against the current worktree, and the bus-topic create/publish.
-- **TUI:** linking an agent to a task, deleting a single pattern run, creating a topic or publishing to it.
+- **TUI:** creating a topic or publishing to it.
 
 ## How this is kept true
 

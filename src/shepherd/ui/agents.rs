@@ -39,6 +39,8 @@ pub struct ShepherdAgentsSectionState {
     pub detail_scroll: usize,
     pub agents: Vec<ShepherdAgentRow>,
     pub spawn_form: Option<InlineFormState>,
+    /// When set, `spawn_form` is the one-field "link to a task" form for this agent.
+    pub assign_for: Option<String>,
     pub confirm_kill: Option<String>,
     pub confirm_clean: Option<String>,
     pub confirm_clean_all: Option<usize>,
@@ -56,6 +58,7 @@ impl ShepherdAgentsSectionState {
             detail_scroll: 0,
             agents,
             spawn_form: None,
+            assign_for: None,
             confirm_kill: None,
             confirm_clean: None,
             confirm_clean_all: None,
@@ -102,6 +105,7 @@ impl ShepherdAgentsSectionState {
         }
         if self.has_sub_action() {
             self.spawn_form = None;
+            self.assign_for = None;
             self.confirm_kill = None;
             self.confirm_clean = None;
             self.confirm_clean_all = None;
@@ -218,6 +222,45 @@ impl ShepherdAgentsSectionState {
         };
         self.last_action = Some(action.clone());
         Some(action)
+    }
+
+    /// `l`: opens a one-field form to link the selected agent to a task (empty field detaches it).
+    pub fn start_assign(&mut self) {
+        let Some(agent) = self.selected_agent() else {
+            return;
+        };
+        let id = agent.id.clone();
+        self.spawn_form = Some(InlineFormState::new(
+            "LINK AGENT TO A TASK",
+            vec![FormField::new("Task number (empty to detach)", "e.g. 12")],
+        ));
+        self.assign_for = Some(id);
+        self.confirm_kill = None;
+        self.confirm_clean = None;
+        self.confirm_clean_all = None;
+        self.error = None;
+    }
+
+    pub fn submit_assign(&mut self) -> Result<Option<ShepherdAgentsAction>, String> {
+        let (Some(form), Some(agent_id)) = (&self.spawn_form, self.assign_for.clone()) else {
+            return Ok(None);
+        };
+        let raw = form.fields[0]
+            .value
+            .trim()
+            .trim_start_matches('#')
+            .to_string();
+        if !raw.is_empty() && raw.parse::<u32>().is_err() {
+            return Err("The task is a number, e.g. 12".into());
+        }
+        let action = ShepherdAgentsAction::AssignTask {
+            agent_id,
+            task: (!raw.is_empty()).then_some(raw),
+        };
+        self.last_action = Some(action.clone());
+        self.spawn_form = None;
+        self.assign_for = None;
+        Ok(Some(action))
     }
 
     pub fn submit_spawn(&mut self) -> Result<Option<ShepherdAgentsAction>, String> {
@@ -386,7 +429,11 @@ impl ShepherdAgentsSectionState {
                     form.cycle_backward();
                     return (true, None);
                 }
-                KeyCode::Enter => match self.submit_spawn() {
+                KeyCode::Enter => match if self.assign_for.is_some() {
+                    self.submit_assign()
+                } else {
+                    self.submit_spawn()
+                } {
                     Ok(act) => return (true, act),
                     Err(e) => {
                         if let Some(ref mut f) = self.spawn_form {
@@ -432,6 +479,10 @@ impl ShepherdAgentsSectionState {
             }
             KeyCode::Char('s') => {
                 self.start_spawn();
+                (true, None)
+            }
+            KeyCode::Char('l') => {
+                self.start_assign();
                 (true, None)
             }
             KeyCode::Char('K') => {
@@ -540,7 +591,11 @@ pub fn render_agents_section(
             buffer,
             detail_area,
             form,
-            "Launch Agent",
+            if state.assign_for.is_some() {
+                "Link"
+            } else {
+                "Launch Agent"
+            },
             "Cancel",
             true,
             palette,
@@ -911,5 +966,42 @@ mod tests {
             state.handle_key(&KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
         assert!(handled);
         assert_eq!(act, Some(ShepherdAgentsAction::ResumeAll));
+    }
+
+    #[test]
+    fn test_agents_section_link_to_task() {
+        let mut state = ShepherdAgentsSectionState::default();
+        // nothing selected: the key does nothing
+        state.handle_key(&KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        assert!(state.spawn_form.is_none());
+
+        state.agents = vec![ShepherdAgentRow {
+            id: "coder-1".into(),
+            ..Default::default()
+        }];
+        state.handle_key(&KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        assert!(state.spawn_form.is_some());
+        state.spawn_form.as_mut().unwrap().fields[0].value = "abc".into();
+        let (_, act) = state.handle_key(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(act.is_none(), "a non-number is refused");
+        state.spawn_form.as_mut().unwrap().fields[0].value = "#12".into();
+        let (_, act) = state.handle_key(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            act,
+            Some(ShepherdAgentsAction::AssignTask {
+                agent_id: "coder-1".into(),
+                task: Some("12".into())
+            })
+        );
+        // empty detaches
+        state.handle_key(&KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        let (_, act) = state.handle_key(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            act,
+            Some(ShepherdAgentsAction::AssignTask {
+                agent_id: "coder-1".into(),
+                task: None
+            })
+        );
     }
 }

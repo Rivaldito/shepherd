@@ -275,7 +275,7 @@ pub fn render_shepherd_section(
                 let help = "↑/↓: list | c: capture | d/D: diff | f: file | R: all | x: delete | p: prune | Tab: finished | Esc: back";
                 (sum, help)
             } else {
-                let help = "↑/↓: list | Enter: terminal | s: new | t: snapshots | K: kill | x: clean | r: refresh | u: resume | Esc: quit";
+                let help = "↑/↓: list | Enter: terminal | s: new | t: snapshots | l: link task | K: kill | x: clean | r: refresh | u: resume | Esc: quit";
                 (sum, help)
             }
         }
