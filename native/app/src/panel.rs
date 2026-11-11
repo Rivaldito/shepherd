@@ -23,6 +23,8 @@ use shepherd_app_core::shepherd_core::service::patterns_run::PatternRunState;
 use shepherd_app_core::snapshot::{Snapshot, Status};
 use std::path::PathBuf;
 
+mod snapshots;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Overview,
@@ -35,6 +37,7 @@ pub enum Tab {
     Git,
     Events,
     Models,
+    Snapshots,
 }
 
 /// A button that needs a second click (no pop-ups).
@@ -49,6 +52,8 @@ pub enum Armed {
     DeleteTask(u32),
     ApproveGate(u32, Gate),
     RejectGate(u32, Gate),
+    RestoreSnapshot(String),
+    DeleteSnapshot(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +87,12 @@ pub enum PanelMsg {
     Arm(Armed),
     Confirm,
     Done(Result<String, String>),
+    SnapSelect(String),
+    SnapShown(
+        String,
+        Result<Box<shepherd_app_core::shepherd_core::snapshot::ShowResult>, String>,
+    ),
+    SnapCapture(String),
     ShowMonitor(String),
     Feed(Vec<BusMessage>),
     Cfg(crate::config_panel::CfgMsg),
@@ -158,6 +169,12 @@ pub struct Panel {
     pattern: Option<Choice>,
     objective: text_editor::Content,
     armed: Option<Armed>,
+    /// The snapshot picked in the Snapshots tab, and what the server said it holds.
+    snap: Option<String>,
+    snap_detail: Option<(
+        String,
+        Result<Box<shepherd_app_core::shepherd_core::snapshot::ShowResult>, String>,
+    )>,
     pub notice: String,
     monitor: Option<String>,
     feed: Vec<BusMessage>,
@@ -201,6 +218,7 @@ impl Default for Panel {
             Ok("git") => Tab::Git,
             Ok("events") => Tab::Events,
             Ok("models") => Tab::Models,
+            Ok("snapshots") => Tab::Snapshots,
             _ => Tab::Runs,
         };
         Self {
@@ -215,6 +233,8 @@ impl Default for Panel {
             pattern: None,
             objective: text_editor::Content::new(),
             armed: None,
+            snap: None,
+            snap_detail: None,
             notice: String::new(),
             monitor: None,
             feed: Vec::new(),
@@ -250,6 +270,25 @@ fn state_badge(state: PatternRunState) -> (&'static str, Color) {
         PatternRunState::Done => ("done", DIM),
         PatternRunState::Stopped => ("stopped", DIM),
     }
+}
+
+/// What an agent's Skills card says: the skills installed for it, and what was changed for this agent alone.
+fn agent_skill_lines(a: &shepherd_app_core::shepherd_core::Agent) -> Vec<String> {
+    let mut lines = vec![if a.active_skills.is_empty() {
+        "No skills were installed for this agent.".to_owned()
+    } else {
+        format!("Active: {}", a.active_skills.join(", "))
+    }];
+    if !a.skills.add.is_empty() {
+        lines.push(format!("Added for this agent: {}", a.skills.add.join(", ")));
+    }
+    if !a.skills.remove.is_empty() {
+        lines.push(format!(
+            "Removed for this agent: {}",
+            a.skills.remove.join(", ")
+        ));
+    }
+    lines
 }
 
 fn agent_status(state: &str) -> Status {
@@ -734,6 +773,36 @@ impl Panel {
                             },
                         );
                     }
+                    Armed::RestoreSnapshot(id) => {
+                        self.snap_detail = None;
+                        let root = snapshots::restore_root(ctx.data, &id);
+                        return Task::perform(
+                            async move {
+                                actions::snapshot_restore(&api, &id, &root).map(|r| {
+                                    format!(
+                                        "Restored {} ({} file(s)); the state before is snapshot {}",
+                                        r.restored.id,
+                                        r.restored_files.len(),
+                                        r.pre_restore.id
+                                    )
+                                })
+                            },
+                            |r| Message::Panel(PanelMsg::Done(r)),
+                        );
+                    }
+                    Armed::DeleteSnapshot(id) => {
+                        if self.snap.as_deref() == Some(id.as_str()) {
+                            self.snap = None;
+                        }
+                        self.snap_detail = None;
+                        return Task::perform(
+                            async move {
+                                actions::snapshot_delete(&api, &id, &root)
+                                    .map(|_| format!("Deleted snapshot {id}"))
+                            },
+                            |r| Message::Panel(PanelMsg::Done(r)),
+                        );
+                    }
                     Armed::ApproveGate(id, gate) => {
                         return Task::perform(
                             async move {
@@ -787,6 +856,17 @@ impl Panel {
                 return Task::done(Message::Reload);
             }
             PanelMsg::Done(Err(e)) => self.notice = e,
+            PanelMsg::SnapSelect(id) => {
+                self.snap = Some(id);
+                self.snap_detail = None;
+                return self.snap_show(ctx);
+            }
+            PanelMsg::SnapShown(id, shown) => {
+                if self.snap_id(ctx).as_deref() == Some(id.as_str()) {
+                    self.snap_detail = Some((id, shown));
+                }
+            }
+            PanelMsg::SnapCapture(agent) => return self.snap_capture(agent, ctx),
             PanelMsg::ShowMonitor(run) => {
                 self.tab = Tab::Monitor;
                 self.monitor = Some(run);
@@ -1008,6 +1088,7 @@ impl Panel {
                 self.cfg.loading = true;
                 Some(C::load_models(root))
             }
+            Tab::Snapshots => Some(self.snap_show(ctx)),
             _ => None,
         }
     }
@@ -1028,6 +1109,9 @@ impl Panel {
                 Some(task) => Task::batch([task, counts]),
                 None => counts,
             };
+        }
+        if self.tab == Tab::Snapshots {
+            return self.snap_show(ctx);
         }
         if self.tab == Tab::Patterns && self.pattern_sel.is_none() {
             if let Some(first) = ctx.data.patterns.first().map(|p| p.name.clone()) {
@@ -1109,6 +1193,7 @@ impl Panel {
                 Tab::Skills => (Some(counts.0), false),
                 Tab::Events => (Some(counts.1), false),
                 Tab::Models => (Some(counts.2), false),
+                Tab::Snapshots => (Some(ctx.data.snapshots.len()), false),
                 _ => (None, false),
             };
             let selected = self.tab == tab;
@@ -1185,6 +1270,7 @@ impl Panel {
                         (Tab::Git, "Git"),
                         (Tab::Events, "Events"),
                         (Tab::Models, "Models"),
+                        (Tab::Snapshots, "Snapshots"),
                     ]
                 ),
             ]
@@ -1210,6 +1296,7 @@ impl Panel {
             Tab::Git => self.cfg.git_view(),
             Tab::Events => self.cfg.events_view(ctx.frame),
             Tab::Models => self.cfg.models_view(),
+            Tab::Snapshots => self.snapshots_view(ctx),
         };
         column![tabs, body].into()
     }
@@ -1247,7 +1334,13 @@ impl Panel {
         let notice_text = if self.cfg.notice.is_empty()
             || matches!(
                 self.tab,
-                Tab::Overview | Tab::Runs | Tab::Agents | Tab::Tasks | Tab::Patterns | Tab::Monitor
+                Tab::Overview
+                    | Tab::Runs
+                    | Tab::Agents
+                    | Tab::Tasks
+                    | Tab::Patterns
+                    | Tab::Monitor
+                    | Tab::Snapshots
             ) {
             self.notice.clone()
         } else {
@@ -2142,6 +2235,17 @@ impl Panel {
                 text(a.task_text.clone()).size(13).into(),
             ));
         }
+        col = col.push(card(
+            "SKILLS",
+            None,
+            column(
+                agent_skill_lines(a)
+                    .into_iter()
+                    .map(|line| text(line).size(12.5).into()),
+            )
+            .spacing(4)
+            .into(),
+        ));
         if !a.result.is_empty() {
             col = col.push(card("RESULT", None, text(a.result.clone()).size(13).into()));
         }
@@ -2891,6 +2995,120 @@ mod tests {
         assert_eq!(panel.armed, Some(Armed::StopRun("run-1".into())));
         let _ = panel.update(PanelMsg::Tab(Tab::Agents), &ctx);
         assert_eq!(panel.armed, None);
+    }
+
+    fn snap(id: &str, created: u64) -> shepherd_app_core::shepherd_core::snapshot::SnapshotInfo {
+        use shepherd_app_core::shepherd_core::snapshot::{SnapshotInfo, SnapshotReason};
+        let (agent, n) = id.split_once('/').unwrap();
+        SnapshotInfo {
+            id: id.into(),
+            agent: agent.into(),
+            n: n.parse().unwrap(),
+            commit: "abcdef0123".into(),
+            reason: SnapshotReason::Manual,
+            created,
+            worktree: "/w".into(),
+            prev: None,
+            files: 1,
+            added: 2,
+            removed: 0,
+            omitted: vec![],
+        }
+    }
+
+    #[test]
+    fn the_snapshots_tab_shows_the_picked_snapshot_else_the_newest_and_changes_need_two_clicks() {
+        let data = Data {
+            snapshots: vec![snap("coder-1/2", 200), snap("coder-1/1", 100)],
+            ..Data::default()
+        };
+        let snapshot = Snapshot::default();
+        let ctx = Ctx {
+            api: PathBuf::from("/nowhere"),
+            data: &data,
+            snapshot: &snapshot,
+            frame: 0,
+        };
+        let mut panel = Panel::default();
+        assert_eq!(panel.snap_id(&ctx).as_deref(), Some("coder-1/2"));
+        let _ = panel.update(PanelMsg::SnapSelect("coder-1/1".into()), &ctx);
+        assert_eq!(panel.snap_id(&ctx).as_deref(), Some("coder-1/1"));
+        // a picked snapshot that was deleted falls back to the newest
+        panel.snap = Some("gone/9".into());
+        assert_eq!(panel.snap_id(&ctx).as_deref(), Some("coder-1/2"));
+        // the detail of another snapshot is not shown for this one
+        let _ = panel.update(
+            PanelMsg::SnapShown("coder-1/1".into(), Err("late answer".into())),
+            &ctx,
+        );
+        assert!(panel.snap_detail.is_none());
+
+        let restore = Armed::RestoreSnapshot("coder-1/2".into());
+        let _ = panel.update(PanelMsg::Arm(restore.clone()), &ctx);
+        assert_eq!(panel.armed, Some(restore));
+        let _ = panel.update(PanelMsg::Tab(Tab::Snapshots), &ctx);
+        assert_eq!(panel.armed, None, "anything else disarms it");
+        assert!(Panel::default()
+            .snap_id(&Ctx {
+                data: &Data::default(),
+                ..ctx
+            })
+            .is_none());
+    }
+
+    #[test]
+    fn an_agents_skills_card_lists_what_is_active_and_what_was_changed_for_it() {
+        use shepherd_app_core::shepherd_core::{Agent, SkillAdjust};
+        let none = Agent::default();
+        assert_eq!(
+            agent_skill_lines(&none),
+            ["No skills were installed for this agent."]
+        );
+        let agent = Agent {
+            active_skills: vec!["shepherd-comms".into(), "debug".into()],
+            skills: SkillAdjust {
+                add: vec!["debug".into()],
+                remove: vec!["review".into()],
+            },
+            ..Agent::default()
+        };
+        assert_eq!(
+            agent_skill_lines(&agent),
+            [
+                "Active: shepherd-comms, debug",
+                "Added for this agent: debug",
+                "Removed for this agent: review"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_snapshot_is_taken_in_the_agents_worktree_and_restored_where_it_was_taken() {
+        use shepherd_app_core::shepherd_core::Agent;
+        let agent = |id: &str, worktree: &str, root: &str| Agent {
+            id: id.into(),
+            worktree: worktree.into(),
+            root: root.into(),
+            ..Agent::default()
+        };
+        let mut shot = snap("coder-1/1", 100);
+        shot.worktree = "/wt/coder-1".into();
+        let data = Data {
+            root: PathBuf::from("/proj"),
+            agents: vec![
+                agent("coder-1", "/wt/coder-1", "/proj"),
+                agent("docs-1", "", "/other"),
+            ],
+            snapshots: vec![shot, snap("old/1", 50)],
+            ..Data::default()
+        };
+        assert_eq!(snapshots::capture_root(&data, "coder-1"), "/wt/coder-1");
+        // an agent without a worktree is snapshotted in its project, an unknown one in ours
+        assert_eq!(snapshots::capture_root(&data, "docs-1"), "/other");
+        assert_eq!(snapshots::capture_root(&data, "ghost"), "/proj");
+        assert_eq!(snapshots::restore_root(&data, "coder-1/1"), "/wt/coder-1");
+        assert_eq!(snapshots::restore_root(&data, "old/1"), "/w");
+        assert_eq!(snapshots::restore_root(&data, "missing/1"), "/proj");
     }
 
     #[test]

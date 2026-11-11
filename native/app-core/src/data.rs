@@ -8,6 +8,7 @@ use shepherd_core::bus::{Message, MessageBus};
 use shepherd_core::config::{self, Role, Vendor};
 use shepherd_core::patterns::PatternSummary;
 use shepherd_core::service::patterns_run::PatternRun;
+use shepherd_core::snapshot::SnapshotInfo;
 use shepherd_core::{read_task_section, Agent, CreatedTask, TaskStatus};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -79,6 +80,8 @@ pub struct Data {
     pub tasks: Vec<TaskRow>,
     /// Task runs waiting for a person to approve or reject a step.
     pub gates: Vec<GateRow>,
+    /// The worktree snapshots of every agent, newest first.
+    pub snapshots: Vec<SnapshotInfo>,
     pub patterns: Vec<PatternSummary>,
     pub models: Models,
 }
@@ -190,6 +193,10 @@ impl Data {
         Self {
             runs,
             tasks: parse_tasks(&ask("shepherd.task.list", json!({ "root": root_text }))),
+            snapshots: parse_snapshots(&ask(
+                "shepherd.snapshot.list",
+                json!({ "root": root_text, "all": true }),
+            )),
             gates: parse_gates(&ask(
                 "shepherd.call",
                 json!({ "op": "runs", "args": { "root": root_text } }),
@@ -253,6 +260,13 @@ pub fn parse_runs(list: &Value, mut show: impl FnMut(&str) -> Value) -> Vec<RunR
 }
 
 /// `shepherd.task.list`: each task has its status and the folder the server keeps its text in.
+/// The snapshots of `shepherd.snapshot.list`, newest first.
+pub fn parse_snapshots(reply: &Value) -> Vec<SnapshotInfo> {
+    let mut snapshots: Vec<SnapshotInfo> = parse_list(reply, "snapshots");
+    snapshots.sort_by(|a, b| b.created.cmp(&a.created).then(b.n.cmp(&a.n)));
+    snapshots
+}
+
 /// The task runs with a pending gate, from the `runs` op of `shepherd.call`. The gate is the string
 /// `"plan"` or `{"kind": "push_pr", "subtask": n}`; anything else is not a gate.
 pub fn parse_gates(reply: &Value) -> Vec<GateRow> {
@@ -519,6 +533,19 @@ mod tests {
             parse_list(&serde_json::from_str(PATTERNS).unwrap(), "patterns");
         assert_eq!(patterns.len(), 2);
         assert!(patterns.iter().any(|p| p.name == "duo"));
+    }
+
+    #[test]
+    fn snapshots_come_newest_first_and_a_server_without_them_gives_none() {
+        let snap = |agent: &str, n: u64, created: u64| {
+            json!({"id": format!("{agent}/{n}"), "agent": agent, "n": n, "commit": "abc", "reason": "manual",
+                   "created": created, "worktree": "/w", "files": 2, "added": 5, "removed": 1})
+        };
+        let reply = json!({"snapshots": [snap("coder-1", 1, 100), snap("coder-2", 1, 300), snap("coder-1", 2, 300)]});
+        let ids: Vec<String> = parse_snapshots(&reply).into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, ["coder-1/2", "coder-2/1", "coder-1/1"]);
+        assert!(parse_snapshots(&Value::Null).is_empty());
+        assert!(parse_snapshots(&json!({"snapshots": [{"id": "broken"}]})).is_empty());
     }
 
     #[test]

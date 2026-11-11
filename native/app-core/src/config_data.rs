@@ -8,7 +8,8 @@ use shepherd_core::git::{collect_git_status, GitRepoStatus};
 use shepherd_core::load_agent_registry;
 use shepherd_core::patterns;
 use shepherd_core::skills::{
-    name_ok, new_skill, override_skill, repo_skills_dir, user_skills_dir, validate, Catalog, Scope,
+    name_ok, new_skill, override_skill, repo_skills_dir, toggle, user_skills_dir, validate,
+    Catalog, Scope,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -102,6 +103,27 @@ fn editable_skill_file_in(root: &Path, user_dir: &Path, name: &str) -> Result<Pa
 pub fn save_skill(file: &Path, text: &str) -> Result<Vec<String>, String> {
     std::fs::write(file, text).map_err(|e| format!("{}: {e}", file.display()))?;
     Ok(validate(file))
+}
+
+/// Puts a skill in (or takes it out of) `skills.global` of the user's config: a global skill goes to every
+/// agent, whatever its role. When another layer decides it (the built-in defaults make some skills global,
+/// say) the file is left as it was and the error says why.
+pub fn set_global_skill(root: &Path, name: &str, on: bool) -> Result<(), String> {
+    set_global_skill_in(root, &config::global_config_path(), name, on)
+}
+
+fn set_global_skill_in(root: &Path, cfg_path: &Path, name: &str, on: bool) -> Result<(), String> {
+    if Catalog::load(Some(root), Some(&user_skills_dir()))
+        .get(name)
+        .is_none()
+    {
+        return Err(format!("unknown skill `{name}`"));
+    }
+    // start from what this file lists, not from the merged list: the other layers keep their own
+    let own = config::load_config_files(&[cfg_path.to_path_buf()])
+        .map(|c| c.skills.global)
+        .map_err(|e| e.to_string())?;
+    toggle(cfg_path, "skills.global", name, on, &own, root)
 }
 
 /// Deletes the folder of a skill of the user or of the project, and everything in it. One that ships with
@@ -313,6 +335,44 @@ mod tests {
         // broken frontmatter is written (the text is the user's) and reported
         let problems = save_skill(&file, "no frontmatter at all").unwrap();
         assert!(!problems.is_empty(), "{problems:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_skill_is_made_global_in_the_users_config_and_taken_out_again() {
+        let dir = scratch("global-skill");
+        let (root, cfg) = (dir.join("proj"), dir.join("config.yaml"));
+        std::fs::create_dir_all(&root).unwrap();
+        let own = || {
+            config::load_config_files(std::slice::from_ref(&cfg))
+                .unwrap()
+                .skills
+                .global
+        };
+        let defaults = config::load_config_files(&[]).unwrap().skills.global;
+        assert!(
+            !defaults.iter().any(|s| s == "debug"),
+            "premise of the test"
+        );
+
+        set_global_skill_in(&root, &cfg, "debug", true).unwrap();
+        assert!(own().iter().any(|s| s == "debug"));
+        // doing it twice changes nothing
+        set_global_skill_in(&root, &cfg, "debug", true).unwrap();
+        assert_eq!(own().iter().filter(|s| *s == "debug").count(), 1);
+        set_global_skill_in(&root, &cfg, "debug", false).unwrap();
+        assert!(!own().iter().any(|s| s == "debug"));
+
+        assert!(set_global_skill_in(&root, &cfg, "nope", true)
+            .unwrap_err()
+            .contains("unknown skill"));
+        // a skill the built-in defaults make global cannot be removed from here: say so, leave the file alone
+        if let Some(builtin) = defaults.first() {
+            let before = std::fs::read_to_string(&cfg).ok();
+            let why = set_global_skill_in(&root, &cfg, builtin, false).unwrap_err();
+            assert!(why.contains("another layer"), "{why}");
+            assert_eq!(std::fs::read_to_string(&cfg).ok(), before);
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
