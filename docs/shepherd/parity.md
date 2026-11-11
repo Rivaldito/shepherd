@@ -14,7 +14,7 @@ The desktop app (GUI), the terminal UI (TUI) and the CLI are three front ends fo
 | Clean finished agents | ✔ | ✔ | ✔ `clean` |
 | Resume after a server restart | ✔ | ✔ `u` (#22) | ✔ `resume` (#21) |
 | Reconcile with the terminals | ✘ | ✘ | ✔ `reconcile` (#21) |
-| Link an agent to a task | ✔ (#24) | ✔ `l` (#32) | ✔ `assign` (#24) |
+| Link an agent to a task | ✔ (#24) | ✘ | ✔ `assign` (#24) |
 | Open an agent's terminal | `?` | ✔ | ✔ `attach`, `focus` |
 | Skills of one agent (turn on/off, restore) | read only (#17) | ✘ broken, see below | ✘ |
 
