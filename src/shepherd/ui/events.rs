@@ -46,8 +46,10 @@ impl ShepherdEventsSubTab {
 }
 
 /// What the clean-up confirmation is about.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EventsClean {
+    /// Remove one pattern run (an active one is stopped first, which closes its agents).
+    DeleteRun(String),
     /// Forget the pattern runs that are done, failed or stopped.
     Runs,
     /// Delete every message of the event bus.
@@ -56,6 +58,9 @@ pub enum EventsClean {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ShepherdEventsAction {
+    DeleteRun {
+        id: String,
+    },
     CleanRuns,
     CleanBus,
     RefreshTopics,
@@ -283,10 +288,24 @@ impl ShepherdEventsSectionState {
         });
     }
 
+    /// Asks before removing the selected pattern run (runs view only).
+    pub fn start_delete_run(&mut self) -> bool {
+        if self.active_subtab != ShepherdEventsSubTab::PatternRuns {
+            return false;
+        }
+        let Some(id) = self.selected_run_row().map(|r| r.id.clone()) else {
+            return false;
+        };
+        self.confirm_stop_run = None;
+        self.confirm_clean = Some(EventsClean::DeleteRun(id));
+        true
+    }
+
     /// Confirms whatever the stripe asks: stopping a run or cleaning up.
     pub fn confirm_stop(&mut self) {
         if let Some(kind) = self.confirm_clean.take() {
             self.last_action = Some(match kind {
+                EventsClean::DeleteRun(id) => ShepherdEventsAction::DeleteRun { id },
                 EventsClean::Runs => ShepherdEventsAction::CleanRuns,
                 EventsClean::Bus => ShepherdEventsAction::CleanBus,
             });
@@ -446,6 +465,7 @@ impl ShepherdEventsSectionState {
                 self.start_clean();
                 true
             }
+            KeyCode::Char('D') => self.start_delete_run(),
             KeyCode::Char('x') => {
                 if self.active_subtab == ShepherdEventsSubTab::PatternRuns {
                     self.start_stop_run();
@@ -503,8 +523,15 @@ pub fn render_events_section(
     }
 
     // If confirmation stripe active
-    let (main_area, stripe_area) = if let Some(kind) = state.confirm_clean {
+    let (main_area, stripe_area) = if let Some(kind) = &state.confirm_clean {
+        let delete_prompt;
         let prompt = match kind {
+            EventsClean::DeleteRun(id) => {
+                delete_prompt = format!(
+                    "Delete run '{id}'? If it is still running it is stopped and its agents are closed."
+                );
+                delete_prompt.as_str()
+            }
             EventsClean::Runs => {
                 "Forget the runs that are done, failed or stopped? Running ones stay."
             }
@@ -1221,7 +1248,7 @@ mod tests {
         assert_eq!(state.last_action, None);
         assert!(state.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         assert_eq!(
-            (state.confirm_clean, state.last_action.clone()),
+            (state.confirm_clean.clone(), state.last_action.clone()),
             (None, None)
         );
 
@@ -1243,6 +1270,54 @@ mod tests {
         assert_eq!(
             state.last_action.take(),
             Some(ShepherdEventsAction::CleanRuns)
+        );
+        assert_eq!(state.confirm_clean, None);
+    }
+
+    #[test]
+    fn test_events_delete_run_asks_for_the_selected_run() {
+        use crossterm::event::KeyModifiers;
+        let key = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let run = |id: &str| PatternRunSummary {
+            id: id.into(),
+            pattern: "p".into(),
+            kind: "blackboard".into(),
+            state: PatternRunState::Done,
+            agents_count: 2,
+            live_agents: 0,
+            topics_count: 1,
+            created_at: "2026-11-05T12:00:00Z".into(),
+            updated_at: "2026-11-05T12:00:00Z".into(),
+        };
+        let mut state = ShepherdEventsSectionState::default();
+
+        // not on the topics view, and not with nothing selected
+        assert!(!state.handle_key(key('D')));
+        state.active_subtab = ShepherdEventsSubTab::PatternRuns;
+        assert!(!state.handle_key(key('D')));
+        assert_eq!(state.confirm_clean, None);
+
+        state.runs = vec![run("run-a"), run("run-b")];
+        state.selected_run = 1;
+        assert!(state.handle_key(key('D')));
+        assert_eq!(
+            state.confirm_clean,
+            Some(EventsClean::DeleteRun("run-b".into()))
+        );
+        assert_eq!(state.last_action, None, "nothing is sent before the answer");
+        // Esc cancels
+        state.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(
+            (state.confirm_clean.clone(), state.last_action.clone()),
+            (None, None)
+        );
+
+        state.handle_key(key('D'));
+        state.handle_key(enter);
+        assert_eq!(
+            state.last_action.take(),
+            Some(ShepherdEventsAction::DeleteRun { id: "run-b".into() })
         );
         assert_eq!(state.confirm_clean, None);
     }
