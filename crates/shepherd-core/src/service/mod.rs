@@ -1241,6 +1241,21 @@ impl OrchestrationService {
                     }
                 }
             }
+            "import_task" | "publish_branch" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let text = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("");
+                if op == "import_task" {
+                    self.import_task(&root, text("issue_ref"))
+                } else {
+                    self.publish_branch(root, text("branch"))
+                }
+            }
             "runs_clean" => {
                 let root = args
                     .get("root")
@@ -1422,6 +1437,7 @@ impl OrchestrationService {
 
 pub mod delivery;
 pub mod gates;
+pub mod import_publish;
 pub(crate) mod pattern_prompt;
 pub mod patterns_run;
 pub mod reconcile;
