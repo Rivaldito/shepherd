@@ -328,6 +328,7 @@ skills, roles, config
   skills create <name> [--description <text>] [--repo] [--global]
   skills delete <name>                    a built-in skill cannot be deleted
   skills global <name> [--off]            send a skill to every agent, or stop doing so
+  skills agent <agent> <skill> on|off|default   change one agent's skills; applies at its next start
   roles list
   vendors list
   config path | validate | enable
@@ -1748,6 +1749,7 @@ mod tests {
             "skills create",
             "skills delete",
             "skills global",
+            "skills agent",
             "git branch",
             "git worktree add",
             "git publish",
