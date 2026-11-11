@@ -44,7 +44,7 @@ The desktop app (GUI), the terminal UI (TUI) and the CLI are three front ends fo
 | Start a run for a task | via agent or pattern | ✔ | ✔ `run` |
 | Cancel a task's run | ✔ (#26) | ✔ (#18) | ✔ `cancel` (#18) |
 | Approve a gate | ✔ (#15) | ✔ | ✔ `approve` |
-| Reject a gate (with a reason) | ✔ (#15, reason #29) | ✔ | ✔ `reject --reason` |
+| Reject a gate | ✔ (#15, no reason text yet) | ✔ | ✔ `reject --reason` |
 
 ## Patterns (teams)
 
