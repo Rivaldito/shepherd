@@ -2957,3 +2957,54 @@ fn git_admin_ops_run_in_the_given_root() {
         .unwrap_err()
         .contains("missing 'path'"));
 }
+
+#[test]
+fn publish_branch_needs_a_gate_waiting_on_that_branch() {
+    let tmp = TestDir::new("publish-gate");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let root = tmp.path().to_str().unwrap();
+    service
+        .handle_call(
+            "task_create",
+            serde_json::json!({
+                "root": root, "title": "T", "description": "d", "criteria": [], "attachments": []
+            }),
+        )
+        .unwrap();
+    let mut t = crate::find_task(tmp.path(), "1").unwrap();
+    t.status.subtasks = vec![crate::Subtask {
+        number: 1,
+        title: "s".into(),
+        body: String::new(),
+        depends_on: vec![],
+        verify: vec![],
+        state: "coding".into(), // not awaiting approval yet
+        note: None,
+        coder: "coder-1".into(),
+        reviewer: String::new(),
+        round: 0,
+        branch: "shep/1-x".into(),
+        pr: String::new(),
+    }];
+    crate::save_task_status(t.directory.join("status.json"), &t.status).unwrap();
+    for branch in ["shep/1-x", "main", "nope"] {
+        let err = service
+            .handle_call(
+                "publish_branch",
+                serde_json::json!({ "root": root, "branch": branch }),
+            )
+            .unwrap_err();
+        assert!(err.contains("no task is waiting"), "{branch}: {err}");
+    }
+    assert!(service
+        .handle_call("publish_branch", serde_json::json!({ "root": root }))
+        .unwrap_err()
+        .contains("missing 'branch'"));
+    assert!(service
+        .handle_call(
+            "import_task",
+            serde_json::json!({ "root": root, "issue_ref": "--web" })
+        )
+        .unwrap_err()
+        .contains("not an issue"));
+}
