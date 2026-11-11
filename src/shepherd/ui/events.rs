@@ -56,8 +56,34 @@ pub enum EventsClean {
     Bus,
 }
 
+/// A one-line text prompt on the Topics view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Compose {
+    /// `name` or `name:partitions`.
+    Topic(String),
+    /// A message for the named topic.
+    Message { topic: String, text: String },
+}
+
+impl Compose {
+    fn text_mut(&mut self) -> &mut String {
+        match self {
+            Compose::Topic(t) => t,
+            Compose::Message { text, .. } => text,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ShepherdEventsAction {
+    CreateTopic {
+        name: String,
+        partitions: u32,
+    },
+    Publish {
+        topic: String,
+        content: String,
+    },
     DeleteRun {
         id: String,
     },
@@ -136,6 +162,7 @@ pub struct ShepherdEventsSectionState {
     pub editing_agent_filter: bool,
     pub confirm_stop_run: Option<String>,
     pub confirm_clean: Option<EventsClean>,
+    pub compose: Option<Compose>,
     pub last_action: Option<ShepherdEventsAction>,
     pub error: Option<String>,
 }
@@ -160,6 +187,7 @@ impl Default for ShepherdEventsSectionState {
             editing_agent_filter: false,
             confirm_stop_run: None,
             confirm_clean: None,
+            compose: None,
             last_action: None,
             error: None,
         }
@@ -301,6 +329,62 @@ impl ShepherdEventsSectionState {
         true
     }
 
+    /// `n` starts a new topic, `m` a message for the selected topic (Topics view only).
+    pub fn start_compose(&mut self, new_topic: bool) -> bool {
+        if self.active_subtab != ShepherdEventsSubTab::Topics {
+            return false;
+        }
+        self.compose = if new_topic {
+            Some(Compose::Topic(String::new()))
+        } else {
+            let Some(topic) = self.topics.get(self.selected_topic).map(|t| t.name.clone()) else {
+                self.error = Some("Select a topic first".into());
+                return true;
+            };
+            Some(Compose::Message {
+                topic,
+                text: String::new(),
+            })
+        };
+        true
+    }
+
+    fn submit_compose(&mut self) {
+        let Some(compose) = self.compose.take() else {
+            return;
+        };
+        match compose {
+            Compose::Topic(raw) => {
+                let raw = raw.trim();
+                let (name, parts) = raw.split_once(':').unwrap_or((raw, "1"));
+                let (name, parts) = (name.trim(), parts.trim().parse::<u32>());
+                match parts {
+                    Ok(partitions) if !name.is_empty() && partitions > 0 => {
+                        self.last_action = Some(ShepherdEventsAction::CreateTopic {
+                            name: name.to_string(),
+                            partitions,
+                        });
+                    }
+                    _ => {
+                        self.error =
+                            Some("A topic is a name, or name:partitions (e.g. news:2)".into());
+                        self.compose = Some(Compose::Topic(raw.to_string()));
+                    }
+                }
+            }
+            Compose::Message { topic, text } => {
+                if text.trim().is_empty() {
+                    self.compose = Some(Compose::Message { topic, text });
+                } else {
+                    self.last_action = Some(ShepherdEventsAction::Publish {
+                        topic,
+                        content: text,
+                    });
+                }
+            }
+        }
+    }
+
     /// Confirms whatever the stripe asks: stopping a run or cleaning up.
     pub fn confirm_stop(&mut self) {
         if let Some(kind) = self.confirm_clean.take() {
@@ -315,6 +399,9 @@ impl ShepherdEventsSectionState {
     }
 
     pub fn cancel_sub_action(&mut self) -> bool {
+        if self.compose.take().is_some() {
+            return true;
+        }
         if self.confirm_clean.take().is_some() {
             return true;
         }
@@ -345,6 +432,19 @@ impl ShepherdEventsSectionState {
                 }
                 _ => return true,
             }
+        }
+
+        if let Some(compose) = self.compose.as_mut() {
+            match key.code {
+                KeyCode::Enter => self.submit_compose(),
+                KeyCode::Esc => self.compose = None,
+                KeyCode::Backspace => {
+                    compose.text_mut().pop();
+                }
+                KeyCode::Char(c) => compose.text_mut().push(c),
+                _ => {}
+            }
+            return true;
         }
 
         // Inline text inputs
@@ -461,6 +561,8 @@ impl ShepherdEventsSectionState {
                     false
                 }
             }
+            KeyCode::Char('n') => self.start_compose(true),
+            KeyCode::Char('m') => self.start_compose(false),
             KeyCode::Char('C') => {
                 self.start_clean();
                 true
@@ -523,7 +625,26 @@ pub fn render_events_section(
     }
 
     // If confirmation stripe active
-    let (main_area, stripe_area) = if let Some(kind) = &state.confirm_clean {
+    let (main_area, stripe_area) = if let Some(compose) = &state.compose {
+        let prompt = match compose {
+            Compose::Topic(t) => format!("New topic (name or name:partitions) > {t}_"),
+            Compose::Message { topic, text } => format!("Message for '{topic}' > {text}_"),
+        };
+        let parts = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(4), Constraint::Length(3)])
+            .split(content_area);
+        hits.confirm_stripe_hits = Some(render_confirm_stripe(
+            buffer,
+            parts[1],
+            &prompt,
+            "Send (Enter)",
+            "Cancel (Esc)",
+            true,
+            palette,
+        ));
+        (parts[0], Some(parts[1]))
+    } else if let Some(kind) = &state.confirm_clean {
         let delete_prompt;
         let prompt = match kind {
             EventsClean::DeleteRun(id) => {
@@ -1320,5 +1441,60 @@ mod tests {
             Some(ShepherdEventsAction::DeleteRun { id: "run-b".into() })
         );
         assert_eq!(state.confirm_clean, None);
+    }
+
+    #[test]
+    fn test_events_new_topic_and_message() {
+        use crossterm::event::KeyModifiers;
+        let key = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let mut state = ShepherdEventsSectionState::default();
+
+        // no topic selected: a message has nowhere to go
+        state.handle_key(key('m'));
+        assert!(state.compose.is_none());
+
+        state.handle_key(key('n'));
+        for c in "news:x".chars() {
+            state.handle_key(key(c));
+        }
+        state.handle_key(enter);
+        assert_eq!(state.last_action, None, "a bad partition count is refused");
+        assert!(state.compose.is_some());
+        state.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        state.handle_key(key('2'));
+        state.handle_key(enter);
+        assert_eq!(
+            state.last_action.take(),
+            Some(ShepherdEventsAction::CreateTopic {
+                name: "news".into(),
+                partitions: 2
+            })
+        );
+
+        state.topics = vec![ShepherdTopicRow {
+            name: "news".into(),
+            partitions: 2,
+            messages_count: 0,
+            groups_count: 0,
+        }];
+        state.handle_key(key('m'));
+        state.handle_key(enter);
+        assert_eq!(state.last_action, None, "an empty message is not sent");
+        for c in "hi".chars() {
+            state.handle_key(key(c));
+        }
+        state.handle_key(enter);
+        assert_eq!(
+            state.last_action.take(),
+            Some(ShepherdEventsAction::Publish {
+                topic: "news".into(),
+                content: "hi".into()
+            })
+        );
+        // Esc drops the prompt
+        state.handle_key(key('n'));
+        state.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(state.compose.is_none());
     }
 }
