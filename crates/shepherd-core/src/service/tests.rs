@@ -2844,3 +2844,62 @@ fn closing_an_agents_tab_removes_it_but_keeps_a_delivered_result() {
         "the result stays as a record"
     );
 }
+
+#[test]
+fn cancel_run_marks_the_task_cancelled_once() {
+    let tmp = TestDir::new("cancel-run");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let root = tmp.path().to_str().unwrap();
+    service
+        .handle_call(
+            "task_create",
+            serde_json::json!({
+                "root": root, "title": "To cancel", "description": "d",
+                "criteria": ["- [ ] c"], "attachments": []
+            }),
+        )
+        .unwrap();
+
+    let out = service
+        .handle_call(
+            "cancel_run",
+            serde_json::json!({ "root": root, "task": "1" }),
+        )
+        .unwrap();
+    assert_eq!(out["state"], "cancelled");
+    assert_eq!(
+        crate::find_task(tmp.path(), "1").unwrap().status.state,
+        "cancelled"
+    );
+    // the run list shows it as cancelled, which is what the interfaces render
+    let runs = service.list_runs(tmp.path()).unwrap();
+    assert_eq!(runs[0].status, "cancelled");
+
+    let again = service
+        .handle_call(
+            "cancel_run",
+            serde_json::json!({ "root": root, "task": "1" }),
+        )
+        .unwrap_err();
+    assert!(again.contains("already cancelled"), "{again}");
+    assert!(service
+        .handle_call(
+            "cancel_run",
+            serde_json::json!({ "root": root, "task": "99" })
+        )
+        .is_err());
+    assert!(service
+        .handle_call("cancel_run", serde_json::json!({ "root": root }))
+        .unwrap_err()
+        .contains("missing 'task'"));
+}
+
+#[test]
+fn skill_admin_ops_require_a_name() {
+    let tmp = TestDir::new("skills-admin-ops");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    for op in ["skills_create", "skills_delete", "skills_global"] {
+        let err = service.handle_call(op, serde_json::json!({})).unwrap_err();
+        assert!(err.contains("missing 'name'"), "{op}: {err}");
+    }
+}

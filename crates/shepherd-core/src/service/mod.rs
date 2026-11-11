@@ -1157,6 +1157,59 @@ impl OrchestrationService {
                 )?;
                 serde_json::to_value(run).map_err(|e| e.to_string())
             }
+            "cancel_run" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let task = args
+                    .get("task")
+                    .and_then(Value::as_str)
+                    .ok_or("missing 'task' for cancel_run")?;
+                self.cancel_run(root, task)
+            }
+            "skills_create" | "skills_delete" | "skills_global" => {
+                use crate::skills::Scope;
+                use crate::skills_admin as admin;
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let name = args
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| format!("missing 'name' for {op}"))?;
+                let flag = |key: &str| args.get(key).and_then(Value::as_bool).unwrap_or(false);
+                let text = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("");
+                match op {
+                    "skills_create" => {
+                        let scope = if text("scope") == "repo" {
+                            Scope::Repo
+                        } else {
+                            Scope::User
+                        };
+                        let file = admin::create(&root, name, text("description"), scope)?;
+                        if flag("global") {
+                            admin::set_global(&root, name, true)?;
+                        }
+                        Ok(serde_json::json!({ "name": name, "file": file }))
+                    }
+                    "skills_delete" => {
+                        admin::delete(&root, name)?;
+                        Ok(serde_json::json!({ "name": name, "deleted": true }))
+                    }
+                    _ => {
+                        admin::set_global(&root, name, flag("global"))?;
+                        Ok(serde_json::json!({ "name": name, "global": flag("global") }))
+                    }
+                }
+            }
             "runs_clean" => {
                 let root = args
                     .get("root")

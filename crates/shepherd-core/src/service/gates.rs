@@ -6,6 +6,35 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 impl OrchestrationService {
+    /// Stops a task's run: closes the agents linked to it that are still alive and marks the task `cancelled`.
+    /// Work already committed stays on its branches. A task that is finished or already cancelled is refused.
+    pub fn cancel_run(&self, root: PathBuf, task: &str) -> Result<Value, String> {
+        let found = find_task(&root, task).map_err(|e| e.to_string())?;
+        let mut status = found.status.clone();
+        if matches!(status.state.as_str(), "done" | "cancelled") {
+            return Err(format!("task {} is already {}", status.id, status.state));
+        }
+        let live: Vec<String> = self
+            .load_registry()?
+            .live()
+            .iter()
+            .map(|a| a.id.clone())
+            .filter(|id| status.agents.contains(id))
+            .collect();
+        let mut killed = Vec::new();
+        for id in live {
+            if self.kill(&id).is_ok() {
+                killed.push(id);
+            }
+        }
+        status.state = "cancelled".into();
+        status.waiting.clear();
+        status.updated = crate::tasks::now_rfc3339();
+        crate::save_task_status(found.directory.join("status.json"), &status)
+            .map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({ "task": status.id, "state": status.state, "killed": killed }))
+    }
+
     pub fn run_workflow(
         &self,
         root: PathBuf,
