@@ -274,8 +274,62 @@ pub(crate) enum ShepherdOperation {
     Local(LocalCommand),
 }
 
-pub(crate) const USAGE_STRING: &str =
-    "usage: shepherd attach [shepherd-agent-name-or-pane-id] [--takeover] | shepherd mcp serve [port] | shepherd run <task-id> [--mcp-url <url>] [--auto-push] [--wait] [--json] | shepherd approve <task-id> plan|<subtask-number> [--json] | shepherd reject <task-id> plan|<subtask-number> [--reason <text>] [--json] | shepherd spawn <role> <task...> [--task-id <id>] [--vendor <name>] [--model <name>] [--mcp-url <url>] [--json] | shepherd agents [--json] | shepherd skills list [--json] | shepherd runs list [--json] | shepherd roles list [--json] | shepherd vendors list [--json] | shepherd config path|validate|enable [--json] | shepherd task new <title> [--description <text>] [--criteria <text>]... [--id <number>] [--json] | task list [--archived] [--json] | task show <id-or-name> [section] [--json] | task plan <id-or-name> [--save] [--json] | task edit <id-or-name> [section] | task path <id-or-name> [--json] | task archive <id-or-name> [--json] | shepherd pattern list [--json] | pattern show <name> [--json] | pattern new <name> --from <template|name> [--global] [--json] | pattern validate <name|--file path> [--json] | pattern delete <name> [--json] | pattern edit <name> | pattern run <name> [--task <task>] [--worktree <path>] [--confirm-over-limit] [--json] | pattern runs [--json] | pattern pause <id> [--json] | pattern resume <id> [--json] | pattern stop <id> [--confirm] [--json] | shepherd topic list [--json] | topic create <name> [--partitions <n>] [--json] | topic publish <topic> <content> [--key <key>] [--partition <p>] [--from <from>] [--json] | topic tail <topic> [--partition <p>] [--limit <n>] [--json] | topic replay <topic> [--partition <p>] [--from <offset>] [--limit <n>] [--json] | topic groups [topic] [--json]";
+pub(crate) const USAGE_STRING: &str = "usage: shepherd <command> [--json]
+
+agents
+  agents                                  list agents
+  spawn <role> <task...> [--task-id <id>] [--vendor <name>] [--model <name>] [--mcp-url <url>]
+  attach [agent-name-or-pane-id] [--takeover]
+  focus <agent>                           focus an agent's pane
+  kill <agent>                            close an agent
+  clean [<agent>...] [--workspace <name>] remove finished or killed agents
+  resume                                  what the server does at start: mark agents left over by a restart
+  reconcile                               check the agents against their terminals now
+
+tasks and runs
+  task new <title> [--description <text>] [--criteria <text>]... [--id <number>]
+  task list [--archived] | show <id> [section] | plan <id> [--save] | edit <id> [section] | path <id>
+  task archive <id>                       hide a task (keeps it)
+  task delete <id> [--archived] --confirm remove a task's folder for good
+  task import <issue-number-or-url>       create a task from a GitHub issue (needs gh)
+  run <task-id> [--mcp-url <url>] [--auto-push] [--wait]
+  runs list
+  cancel <task-id>                        stop a task's run and close its agents
+  approve <task-id> plan|<subtask-number>
+  reject <task-id> plan|<subtask-number> [--reason <text>]
+
+patterns (teams)
+  pattern list | show <name> | validate <name|--file path> | delete <name> | edit <name>
+  pattern new <name> --from <template|name> [--global]
+  pattern run <name> [--task <task>] [--worktree <path>] [--confirm-over-limit]
+  pattern runs | pause <id> | resume <id> | stop <id> [--confirm]
+  pattern clean                           forget finished pattern runs
+
+event bus
+  topic list | create <name> [--partitions <n>] | groups [topic]
+  topic publish <topic> <content> [--key <key>] [--partition <p>] [--from <from>]
+  topic tail <topic> [--partition <p>] [--limit <n>]
+  topic replay <topic> [--partition <p>] [--from <offset>] [--limit <n>]
+  bus clean [--force]                     delete every bus message
+
+snapshots (shepherd snapshot --help for the options)
+  snapshot capture <agent> | list | show <id> | diff <id> [<id>] | restore <id> | delete <id> | prune
+
+git
+  git status
+  git branch <name> [--base <ref>]
+  git worktree add <path> --branch <name> | git worktree remove <path>
+  git publish <branch>                    push and open the PR of a subtask waiting for approval
+
+skills, roles, config
+  skills list
+  skills create <name> [--description <text>] [--repo] [--global]
+  skills delete <name>                    a built-in skill cannot be deleted
+  skills global <name> [--off]            send a skill to every agent, or stop doing so
+  roles list
+  vendors list
+  config path | validate | enable
+  mcp serve [port]";
 
 // =========================================================================
 // Command Definitions
@@ -1647,6 +1701,61 @@ mod tests {
             assert!(msg.starts_with("usage: shepherd"));
         } else {
             panic!("expected usage error");
+        }
+    }
+
+    #[test]
+    fn the_help_lists_every_command_the_cli_routes() {
+        for name in [
+            "agents",
+            "spawn",
+            "attach",
+            "focus",
+            "kill",
+            "clean",
+            "resume",
+            "reconcile",
+            "task",
+            "run",
+            "runs",
+            "cancel",
+            "approve",
+            "reject",
+            "pattern",
+            "topic",
+            "bus",
+            "snapshot",
+            "git",
+            "skills",
+            "roles",
+            "vendors",
+            "config",
+            "mcp",
+        ] {
+            assert!(
+                USAGE_STRING
+                    .lines()
+                    .any(|l| l.trim_start().starts_with(name)),
+                "`{name}` is routed by the CLI but missing from its help"
+            );
+        }
+        // the sub-commands added with the parity work
+        for sub in [
+            "task delete",
+            "task import",
+            "skills create",
+            "skills delete",
+            "skills global",
+            "git branch",
+            "git worktree add",
+            "git publish",
+            "pattern clean",
+            "bus clean",
+        ] {
+            assert!(
+                USAGE_STRING.contains(sub),
+                "`{sub}` is missing from the help"
+            );
         }
     }
 }
