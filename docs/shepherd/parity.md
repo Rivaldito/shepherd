@@ -35,14 +35,14 @@ The desktop app (GUI), the terminal UI (TUI) and the CLI are three front ends fo
 | Edit | ✔ (#24) | ✔ (opens your editor) | ✔ `task edit` |
 | Archive | ✔ | ✔ | ✔ `task archive` |
 | Delete for good | ✔ (#21) | ✔ `D` (#22) | ✔ `task delete --confirm` (#21) |
-| Import a GitHub issue | ✘ | ✔ (#20) | ✔ `task import` (#21) |
+| Import a GitHub issue | ✔ (#26) | ✔ (#20) | ✔ `task import` (#21) |
 
 ## Runs and gates
 
 | Function | GUI | TUI | CLI |
 |---|---|---|---|
 | Start a run for a task | via agent or pattern | ✔ | ✔ `run` |
-| Cancel a task's run | ✘ | ✔ (#18) | ✔ `cancel` (#18) |
+| Cancel a task's run | ✔ (#26) | ✔ (#18) | ✔ `cancel` (#18) |
 | Approve a gate | ✔ (#15) | ✔ | ✔ `approve` |
 | Reject a gate | ✔ (#15, no reason text yet) | ✔ | ✔ `reject --reason` |
 
@@ -86,7 +86,7 @@ The desktop app (GUI), the terminal UI (TUI) and the CLI are three front ends fo
 ## Known gaps
 
 - **Per-agent skills.** The TUI sends `skills_toggle` and `skills_restore`, but the server has no such operations, so those two actions fail with "unknown shepherd operation". What they should do to an agent that is already running (change its installed copy now, or only apply at its next start) is not decided.
-- **GUI:** git actions (branch, worktree), importing an issue, cancelling a run, a reason when rejecting a gate, snapshot prune and diff against the current worktree, and the bus-topic create/publish.
+- **GUI:** git actions (branch, worktree), a reason when rejecting a gate, snapshot prune and diff against the current worktree, and the bus-topic create/publish.
 - **TUI:** linking an agent to a task, deleting a single pattern run, creating a topic or publishing to it.
 
 ## How this is kept true

@@ -258,6 +258,27 @@ pub fn reject_gate(
     call(api, "shepherd.run.reject", params).map(|_| ())
 }
 
+/// Stops a task's run: the server closes the agents linked to it and marks the task cancelled. Returns how many
+/// agents it closed. Commits already made stay on their branches.
+pub fn cancel_run(api: &Path, task_id: u32, root: &str) -> Result<usize, String> {
+    let reply = call(
+        api,
+        "shepherd.call",
+        json!({ "op": "cancel_run", "args": { "task": task_id.to_string(), "root": root } }),
+    )?;
+    Ok(reply["data"]["killed"].as_array().map_or(0, Vec::len))
+}
+
+/// Creates a task from a GitHub issue (a number, `owner/repo#n` or a URL; needs `gh`). Returns the task's number.
+pub fn import_issue(api: &Path, issue_ref: &str, root: &str) -> Result<u32, String> {
+    let reply = call(
+        api,
+        "shepherd.call",
+        json!({ "op": "import_task", "args": { "issue_ref": issue_ref.trim(), "root": root } }),
+    )?;
+    Ok(reply["data"]["status"]["id"].as_u64().unwrap_or(0) as u32)
+}
+
 /// Kills an agent (if not already in a terminal state) and cleans it from the registry.
 pub fn kill_and_clean_agent(api: &Path, id: &str) -> Result<(), String> {
     // Kill if still alive
@@ -352,6 +373,31 @@ mod tests {
         assert_eq!(seen[1]["params"]["target"], "2");
         assert_eq!(seen[1]["params"]["reason"], "too broad");
         assert!(seen[2]["params"].get("reason").is_none());
+    }
+
+    #[test]
+    fn a_run_is_cancelled_and_an_issue_imported_with_what_the_server_expects() {
+        let (path, server) = fake_server(vec![
+            r#"{"id":"1","result":{"type":"shepherd_call","data":{"task":3,"state":"cancelled","killed":["coder-1","coder-2"]}}}"#,
+            r#"{"id":"2","error":{"code":"shepherd_error","message":"task 3 is already cancelled"}}"#,
+            r#"{"id":"3","result":{"type":"shepherd_call","data":{"status":{"id":8,"title":"Fix login"}}}}"#,
+            r#"{"id":"4","error":{"code":"shepherd_error","message":"issue #7 is already task 8"}}"#,
+        ]);
+        assert_eq!(cancel_run(&path, 3, "/p").unwrap(), 2);
+        assert_eq!(
+            cancel_run(&path, 3, "/p").unwrap_err(),
+            "task 3 is already cancelled"
+        );
+        assert_eq!(import_issue(&path, "  #7 ", "/p").unwrap(), 8);
+        assert!(import_issue(&path, "7", "/p")
+            .unwrap_err()
+            .contains("already task"));
+        let seen = server.join().unwrap();
+        assert_eq!(seen[0]["params"]["op"], "cancel_run");
+        assert_eq!(seen[0]["params"]["args"]["task"], "3");
+        assert_eq!(seen[0]["params"]["args"]["root"], "/p");
+        assert_eq!(seen[2]["params"]["op"], "import_task");
+        assert_eq!(seen[2]["params"]["args"]["issue_ref"], "#7", "trimmed");
     }
 
     #[test]

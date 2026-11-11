@@ -47,6 +47,7 @@ pub enum Armed {
     CleanBusForce,
     ArchiveDone,
     DeleteTask(u32),
+    CancelRun(u32),
     ApproveGate(u32, Gate),
     RejectGate(u32, Gate),
 }
@@ -101,6 +102,10 @@ pub enum PanelMsg {
     AssignAgentTask(String, Option<u32>),
     // Task form
     TaskNew,
+    ImportOpen,
+    ImportInput(String),
+    ImportSubmit,
+    ImportCancel,
     TaskEditOpen(u32),
     TaskTitle(String),
     TaskDescription(text_editor::Action),
@@ -176,6 +181,8 @@ pub struct Panel {
     spawn_task_id: Option<u32>,
     /// The form to create or edit a task, while it is open.
     task_form: Option<TaskForm>,
+    /// The issue reference being typed to import a GitHub issue as a task, while that form is open.
+    importing: Option<String>,
 }
 
 /// What the panel needs from the app to act.
@@ -231,6 +238,7 @@ impl Default for Panel {
             // picture aid: `SHEPHERD_NATIVE_TASKFORM=new` opens the new-task form (`edit:N` waits for the data)
             task_form: (std::env::var("SHEPHERD_NATIVE_TASKFORM").as_deref() == Ok("new"))
                 .then(TaskForm::new),
+            importing: None,
         }
     }
 }
@@ -260,6 +268,14 @@ fn agent_status(state: &str) -> Status {
         "idle" => Status::Idle,
         _ => Status::Unknown,
     }
+}
+
+/// A task whose run can still be cancelled: it has started and has not ended.
+fn has_run(state: &str) -> bool {
+    !matches!(
+        state,
+        "new" | "done" | "completed" | "archived" | "cancelled"
+    )
 }
 
 fn task_state_color(state: &str) -> Color {
@@ -696,6 +712,16 @@ impl Panel {
                             |r| Message::Panel(PanelMsg::Done(r)),
                         );
                     }
+                    Armed::CancelRun(id) => {
+                        return Task::perform(
+                            async move {
+                                actions::cancel_run(&api, id, &root).map(|agents| {
+                                    format!("Cancelled the run of task #{id} and closed {agents} agent(s)")
+                                })
+                            },
+                            |r| Message::Panel(PanelMsg::Done(r)),
+                        );
+                    }
                     Armed::DeleteRun(id) => {
                         if self.run.as_deref() == Some(id.as_str()) {
                             self.run = None;
@@ -879,7 +905,34 @@ impl Panel {
             // Task form
             PanelMsg::TaskNew => {
                 self.launching = false;
+                self.importing = None;
                 self.task_form = Some(TaskForm::new());
+            }
+            PanelMsg::ImportOpen => {
+                self.launching = false;
+                self.task_form = None;
+                self.importing = Some(String::new());
+            }
+            PanelMsg::ImportInput(text) => {
+                if self.importing.is_some() {
+                    self.importing = Some(text);
+                }
+            }
+            PanelMsg::ImportCancel => self.importing = None,
+            PanelMsg::ImportSubmit => {
+                let issue = self.importing.clone().unwrap_or_default();
+                if issue.trim().is_empty() {
+                    self.notice = "Type an issue number or URL".into();
+                    return Task::none();
+                }
+                self.importing = None;
+                return Task::perform(
+                    async move {
+                        actions::import_issue(&api, &issue, &root)
+                            .map(|id| format!("Imported {} as task #{id}", issue.trim()))
+                    },
+                    |r| Message::Panel(PanelMsg::Done(r)),
+                );
             }
             PanelMsg::TaskEditOpen(id) => {
                 if let Some(task) = ctx.data.task(id) {
@@ -2429,6 +2482,7 @@ impl Panel {
             .collect();
         let footer = vec![
             btn_link("+ Task", PanelMsg::TaskNew),
+            btn_link("Import issue", PanelMsg::ImportOpen),
             self.arm_button(Armed::ArchiveDone, "Archive done", "Confirm: archive done"),
         ];
         let detail: Element<'a, Message> = match ctx
@@ -2537,23 +2591,58 @@ impl Panel {
                         "Run with a pattern",
                         PanelMsg::OpenLauncher(Some(t.status.id)),
                     ))
-                    .push(btn("Edit", PanelMsg::TaskEditOpen(t.status.id)))
-                    .push(self.arm_button(
-                        Armed::DeleteTask(t.status.id),
-                        "Delete",
-                        "Confirm: delete this task for good",
+                    .push(btn("Edit", PanelMsg::TaskEditOpen(t.status.id)));
+                if has_run(&t.status.state) {
+                    actions = actions.push(self.arm_button(
+                        Armed::CancelRun(t.status.id),
+                        "Cancel run",
+                        "Confirm: cancel the run and close its agents",
                     ));
+                }
+                actions = actions.push(self.arm_button(
+                    Armed::DeleteTask(t.status.id),
+                    "Delete",
+                    "Confirm: delete this task for good",
+                ));
                 col.push(actions).max_width(900).into()
             }
         };
-        let detail = match &self.task_form {
-            Some(form) => self.task_form_view(form),
-            None => detail,
+        let detail = match (&self.task_form, &self.importing) {
+            (Some(form), _) => self.task_form_view(form),
+            (None, Some(issue)) => self.import_view(issue),
+            (None, None) => detail,
         };
         column![
             summary,
             row![self.list(items, footer), self.detail(detail)].height(Length::Fill),
         ]
+        .into()
+    }
+
+    /// The one-field form that imports a GitHub issue as a task.
+    fn import_view<'a>(&'a self, issue: &'a str) -> Element<'a, Message> {
+        container(
+            column![
+                text("Import a GitHub issue").size(18).color(theme::HI),
+                theme::label("ISSUE NUMBER, OWNER/REPO#N OR URL"),
+                text_input("7", issue)
+                    .on_input(|t| Message::Panel(PanelMsg::ImportInput(t)))
+                    .on_submit(Message::Panel(PanelMsg::ImportSubmit))
+                    .style(theme::input_style)
+                    .padding([8, 10])
+                    .size(13),
+                text("Needs the GitHub CLI (`gh`) signed in. The title and body become the task.")
+                    .size(11)
+                    .color(DIM),
+                row![
+                    btn_primary("Import", PanelMsg::ImportSubmit),
+                    btn("Cancel", PanelMsg::ImportCancel),
+                ]
+                .spacing(10),
+            ]
+            .spacing(10),
+        )
+        .max_width(600)
         .into()
     }
 
@@ -2914,5 +3003,65 @@ mod tests {
         // the second click sends the request and leaves nothing armed
         let _ = panel.update(PanelMsg::Confirm, &ctx);
         assert_eq!(panel.armed, None);
+    }
+
+    fn ctx_of<'a>(data: &'a Data, snapshot: &'a Snapshot) -> Ctx<'a> {
+        Ctx {
+            api: PathBuf::from("/nowhere"),
+            data,
+            snapshot,
+            frame: 0,
+        }
+    }
+
+    #[test]
+    fn cancelling_a_run_needs_two_clicks_and_only_a_started_task_has_one() {
+        let (data, snapshot) = (Data::default(), Snapshot::default());
+        let ctx = ctx_of(&data, &snapshot);
+        let mut panel = Panel::default();
+        let _ = panel.update(PanelMsg::Arm(Armed::CancelRun(3)), &ctx);
+        assert_eq!(panel.armed, Some(Armed::CancelRun(3)));
+        let _ = panel.update(PanelMsg::Confirm, &ctx);
+        assert_eq!(panel.armed, None);
+        for state in ["coding", "planning", "waiting", "awaiting-approval"] {
+            assert!(has_run(state), "{state}");
+        }
+        for state in ["new", "done", "completed", "archived", "cancelled"] {
+            assert!(!has_run(state), "{state}");
+        }
+    }
+
+    #[test]
+    fn the_import_form_opens_takes_text_and_closes() {
+        let (data, snapshot) = (Data::default(), Snapshot::default());
+        let ctx = ctx_of(&data, &snapshot);
+        let mut panel = Panel::default();
+        // typing without the form open does nothing
+        let _ = panel.update(PanelMsg::ImportInput("7".into()), &ctx);
+        assert_eq!(panel.importing, None);
+
+        let _ = panel.update(PanelMsg::ImportOpen, &ctx);
+        let _ = panel.update(PanelMsg::ImportInput("#7".into()), &ctx);
+        assert_eq!(panel.importing.as_deref(), Some("#7"));
+        // an empty reference is not sent: the form stays and says why
+        let _ = panel.update(PanelMsg::ImportInput("  ".into()), &ctx);
+        let _ = panel.update(PanelMsg::ImportSubmit, &ctx);
+        assert_eq!(panel.importing.as_deref(), Some("  "));
+        assert!(panel.notice.contains("issue number"));
+        // a reference is sent and closes the form
+        let _ = panel.update(PanelMsg::ImportInput("7".into()), &ctx);
+        let _ = panel.update(PanelMsg::ImportSubmit, &ctx);
+        assert_eq!(panel.importing, None);
+        // opening the task form or cancelling closes it too
+        let _ = panel.update(PanelMsg::ImportOpen, &ctx);
+        let _ = panel.update(PanelMsg::TaskNew, &ctx);
+        assert_eq!(panel.importing, None);
+        let _ = panel.update(PanelMsg::ImportOpen, &ctx);
+        assert!(
+            panel.task_form.is_none(),
+            "the import form replaces the task form"
+        );
+        let _ = panel.update(PanelMsg::ImportCancel, &ctx);
+        assert_eq!(panel.importing, None);
     }
 }
