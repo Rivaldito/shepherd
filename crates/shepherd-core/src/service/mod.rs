@@ -1210,6 +1210,37 @@ impl OrchestrationService {
                     }
                 }
             }
+            "create_branch" | "create_worktree" | "remove_worktree" => {
+                use crate::git_admin as g;
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let text = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("");
+                match op {
+                    "create_branch" => {
+                        g::create_branch(&root, text("branch"), text("base"))?;
+                        Ok(serde_json::json!({ "branch": text("branch") }))
+                    }
+                    "create_worktree" => {
+                        let path = g::create_worktree(&root, text("path"), text("branch"))?;
+                        Ok(serde_json::json!({ "path": path, "branch": text("branch") }))
+                    }
+                    _ => {
+                        let live: Vec<String> = self
+                            .load_registry()?
+                            .live()
+                            .iter()
+                            .map(|a| a.worktree.clone())
+                            .collect();
+                        g::remove_worktree(&root, text("path"), &live)?;
+                        Ok(serde_json::json!({ "path": text("path"), "removed": true }))
+                    }
+                }
+            }
             "runs_clean" => {
                 let root = args
                     .get("root")
