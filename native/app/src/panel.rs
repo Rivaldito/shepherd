@@ -16,7 +16,7 @@ use iced::widget::{
 use iced::{Background, Color, Element, Length, Task};
 use shepherd_app_core::actions::{self, RunControl};
 use shepherd_app_core::bus_message::line as feed_line;
-use shepherd_app_core::data::{bus_feed, ensure_task_prefix, task_of_run, task_prompt, Data};
+use shepherd_app_core::data::{bus_feed, ensure_task_prefix, task_of_run, task_prompt, Data, Gate};
 use shepherd_app_core::pattern_graph::{self, PatternView};
 use shepherd_app_core::shepherd_core::bus::Message as BusMessage;
 use shepherd_app_core::shepherd_core::service::patterns_run::PatternRunState;
@@ -47,6 +47,8 @@ pub enum Armed {
     CleanBusForce,
     ArchiveDone,
     DeleteTask(u32),
+    ApproveGate(u32, Gate),
+    RejectGate(u32, Gate),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -732,6 +734,24 @@ impl Panel {
                             },
                         );
                     }
+                    Armed::ApproveGate(id, gate) => {
+                        return Task::perform(
+                            async move {
+                                actions::approve_gate(&api, id, &gate.target(), &root)
+                                    .map(|_| format!("Approved {} of task #{id}", gate.label()))
+                            },
+                            |r| Message::Panel(PanelMsg::Done(r)),
+                        );
+                    }
+                    Armed::RejectGate(id, gate) => {
+                        return Task::perform(
+                            async move {
+                                actions::reject_gate(&api, id, &gate.target(), None, &root)
+                                    .map(|_| format!("Rejected {} of task #{id}", gate.label()))
+                            },
+                            |r| Message::Panel(PanelMsg::Done(r)),
+                        );
+                    }
                     Armed::ArchiveDone => {
                         let done: Vec<u32> = ctx
                             .data
@@ -1383,12 +1403,35 @@ impl Panel {
         } else {
             self.run_detail(ctx)
         };
-        column![
-            summary,
-            row![self.list(items, footer), self.detail(detail)].height(Length::Fill),
-        ]
-        .spacing(8)
-        .into()
+        let mut page = column![summary].spacing(8);
+        for g in &ctx.data.gates {
+            let waiting = row![
+                text(format!(
+                    "Task #{} \"{}\" waits for you to approve {}",
+                    g.task_id,
+                    g.task_title,
+                    g.gate.label()
+                ))
+                .size(12)
+                .color(theme::HI)
+                .width(Length::Fill),
+                self.arm_button(
+                    Armed::ApproveGate(g.task_id, g.gate.clone()),
+                    "Approve",
+                    "Confirm: approve",
+                ),
+                self.arm_button(
+                    Armed::RejectGate(g.task_id, g.gate.clone()),
+                    "Reject",
+                    "Confirm: reject",
+                ),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
+            page = page.push(alert(waiting.into(), WARN));
+        }
+        page.push(row![self.list(items, footer), self.detail(detail)].height(Length::Fill))
+            .into()
     }
 
     fn overview_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
@@ -2847,6 +2890,29 @@ mod tests {
         let _ = panel.update(PanelMsg::Control("run-1".into(), RunControl::Stop), &ctx);
         assert_eq!(panel.armed, Some(Armed::StopRun("run-1".into())));
         let _ = panel.update(PanelMsg::Tab(Tab::Agents), &ctx);
+        assert_eq!(panel.armed, None);
+    }
+
+    #[test]
+    fn approving_or_rejecting_a_gate_needs_two_clicks_and_clears_the_arming() {
+        let data = Data::default();
+        let snapshot = Snapshot::default();
+        let ctx = Ctx {
+            api: PathBuf::from("/nowhere"),
+            data: &data,
+            snapshot: &snapshot,
+            frame: 0,
+        };
+        let mut panel = Panel::default();
+        let approve = Armed::ApproveGate(4, Gate::Plan);
+        let _ = panel.update(PanelMsg::Arm(approve.clone()), &ctx);
+        assert_eq!(panel.armed, Some(approve));
+        // arming the other button replaces the first one
+        let reject = Armed::RejectGate(4, Gate::PushPr(2));
+        let _ = panel.update(PanelMsg::Arm(reject.clone()), &ctx);
+        assert_eq!(panel.armed, Some(reject));
+        // the second click sends the request and leaves nothing armed
+        let _ = panel.update(PanelMsg::Confirm, &ctx);
         assert_eq!(panel.armed, None);
     }
 }
