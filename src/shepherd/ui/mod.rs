@@ -354,7 +354,7 @@ pub fn render_shepherd_section(
                     "Tab: switch view | Space: pause/resume | r: replay | /: filter | C: clear bus | Esc: quit"
                 }
                 events::ShepherdEventsSubTab::PatternRuns => {
-                    "Tab: switch view | p: pause/resume | x: stop | C: clean | ↑/↓: list | Esc: quit"
+                    "Tab: switch view | p: pause/resume | x: stop | D: delete | C: clean | ↑/↓: list | Esc: quit"
                 }
             };
             (sum, help)
