@@ -1107,6 +1107,30 @@ impl ClientShellState {
                     outcome,
                 );
             }
+            ShepherdEventsAction::CreateTopic { name, partitions } => {
+                self.push_endpoint_method_with_kind(
+                    shepherd_op_to_method(
+                        "topic_create",
+                        serde_json::json!({ "name": name, "partitions": partitions }),
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "topic_create".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdEventsAction::Publish { topic, content } => {
+                self.push_endpoint_method_with_kind(
+                    shepherd_op_to_method(
+                        "publish",
+                        serde_json::json!({ "topic": topic, "content": content, "from": "user" }),
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "publish".to_string(),
+                    },
+                    outcome,
+                );
+            }
             ShepherdEventsAction::CleanRuns | ShepherdEventsAction::CleanBus => {
                 let (op, args) = if action == ShepherdEventsAction::CleanRuns {
                     ("runs_clean", serde_json::json!({}))
@@ -1630,7 +1654,8 @@ impl ClientShellState {
                         self.refresh_shepherd_views(outcome);
                     }
                     "pattern_run_start" | "pattern_run_pause" | "pattern_run_resume"
-                    | "pattern_run_stop" | "runs_clean" | "bus_clean" | "run_delete" => {
+                    | "pattern_run_stop" | "runs_clean" | "bus_clean" | "run_delete"
+                    | "topic_create" | "publish" => {
                         let msg = format!("Run operation completed ({op})");
                         if let Some(ref mut section) = self.shepherd_section {
                             section.status_message = Some(msg);

@@ -187,6 +187,7 @@ impl ShepherdSectionState {
             ShepherdSectionTab::Events => {
                 self.events.confirm_stop_run.is_some()
                     || self.events.confirm_clean.is_some()
+                    || self.events.compose.is_some()
                     || self.events.editing_replay_offset
                     || self.events.editing_agent_filter
             }

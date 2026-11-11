@@ -392,6 +392,26 @@ pub fn git_worktree_remove(api: &Path, path: &str, root: &str) -> Result<(), Str
     .map(|_| ())
 }
 
+/// Creates an event-bus topic with `partitions` partitions (at least one).
+pub fn topic_create(api: &Path, name: &str, partitions: u32) -> Result<(), String> {
+    git_call(
+        api,
+        "topic_create",
+        json!({ "name": name.trim(), "partitions": partitions.max(1) }),
+    )
+    .map(|_| ())
+}
+
+/// Publishes a message to a topic, as the user.
+pub fn topic_publish(api: &Path, topic: &str, content: &str) -> Result<(), String> {
+    git_call(
+        api,
+        "publish",
+        json!({ "topic": topic, "content": content, "from": "user" }),
+    )
+    .map(|_| ())
+}
+
 /// Kills an agent (if not already in a terminal state) and cleans it from the registry.
 pub fn kill_and_clean_agent(api: &Path, id: &str) -> Result<(), String> {
     // Kill if still alive
@@ -480,6 +500,23 @@ mod tests {
         assert_eq!(seen[1]["method"], "shepherd.snapshot.diff");
         assert_eq!(seen[1]["params"]["from"], "a/3");
         assert!(seen[1]["params"].get("to").is_none());
+    }
+
+    #[test]
+    fn a_topic_is_created_and_a_message_published_as_the_user() {
+        let (path, server) = fake_server(vec![
+            r#"{"id":"1","result":{"type":"shepherd_call","data":{"name":"news"}}}"#,
+            r#"{"id":"2","result":{"type":"shepherd_call","data":{}}}"#,
+        ]);
+        topic_create(&path, " news ", 0).unwrap();
+        topic_publish(&path, "news", "hello").unwrap();
+        let seen = server.join().unwrap();
+        assert_eq!(seen[0]["params"]["op"], "topic_create");
+        assert_eq!(seen[0]["params"]["args"]["name"], "news");
+        assert_eq!(seen[0]["params"]["args"]["partitions"], 1);
+        assert_eq!(seen[1]["params"]["op"], "publish");
+        assert_eq!(seen[1]["params"]["args"]["from"], "user");
+        assert_eq!(seen[1]["params"]["args"]["content"], "hello");
     }
 
     #[test]
