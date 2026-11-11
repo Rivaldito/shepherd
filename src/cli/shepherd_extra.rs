@@ -7,9 +7,6 @@ use crate::cli::projection::ParseError;
 use crate::cli::shepherd_bindings::{ShepherdOperation, USAGE_STRING};
 use serde_json::{json, Value};
 
-/// Usage of the commands added here; appended to the main usage line.
-pub(crate) const EXTRA_USAGE: &str = "shepherd resume | reconcile | cancel <task-id> | task delete <id> [--archived] --confirm | task import <issue-number-or-url> | skills create <name> [--description <text>] [--repo] [--global] | skills delete <name> | skills global <name> [--off] | git branch <name> [--base <ref>] | git worktree add <path> --branch <name> | git worktree remove <path> | git publish <branch> | pattern clean | bus clean [--force]";
-
 struct Words<'a> {
     positional: Vec<&'a str>,
     flags: Vec<&'a str>,
@@ -58,7 +55,7 @@ impl Words<'_> {
 }
 
 fn usage() -> ParseError {
-    ParseError::Usage(format!("{USAGE_STRING} | {EXTRA_USAGE}"))
+    ParseError::Usage(USAGE_STRING.to_string())
 }
 
 fn call(id: &str, op: &str, mut args: Value) -> Result<Option<ShepherdOperation>, ParseError> {

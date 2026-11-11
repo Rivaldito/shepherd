@@ -730,6 +730,9 @@ fn main() -> io::Result<()> {
         println!("  --version, -V       Print version and exit");
         println!("  --help, -h          Show this help");
         println!();
+        println!("Orchestration commands (agents, tasks, runs, patterns, topics, snapshots, git,");
+        println!("skills): run `shepherd agents --help` for the full list.");
+        println!();
         println!("Config: {}", config::config_path().display());
         println!("Logs:   {}", logging::help_log_paths_summary());
         println!("Env:    SHEPHERD_CONFIG_PATH overrides config file path");
