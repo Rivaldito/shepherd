@@ -169,42 +169,94 @@ fn task_row(task: CreatedTask) -> TaskRow {
     }
 }
 
+/// What a scoped thread produced; a thread that panicked counts as an empty answer.
+fn joined<T: Default>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
+    handle.join().unwrap_or_default()
+}
+
 impl Data {
     /// Loads everything for the project that `folder` belongs to, from the session behind `api`.
     /// What the server cannot be asked (it is down, say) comes back empty.
+    /// Everything the panels show, read from the server. The questions are independent, so they are asked at
+    /// the same time (one connection each) and the load takes as long as the slowest, not the sum.
     pub fn load(api: &Path, folder: &Path) -> Self {
         let root = project_root_at(folder);
         let root_text = root.to_string_lossy().into_owned();
         let ask = |method: &str, params: Value| {
             crate::api::call(api, method, params).unwrap_or(Value::Null)
         };
-        let mut agents = parse_agents(&ask("shepherd.agent.list", json!({})));
-        agents.sort_by_key(|a| a.seq);
-        let runs = parse_runs(
-            &ask("shepherd.pattern.run.list", json!({ "root": root_text })),
-            |id| {
-                ask(
-                    "shepherd.pattern.run.show",
-                    json!({ "id": id, "root": root_text }),
+        let (agents, runs, tasks, snapshots, gates, patterns, cfg) = std::thread::scope(|s| {
+            let agents = s.spawn(|| {
+                let mut agents = parse_agents(&ask("shepherd.agent.list", json!({})));
+                agents.sort_by_key(|a| a.seq);
+                agents
+            });
+            let runs = s.spawn(|| {
+                let list = ask("shepherd.pattern.run.list", json!({ "root": root_text }));
+                // the detail of every run, also at the same time
+                let ids: Vec<String> = list["runs"]
+                    .as_array()
+                    .map(|r| {
+                        r.iter()
+                            .filter_map(|r| r["id"].as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let shown: std::collections::HashMap<String, Value> = std::thread::scope(|s2| {
+                    let handles: Vec<_> = ids
+                        .iter()
+                        .map(|id| {
+                            let (ask, root_text) = (&ask, &root_text);
+                            s2.spawn(move || {
+                                let show = ask(
+                                    "shepherd.pattern.run.show",
+                                    json!({ "id": id, "root": root_text }),
+                                );
+                                (id.clone(), show)
+                            })
+                        })
+                        .collect();
+                    handles.into_iter().filter_map(|h| h.join().ok()).collect()
+                });
+                parse_runs(&list, |id| shown.get(id).cloned().unwrap_or(Value::Null))
+            });
+            let tasks =
+                s.spawn(|| parse_tasks(&ask("shepherd.task.list", json!({ "root": root_text }))));
+            let snapshots = s.spawn(|| {
+                parse_snapshots(&ask(
+                    "shepherd.snapshot.list",
+                    json!({ "root": root_text, "all": true }),
+                ))
+            });
+            let gates = s.spawn(|| {
+                parse_gates(&ask(
+                    "shepherd.call",
+                    json!({ "op": "runs", "args": { "root": root_text } }),
+                ))
+            });
+            let patterns = s.spawn(|| {
+                parse_list(
+                    &ask("shepherd.pattern.list", json!({ "root": root_text })),
+                    "patterns",
                 )
-            },
-        );
-        let cfg = config::load_config(&root).unwrap_or_default();
+            });
+            let cfg = config::load_config(&root).unwrap_or_default();
+            (
+                joined(agents),
+                joined(runs),
+                joined(tasks),
+                joined(snapshots),
+                joined(gates),
+                joined(patterns),
+                cfg,
+            )
+        });
         Self {
             runs,
-            tasks: parse_tasks(&ask("shepherd.task.list", json!({ "root": root_text }))),
-            snapshots: parse_snapshots(&ask(
-                "shepherd.snapshot.list",
-                json!({ "root": root_text, "all": true }),
-            )),
-            gates: parse_gates(&ask(
-                "shepherd.call",
-                json!({ "op": "runs", "args": { "root": root_text } }),
-            )),
-            patterns: parse_list(
-                &ask("shepherd.pattern.list", json!({ "root": root_text })),
-                "patterns",
-            ),
+            tasks,
+            snapshots,
+            gates,
+            patterns,
             agents,
             models: Models {
                 vendors: cfg.vendors.into_iter().collect(),
@@ -388,6 +440,55 @@ pub fn ensure_task_prefix(text: &str, task: &TaskRow) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server that answers every connection after `delay`, whatever is asked, and counts the questions.
+    fn slow_server(
+        delay: std::time::Duration,
+    ) -> (PathBuf, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{BufRead, BufReader, Write};
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("native-data-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.sock");
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = asked.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let counter = counter.clone();
+                std::thread::spawn(move || {
+                    let mut line = String::new();
+                    BufReader::new(stream.try_clone().unwrap())
+                        .read_line(&mut line)
+                        .unwrap();
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    std::thread::sleep(delay);
+                    let mut stream = stream;
+                    writeln!(stream, r#"{{"id":"x","result":{{}}}}"#).unwrap();
+                });
+            }
+        });
+        (path, asked)
+    }
+
+    #[test]
+    fn the_data_is_loaded_with_its_questions_asked_at_the_same_time() {
+        let _env = crate::ENV_LOCK.lock().unwrap();
+        let (api, asked) = slow_server(std::time::Duration::from_millis(200));
+        let started = std::time::Instant::now();
+        let data = Data::load(&api, Path::new("/tmp"));
+        let took = started.elapsed();
+        assert!(data.agents.is_empty() && data.runs.is_empty());
+        // agents, runs, tasks, snapshots, gates, patterns
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 6);
+        // one after the other would take 6 x 200 ms
+        assert!(
+            took < std::time::Duration::from_millis(700),
+            "took {took:?}"
+        );
+    }
 
     fn row(id: u32, title: &str, description: &str, criteria: &[&str]) -> TaskRow {
         let task = CreatedTask {

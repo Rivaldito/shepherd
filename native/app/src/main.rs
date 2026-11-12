@@ -305,6 +305,8 @@ struct App {
     context_menu: Option<(iced::Point, ContextMenuTarget)>,
     rename: Option<RenameState>,
     mouse_position: iced::Point,
+    /// Whether a data load is running, and whether another was asked for meanwhile.
+    reloads: shepherd_app_core::reload::Coalesce,
 }
 
 /// Terminal cells that fit in the window once the sidebar, tab bar and status line are taken out.
@@ -342,6 +344,7 @@ impl App {
             context_menu: None,
             rename: None,
             mouse_position: iced::Point::ORIGIN,
+            reloads: shepherd_app_core::reload::Coalesce::running(), // the first load starts below
             frame: 0,
             film: std::env::var_os("SHEPHERD_NATIVE_FILM").map(|dir| Film {
                 dir: PathBuf::from(dir),
@@ -378,7 +381,15 @@ impl App {
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
     }
 
-    fn reload(&self) -> Task<Message> {
+    /// Asks for a data load. While one runs, the request is kept and one more load starts when it ends.
+    fn reload(&mut self) -> Task<Message> {
+        if !self.reloads.request() {
+            return Task::none();
+        }
+        self.load_now()
+    }
+
+    fn load_now(&self) -> Task<Message> {
         let folder = self.folder();
         let api = self.api_socket.clone();
         Task::perform(async move { Data::load(&api, &folder) }, |d| {
@@ -806,6 +817,11 @@ impl App {
             Message::Reload | Message::StateChanged => return self.reload(),
             Message::DataLoaded(data) => {
                 self.data = *data;
+                let again = if self.reloads.finished() {
+                    self.load_now()
+                } else {
+                    Task::none()
+                };
                 let ctx = panel::Ctx {
                     api: self.api_socket.clone(),
                     data: &self.data,
@@ -813,12 +829,16 @@ impl App {
                     frame: self.frame,
                 };
                 if self.mode == Mode::Shepherd && self.panel.tab == panel::Tab::Monitor {
-                    return self.panel.load_feed(&ctx);
+                    return Task::batch([again, self.panel.load_feed(&ctx)]);
                 }
                 if self.mode == Mode::Shepherd && self.panel.tab == panel::Tab::Events {
-                    return Task::batch([self.panel.on_data(&ctx), self.panel.refresh_events()]);
+                    return Task::batch([
+                        again,
+                        self.panel.on_data(&ctx),
+                        self.panel.refresh_events(),
+                    ]);
                 }
-                return self.panel.on_data(&ctx);
+                return Task::batch([again, self.panel.on_data(&ctx)]);
             }
             Message::SetMode(mode) => self.mode = mode,
             Message::GoToPane(pane) => {
@@ -1920,8 +1940,26 @@ fn watch_files(folder: &PathBuf) -> impl iced::futures::Stream<Item = Message> {
     iced::stream::channel(16, async move |mut output| {
         use iced::futures::{channel::mpsc, SinkExt, StreamExt};
         let (tx, mut rx) = mpsc::unbounded::<()>();
+        // agents write their files in bursts: wait for a quiet moment (at most a second) and report it once
+        let (raw_tx, raw_rx) = std::sync::mpsc::channel::<()>();
+        let (calm_tx, calm_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            shepherd_app_core::reload::debounce(
+                &raw_rx,
+                &calm_tx,
+                Duration::from_millis(200),
+                Duration::from_secs(1),
+            )
+        });
+        std::thread::spawn(move || {
+            while calm_rx.recv().is_ok() {
+                if tx.unbounded_send(()).is_err() {
+                    break;
+                }
+            }
+        });
         let watcher = StateWatcher::start(move || {
-            let _ = tx.unbounded_send(());
+            let _ = raw_tx.send(());
         });
         let _keep_alive = match watcher {
             Ok(mut watcher) => {
