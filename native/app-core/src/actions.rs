@@ -315,6 +315,34 @@ pub fn snapshot_restore(api: &Path, id: &str, root: &str) -> Result<RestoreResul
     typed(&reply, "result")
 }
 
+/// Deletes an agent's oldest snapshots, keeping the newest ones (as many as the server is set to keep).
+pub fn snapshot_prune(
+    api: &Path,
+    agent: &str,
+    root: &str,
+) -> Result<shepherd_core::snapshot::PruneResult, String> {
+    let reply = call(
+        api,
+        "shepherd.snapshot.prune",
+        json!({ "agent": agent, "root": root }),
+    )?;
+    typed(&reply, "result")
+}
+
+/// What changed in the worktree since a snapshot (the snapshot against the files as they are now).
+pub fn snapshot_compare(
+    api: &Path,
+    id: &str,
+    root: &str,
+) -> Result<shepherd_core::snapshot::DiffResult, String> {
+    let reply = call(
+        api,
+        "shepherd.snapshot.diff",
+        json!({ "from": id, "root": root, "full": false }),
+    )?;
+    typed(&reply, "diff")
+}
+
 pub fn snapshot_delete(api: &Path, id: &str, root: &str) -> Result<(), String> {
     call(
         api,
@@ -454,6 +482,24 @@ mod tests {
             seen
         });
         (path, handle)
+    }
+
+    #[test]
+    fn prune_and_compare_ask_the_server_and_read_its_answer() {
+        let (path, server) = fake_server(vec![
+            r#"{"id":"1","result":{"type":"snapshot_prune","result":{"pruned":["a/1","a/2"],"kept":3}}}"#,
+            r#"{"id":"2","result":{"type":"snapshot_diff","diff":{"from":"a/3","to":"current","files":[],"added":0,"removed":0}}}"#,
+        ]);
+        let pruned = snapshot_prune(&path, "a", "/w").unwrap();
+        assert_eq!((pruned.pruned.len(), pruned.kept), (2, 3));
+        let diff = snapshot_compare(&path, "a/3", "/w").unwrap();
+        assert_eq!(diff.to, "current");
+        let seen = server.join().unwrap();
+        assert_eq!(seen[0]["method"], "shepherd.snapshot.prune");
+        assert_eq!(seen[0]["params"]["agent"], "a");
+        assert_eq!(seen[1]["method"], "shepherd.snapshot.diff");
+        assert_eq!(seen[1]["params"]["from"], "a/3");
+        assert!(seen[1]["params"].get("to").is_none());
     }
 
     #[test]

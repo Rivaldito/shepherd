@@ -260,6 +260,59 @@ impl Panel {
                 .color(WARN),
             );
         }
+        page = page.push(btn_link(
+            "Compare with the worktree now".to_owned(),
+            PanelMsg::SnapCompare(snap.id.clone()),
+        ));
+        match self.snap_compare.as_ref().filter(|(id, _)| *id == snap.id) {
+            None => {}
+            Some((_, Err(e))) => {
+                page = page.push(alert(
+                    text(format!("Could not compare: {e}")).size(12).into(),
+                    BAD,
+                ))
+            }
+            Some((_, Ok(diff))) => {
+                page = page.push(
+                    text(format!(
+                        "Worktree now vs this snapshot: {} file(s), +{} −{}",
+                        diff.files.len(),
+                        diff.added,
+                        diff.removed
+                    ))
+                    .size(12)
+                    .color(FG),
+                );
+                if diff.files.is_empty() {
+                    page = page.push(
+                        text("The worktree is the same as this snapshot.")
+                            .size(12)
+                            .color(DIM),
+                    );
+                }
+                for f in &diff.files {
+                    page = page.push(
+                        row![
+                            container(
+                                text(f.status.clone())
+                                    .size(11)
+                                    .color(change_color(&f.status))
+                            )
+                            .width(90),
+                            text(f.path.clone()).size(12).color(FG).width(Length::Fill),
+                            text(if f.binary {
+                                "binary".to_owned()
+                            } else {
+                                format!("+{} −{}", f.added, f.removed)
+                            })
+                            .size(11)
+                            .color(DIM),
+                        ]
+                        .spacing(8),
+                    );
+                }
+            }
+        }
         page.push(
             text(
                 "Restore puts the whole worktree back as this snapshot had it. A snapshot of what is there now \
@@ -279,6 +332,11 @@ impl Panel {
                     Armed::DeleteSnapshot(snap.id.clone()),
                     "Delete snapshot",
                     "Confirm: delete this snapshot",
+                ),
+                self.arm_button(
+                    Armed::PruneSnapshots(snap.agent.clone()),
+                    "Prune older ones",
+                    "Confirm: delete this agent's oldest snapshots",
                 ),
             ]
             .spacing(8),
