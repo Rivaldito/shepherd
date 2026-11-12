@@ -16,7 +16,7 @@ build teams of claude, codex and gemini agents, give them roles, and let them wo
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-19D3FF?labelColor=0B0B10" alt="Apache 2.0 license" /></a>
   <a href="https://github.com/herdrdev/herdr"><img src="https://img.shields.io/badge/fork%20of-herdr%200.9.5-FF8A1F?labelColor=0B0B10" alt="fork of herdr 0.9.5" /></a>
-  <a href="https://github.com/Rivaldito/shepherd/releases"><img src="https://img.shields.io/badge/release-0.2.1--beta-7CF29A?labelColor=0B0B10" alt="release 0.2.1-beta" /></a>
+  <a href="https://github.com/Rivaldito/shepherd/releases"><img src="https://img.shields.io/badge/release-0.2.3--beta-7CF29A?labelColor=0B0B10" alt="release 0.2.3-beta" /></a>
   <img src="https://img.shields.io/badge/status-beta-B98CFF?labelColor=0B0B10" alt="beta" />
   <a href="https://buymeacoffee.com/fqhst2qucv"><img src="https://img.shields.io/badge/buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black&labelColor=0B0B10" alt="Buy me a coffee" /></a>
 </p>
@@ -223,7 +223,7 @@ a complete walk from an empty machine to a team of agents. it takes about ten mi
 curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh | sh
 ```
 
-it downloads the binary of the latest release, checks its sha-256 and puts it in `~/.local/bin` (set `SHEPHERD_INSTALL_DIR` to change it, or `SHEPHERD_VERSION=v0.2.1-beta` to pick a release). you can also download a binary from the [releases](https://github.com/Rivaldito/shepherd/releases) page. or build it from source:
+it downloads the binary of the latest release, checks its sha-256 and puts it in `~/.local/bin` (set `SHEPHERD_INSTALL_DIR` to change it, or `SHEPHERD_VERSION=v0.2.3-beta` to pick a release). you can also download a binary from the [releases](https://github.com/Rivaldito/shepherd/releases) page. or build it from source:
 
 ```bash
 git clone https://github.com/Rivaldito/shepherd.git
