@@ -444,6 +444,28 @@ pub fn assign_agent_task(
     call(api, "shepherd.call", params).map(|_| ())
 }
 
+/// Turns a skill on (`Some(true)`) or off (`Some(false)`) for one agent, or puts it back to what the role gives
+/// (`None`). The server records it and it applies the next time the agent starts.
+pub fn agent_skill(
+    api: &Path,
+    agent_id: &str,
+    skill: &str,
+    enable: Option<bool>,
+    root: &str,
+) -> Result<(), String> {
+    let (op, args) = match enable {
+        Some(on) => (
+            "skills_toggle",
+            json!({ "agent_id": agent_id, "skill": skill, "enable": on, "root": root }),
+        ),
+        None => (
+            "skills_restore",
+            json!({ "agent_id": agent_id, "skill": skill, "root": root }),
+        ),
+    };
+    call(api, "shepherd.call", json!({ "op": op, "args": args })).map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -500,6 +522,22 @@ mod tests {
         assert_eq!(seen[1]["method"], "shepherd.snapshot.diff");
         assert_eq!(seen[1]["params"]["from"], "a/3");
         assert!(seen[1]["params"].get("to").is_none());
+    }
+
+    #[test]
+    fn an_agents_skill_is_turned_on_off_or_put_back() {
+        let (path, server) = fake_server(vec![
+            r#"{"id":"1","result":{"type":"shepherd_call","data":{}}}"#,
+            r#"{"id":"2","result":{"type":"shepherd_call","data":{}}}"#,
+        ]);
+        agent_skill(&path, "coder-1", "debug", Some(false), "/p").unwrap();
+        agent_skill(&path, "coder-1", "debug", None, "/p").unwrap();
+        let seen = server.join().unwrap();
+        assert_eq!(seen[0]["params"]["op"], "skills_toggle");
+        assert_eq!(seen[0]["params"]["args"]["enable"], false);
+        assert_eq!(seen[0]["params"]["args"]["agent_id"], "coder-1");
+        assert_eq!(seen[1]["params"]["op"], "skills_restore");
+        assert!(seen[1]["params"]["args"].get("enable").is_none());
     }
 
     #[test]
