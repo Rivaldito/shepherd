@@ -149,6 +149,8 @@ ID  STATE  TITLE      ISSUE  PR
 1   new    Add login  -      -
 ```
 
+Other task commands: `shepherd task edit <id>`, `task archive <id>`, `task import <issue-number-or-url>` (creates a task from a GitHub issue; needs `gh`) and `task delete <id> --confirm` (removes its folder for good; `D` in the terminal Tasks view).
+
 Start a run for a task from the Tasks view, or begin a pattern objective with `Task #1:` so the run is linked to it.
 
 ## 9. Try it without touching your setup
@@ -207,4 +209,3 @@ If a pattern run would exceed `max_concurrent`, `shepherd pattern run` asks for 
 - [patterns.md](patterns.md): design your own team.
 - [topics-and-events.md](topics-and-events.md): understand and watch the bus.
 - [native-app.md](native-app.md): the desktop app.
-- [parity.md](parity.md): what the desktop app, the terminal UI and the CLI each can do.

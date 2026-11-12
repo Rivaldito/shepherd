@@ -190,7 +190,11 @@ shepherd pattern runs                  # ID PATTERN KIND STATE AGENTS LIVE TOPIC
 shepherd pattern pause <id>
 shepherd pattern resume <id>
 shepherd pattern stop <id> --confirm
+shepherd pattern delete-run <id> [--confirm]   # an active run is stopped first, which needs --confirm
+shepherd pattern clean                         # forget the runs that are done, failed or stopped
 ```
+
+In the terminal UI, Events > Pattern Runs, `D` deletes the selected run and `C` forgets the finished ones; both ask first.
 
 ```
 $ shepherd pattern run duo --task "Task #1: demo"
