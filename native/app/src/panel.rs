@@ -96,6 +96,8 @@ pub enum PanelMsg {
         Result<Box<shepherd_app_core::shepherd_core::snapshot::ShowResult>, String>,
     ),
     SnapCapture(String),
+    /// One agent's skill: on, off, or back to what its role gives (`None`). Applies at its next start.
+    AgentSkill(String, String, Option<bool>),
     SnapCompare(String),
     SnapCompared(
         String,
@@ -314,6 +316,61 @@ fn agent_skill_lines(a: &shepherd_app_core::shepherd_core::Agent) -> Vec<String>
         ));
     }
     lines
+}
+
+/// One row per skill that can be changed for this agent: the active ones can be turned off, the removed ones
+/// back on, and anything changed for it can be put back. The server applies it at the agent's next start.
+fn agent_skill_buttons<'a>(
+    a: &shepherd_app_core::shepherd_core::Agent,
+) -> Vec<Element<'a, Message>> {
+    let pick = |skill: &str, label: &str, enable: Option<bool>| {
+        btn_link(
+            label.to_owned(),
+            PanelMsg::AgentSkill(a.id.clone(), skill.to_owned(), enable),
+        )
+    };
+    let row_of = |skill: &str, buttons: Vec<Element<'a, Message>>| {
+        let mut r = row![text(skill.to_owned()).size(12).width(Length::Fill)]
+            .spacing(4)
+            .align_y(iced::Alignment::Center);
+        for b in buttons {
+            r = r.push(b);
+        }
+        Element::from(r)
+    };
+    let mut rows = Vec::new();
+    for skill in a
+        .active_skills
+        .iter()
+        .filter(|s| !a.skills.remove.contains(s))
+    {
+        let mut buttons = vec![pick(skill, "Turn off", Some(false))];
+        if a.skills.add.contains(skill) {
+            buttons.push(pick(skill, "Reset", None));
+        }
+        rows.push(row_of(skill, buttons));
+    }
+    for skill in &a.skills.remove {
+        rows.push(row_of(
+            skill,
+            vec![
+                pick(skill, "Turn on", Some(true)),
+                pick(skill, "Reset", None),
+            ],
+        ));
+    }
+    for skill in a.skills.add.iter().filter(|s| !a.active_skills.contains(s)) {
+        rows.push(row_of(skill, vec![pick(skill, "Reset", None)]));
+    }
+    if !rows.is_empty() {
+        rows.push(
+            text("Changes apply the next time the agent starts.")
+                .size(11)
+                .color(DIM)
+                .into(),
+        );
+    }
+    rows
 }
 
 fn agent_status(state: &str) -> Status {
@@ -945,6 +1002,17 @@ impl Panel {
                 }
             }
             PanelMsg::SnapCapture(agent) => return self.snap_capture(agent, ctx),
+            PanelMsg::AgentSkill(agent, skill, enable) => {
+                let (api, root) = (ctx.api.clone(), ctx.data.root.display().to_string());
+                return Task::perform(
+                    async move {
+                        actions::agent_skill(&api, &agent, &skill, enable, &root).map(|_| {
+                            format!("Saved {skill} for {agent}; it applies the next time the agent starts")
+                        })
+                    },
+                    |r| Message::Panel(PanelMsg::Done(r)),
+                );
+            }
             PanelMsg::SnapCompare(id) => {
                 self.snap_compare = None;
                 let api = ctx.api.clone();
@@ -2372,6 +2440,7 @@ impl Panel {
                     .into_iter()
                     .map(|line| text(line).size(12.5).into()),
             )
+            .push(column(agent_skill_buttons(a)).spacing(2))
             .spacing(4)
             .into(),
         ));
@@ -3235,6 +3304,23 @@ mod tests {
                 ..ctx
             })
             .is_none());
+    }
+
+    #[test]
+    fn an_agents_skills_can_be_changed_one_row_each_with_a_note() {
+        use shepherd_app_core::shepherd_core::{Agent, SkillAdjust};
+        assert!(agent_skill_buttons(&Agent::default()).is_empty());
+        let agent = Agent {
+            id: "coder-1".into(),
+            active_skills: vec!["x".into(), "y".into()],
+            skills: SkillAdjust {
+                add: vec!["z".into()],
+                remove: vec!["y".into()],
+            },
+            ..Agent::default()
+        };
+        // x (active), y (removed, can come back), z (added, not installed yet), and the note
+        assert_eq!(agent_skill_buttons(&agent).len(), 4);
     }
 
     #[test]
