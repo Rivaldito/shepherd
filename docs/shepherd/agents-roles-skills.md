@@ -25,7 +25,7 @@ specialist-1  starting  specialist  codex   -      Task-1-demo
 - **Agents without MCP:** bus messages are typed into their terminal as `[shep] from <role>#<n>: ...` when the pane is idle.
 - **Inherited configuration:** agents inherit your global vendor configuration (for example `~/.claude/CLAUDE.md`). If it demands plan approval before editing, the agent will wait. Include the approval in the task.
 
-`shepherd spawn` accepts `--vendor` and `--model` to override a role for one agent, and `--task-id` to link the agent to a task.
+`shepherd spawn` accepts `--vendor` and `--model` to override a role for one agent, and `--task-id` to link the agent to a task. To link or detach an agent later, use `shepherd assign <agent> <task-id|none>` (or `l` in the terminal Agents view). After a server restart, `shepherd resume` (`u` in the terminal Agents view) marks the agents it left behind and `shepherd reconcile` checks them against their terminals; neither starts anything.
 
 ## 2. Roles
 
@@ -174,7 +174,7 @@ There are three levels, combined when an agent starts:
 
 1. **Global:** `skills.global: [lang-go]` installs a skill in every agent.
 2. **Role:** `roles.<role>.skills: [name, ...]` installs it in agents with that role.
-3. **Session:** adjustments for one agent.
+3. **Session:** adjustments for one agent: a skill turned on, turned off, or put back to what its role gives. They are saved in the agent's entry and apply the next time it starts; the skills installed for a running agent are not touched.
 
 `skills.disabled: [name]` excludes a skill. If another layer shadows a change you try to make, Shepherd tells you which layer wins instead of silently ignoring it.
 
@@ -193,6 +193,8 @@ roles:
 
 - **Terminal, Skills view (`5`):** `c` switches between catalog and per-agent, `Space` enables or disables, `n` creates, `g` makes global, `d` deletes, `r` restores the original of an edited built-in.
 - **Native app, Skills view:** an editor with line numbers to create, edit and delete skills. A dialog in the role settings lets you assign existing skills with a few clicks.
+- **Native app, Agents view:** the **Skills** card of an agent has **Turn off**, **Turn on** and **Reset** for each skill, for that agent only.
+- **CLI:** `shepherd skills create <name> [--description <text>] [--repo] [--global]`, `skills delete <name>`, `skills global <name> [--off]`, and for one agent `shepherd skills agent <agent> <skill> on|off|default`.
 
 `shepherd config validate` flags a skill without front matter, with a name that differs from its folder, or one a role references that does not exist.
 
@@ -226,7 +228,7 @@ For a task in `.shepherd/tasks`:
 4. **Checks:** your `workflow.checks`, or ones detected from the language.
 5. **Publish:** push and a draft PR with `gh`, only after you approve (`approve <id> <n>`) or with `--auto-push`. Protected branches (`main`, `master`, `develop`) are never published from.
 
-Reject with `shepherd reject <id> plan|<n> --reason "..."`. Follow progress with `shepherd runs list` or the Runs view.
+Reject with `shepherd reject <id> plan|<n> --reason "..."`. Stop a task's run with `shepherd cancel <id>`: it closes the agents linked to the task and marks it cancelled, and work already committed stays on its branches. `shepherd git publish <branch>` pushes a branch and opens its PR only when its subtask is waiting for your approval. Follow progress with `shepherd runs list` or the Runs view.
 
 ```yaml
 workflow:
@@ -249,5 +251,7 @@ shepherd snapshot restore coder-1/1 --confirm         # saves 'pre-restore' firs
 shepherd snapshot restore coder-1/1 --path main.go --confirm
 shepherd snapshot prune --agent coder-1 --keep 10
 ```
+
+The native app and the terminal UI offer the same: capture, compare with the current worktree, restore, delete and prune.
 
 Snapshots live in `refs/shepherd/snapshots/<agent>/<n>` inside your repository. They do not touch your branch or your index.

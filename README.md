@@ -46,7 +46,7 @@ it downloads the prebuilt binaries of the latest [release](https://github.com/Ri
 | binary | what it is |
 |---|---|
 | `shepherd` | the server, the cli and the terminal ui with the shepherd section |
-| `shepherd-native` | the native desktop app (the ten views, the pattern graph editor, the event feed) |
+| `shepherd-native` | the native desktop app (the eleven views, the pattern graph editor, the event feed) |
 
 on a server without a screen, install only the first one: `curl -fsSL .../install.sh | SHEPHERD_NO_GUI=1 sh`. the desktop app needs a desktop session (wayland or x11 on linux) and, on linux, glibc 2.35 or newer (ubuntu 22.04, debian 12, fedora 36 or later). it uses the gpu when there is one. to build from source instead, see [try it from scratch](#try-it-from-scratch).
 
@@ -298,7 +298,7 @@ details in [docs/shepherd/native-app.md](docs/shepherd/native-app.md). to explor
 | [agents, roles and skills](docs/shepherd/agents-roles-skills.md) | agent lifecycle, roles, vendors, writing and assigning skills, mcp tools, snapshots |
 | [patterns](docs/shepherd/patterns.md) | the four team topologies, the yaml format, validation, run states, a full example |
 | [topics and events](docs/shepherd/topics-and-events.md) | the event bus: topics, partitions, consumer groups, replay |
-| [native app](docs/shepherd/native-app.md) | the desktop window, its ten views and how to connect it |
+| [native app](docs/shepherd/native-app.md) | the desktop window, its eleven views and how to connect it |
 
 ## contributing
 

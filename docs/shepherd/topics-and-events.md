@@ -114,9 +114,9 @@ topics:
 
 ## 8. Watching the bus
 
-- **CLI:** `shepherd topic tail <topic>` follows what agents say to each other.
-- **Terminal UI, Events view (`7`):** two sub-views, switched with `Tab`. *Topics and Flow* shows live messages with offset, partition, sender, key, type and content; `Space` pauses, `r` replays from an offset, `/` filters. *Pattern Runs* shows each run, with `p` to pause or resume and `K` to stop.
-- **Native app, Events view:** a feed with the time, the sender, and a color per emitter, so you can see who said what at a glance.
+- **CLI:** `shepherd topic tail <topic>` follows what agents say to each other. `shepherd bus clean --force` deletes every message of the bus (agents lose its history).
+- **Terminal UI, Events view (`7`):** two sub-views, switched with `Tab`. *Topics and Flow* shows live messages with offset, partition, sender, key, type and content; `Space` pauses, `r` replays from an offset, `/` filters, `n` creates a topic (`name` or `name:partitions`), `m` sends a message to the selected topic and `C` clears the bus after asking. *Pattern Runs* shows each run, with `p` to pause or resume and `K` to stop.
+- **Native app, Events view:** a feed with the time, the sender, and a color per emitter, so you can see who said what at a glance. **+ Topic** creates a topic and **Send message** sends one to the open topic.
 
 ## 9. Patterns for using the bus well
 
