@@ -4,8 +4,10 @@
 use crate::panel::{detail_box, list_box, PanelMsg, Tab};
 use crate::theme::{card_style, item_style, ACCENT, DIM, OK, WARN};
 use crate::Message;
-use iced::widget::{button, checkbox, column, container, row, text, text_editor, text_input};
-use iced::{Color, Element, Length, Task};
+use iced::widget::{
+    button, checkbox, column, container, row, scrollable, text, text_editor, text_input,
+};
+use iced::{Background, Color, Element, Length, Task};
 use shepherd_app_core::actions;
 use shepherd_app_core::config_data::{self, Models, SkillRow, TopicRow};
 use shepherd_app_core::installed::{self, InstalledRow};
@@ -69,6 +71,8 @@ pub enum CfgMsg {
     TopicDone(Result<String, String>),
     OpenAgent(String),
     SelectTopic(String),
+    /// Events: show only the messages of this partition.
+    MsgPartition(Option<u32>),
     SelectVendor(String),
     SelectRole(String),
     VendorField(VField, String),
@@ -181,6 +185,7 @@ pub struct ConfigPanel {
     armed_worktree: Option<String>,
     topics: Vec<TopicRow>,
     topic: Option<String>,
+    msg_partition: Option<u32>,
     feed: Vec<BusMessage>,
     models: Models,
     editing: Option<Editing>,
@@ -773,6 +778,7 @@ impl ConfigPanel {
                     Task::done(Message::Panel(PanelMsg::SelectAgent(id))),
                 ]);
             }
+            CfgMsg::MsgPartition(p) => self.msg_partition = p,
             CfgMsg::SelectTopic(name) => {
                 self.topic = Some(name.clone());
                 self.loading = true;
@@ -890,47 +896,89 @@ impl ConfigPanel {
 
     // ---- views -------------------------------------------------------------------------------------------------
 
-    pub fn skills_view<'a>(&'a self) -> Element<'a, Message> {
+    pub fn skills_view<'a>(
+        &'a self,
+        filter: &str,
+        chip: usize,
+        agents: &'a [shepherd_app_core::shepherd_core::Agent],
+    ) -> Element<'a, Message> {
         if self.loading && self.skills.is_empty() {
             return loading_state("Loading skills…");
         }
-        let enabled = self.skills.iter().filter(|s| s.enabled).count();
-        let problems = self
-            .skills
-            .iter()
-            .filter(|s| !s.problems.is_empty())
-            .count();
-        let summary = container(
-            row![
-                config_metric("SKILLS", self.skills.len(), ACCENT),
-                config_metric("ENABLED", enabled, OK),
-                config_metric("ISSUES", problems, if problems > 0 { WARN } else { OK }),
-            ]
-            .spacing(1),
-        )
-        .style(crate::theme::kpi_strip_style);
-        let items = self
-            .skills
-            .iter()
-            .map(|s| {
-                let body = column![
-                    text(format!("{}{}", if s.enabled { "" } else { "✖ " }, s.name)).size(13),
-                    text(format!(
-                        "{}{}",
-                        s.scope,
-                        if s.global { " · global" } else { "" }
-                    ))
+        let builtin = |s: &SkillRow| s.scope == "Default";
+        let used_by = |name: &str| -> Vec<&str> {
+            agents
+                .iter()
+                .filter(|a| a.active_skills.iter().any(|x| x == name))
+                .map(|a| a.id.as_str())
+                .collect()
+        };
+        let counts = [
+            self.skills.len(),
+            self.skills.iter().filter(|s| builtin(s)).count(),
+            self.skills.iter().filter(|s| !builtin(s)).count(),
+            self.skills.iter().filter(|s| s.global).count(),
+        ];
+        let chips = [
+            ("All", counts[0]),
+            ("Built in", counts[1]),
+            ("Yours", counts[2]),
+            ("Global", counts[3]),
+        ];
+        let pass = |s: &&SkillRow| {
+            let f = filter.to_lowercase();
+            let hay = format!("{} {}", s.name, s.description).to_lowercase();
+            let chip_ok = match chip {
+                1 => builtin(s),
+                2 => !builtin(s),
+                3 => s.global,
+                _ => true,
+            };
+            chip_ok && f.split_whitespace().all(|w| hay.contains(w))
+        };
+        let entry = |s: &'a SkillRow| -> Element<'a, Message> {
+            let users = used_by(&s.name).len();
+            let body = column![
+                row![
+                    text(format!("{}{}", if s.enabled { "" } else { "✖ " }, s.name))
+                        .font(crate::theme::MONO_BOLD)
+                        .size(13)
+                        .color(crate::theme::HI)
+                        .width(Length::Fill),
+                    text(if users > 0 {
+                        format!("{users} agent{}", if users == 1 { "" } else { "s" })
+                    } else {
+                        String::new()
+                    })
                     .size(11)
-                    .color(DIM)
-                ];
-                button(body)
-                    .width(Length::Fill)
-                    .padding([4, 8])
-                    .style(item_style(self.skill.as_deref() == Some(s.name.as_str())))
-                    .on_press(cfg(CfgMsg::SelectSkill(s.name.clone())))
-                    .into()
-            })
-            .collect();
+                    .color(DIM),
+                ],
+                text(s.description.chars().take(46).collect::<String>())
+                    .size(11)
+                    .color(DIM),
+            ]
+            .spacing(3);
+            button(body)
+                .width(Length::Fill)
+                .padding([8, 10])
+                .style(item_style(self.skill.as_deref() == Some(s.name.as_str())))
+                .on_press(cfg(CfgMsg::SelectSkill(s.name.clone())))
+                .into()
+        };
+        let heading = |s: String| {
+            container(text(s).size(11.5).color(DIM)).padding(crate::theme::pad(10.0, 4.0, 4.0, 4.0))
+        };
+        let (own, shipped): (Vec<&SkillRow>, Vec<&SkillRow>) =
+            self.skills.iter().filter(pass).partition(|s| !builtin(s));
+        let mut items: Vec<Element<'a, Message>> = vec![];
+        if !own.is_empty() {
+            items.push(heading(format!("Yours ({})", own.len())).into());
+            items.extend(own.into_iter().map(entry));
+        }
+        if !shipped.is_empty() {
+            items.push(heading(format!("Built in ({})", shipped.len())).into());
+            items.extend(shipped.into_iter().map(entry));
+        }
         let detail: Element<'a, Message> = match self
             .skill
             .as_deref()
@@ -944,14 +992,26 @@ impl ConfigPanel {
             Some(s) => {
                 let mut col = column![
                     row![
-                        text(format!("SKILL {}", s.name))
-                            .size(18)
+                        text(s.name.clone())
+                            .font(crate::theme::MONO_BOLD)
+                            .size(20)
                             .color(crate::theme::HI),
                         crate::panel::badge(
-                            if s.enabled { "ENABLED" } else { "DISABLED" },
-                            if s.enabled { OK } else { crate::theme::BAD }
+                            if !s.enabled {
+                                "disabled".to_owned()
+                            } else if s.scope == "Default" {
+                                "built in, read-only".to_owned()
+                            } else if s.global {
+                                "yours, global".to_owned()
+                            } else {
+                                "yours".to_owned()
+                            },
+                            if s.enabled {
+                                crate::theme::IDLE
+                            } else {
+                                crate::theme::BAD
+                            }
                         ),
-                        text("SKILL.md").size(11).color(DIM),
                     ]
                     .spacing(10)
                     .align_y(iced::Alignment::Center),
@@ -1012,20 +1072,58 @@ impl ConfigPanel {
                     CfgMsg::SkillGlobal(s.name.clone(), !s.global),
                     false,
                 ));
+                let users = used_by(&s.name);
+                let mut used = row![text("Used by").size(12).color(DIM)]
+                    .spacing(10)
+                    .align_y(iced::Alignment::Center);
+                if users.is_empty() {
+                    used = used.push(text("no agent yet").size(12).color(DIM));
+                }
+                for u in users {
+                    used = used.push(
+                        container(text(u.to_owned()).size(11.5))
+                            .padding([2, 10])
+                            .style(|_| container::Style {
+                                border: iced::Border {
+                                    color: crate::theme::LINE2,
+                                    width: 1.0,
+                                    radius: 12.0.into(),
+                                },
+                                ..container::Style::default()
+                            }),
+                    );
+                }
+                let lines = s.body.lines().count();
+                let mut source = column![].spacing(2);
+                for (i, l) in s.body.lines().enumerate() {
+                    source = source.push(
+                        row![
+                            text((i + 1).to_string())
+                                .size(12)
+                                .color(crate::theme::LINE2)
+                                .width(30)
+                                .align_x(iced::alignment::Horizontal::Right),
+                            text(l.to_owned()).size(12.5).color(crate::theme::FG),
+                        ]
+                        .spacing(14),
+                    );
+                }
                 col.push(actions)
                     .push(
                         text("A global skill goes to every agent, whatever its role.")
                             .size(11)
                             .color(DIM),
                     )
-                    .push(markdown(&s.body))
+                    .push(used.wrap())
+                    .push(crate::panel::card(
+                        "SKILL.md",
+                        Some(text(format!("{lines} lines")).size(11).color(DIM).into()),
+                        source.into(),
+                    ))
                     .into()
             }
         };
-        let footer = vec![
-            crate::panel::btn_link("+ Skill", PanelMsg::Cfg(CfgMsg::SkillNewOpen)),
-            refresh_button(),
-        ];
+        let top = crate::ui::filter_bar("Filter by name or what it does", filter, &chips, chip);
         let detail_pane: Element<'a, Message> =
             if let Some(form) = &self.skill_new {
                 detail_box(self.skill_new_view(form))
@@ -1041,10 +1139,11 @@ impl ConfigPanel {
             } else {
                 detail_box(detail)
             };
-        column![
-            summary,
-            row![list_box(items, footer), detail_pane].height(Length::Fill),
+        row![
+            crate::panel::list_box_with(Some(top), items, vec![]),
+            detail_pane
         ]
+        .height(Length::Fill)
         .into()
     }
 
@@ -1154,65 +1253,6 @@ impl ConfigPanel {
             ]
             .into();
         };
-        let dirty = git.worktrees.iter().filter(|w| !w.is_clean).count();
-        let ahead = git.worktrees.iter().filter(|w| w.ahead > 0).count();
-        let behind = git.worktrees.iter().filter(|w| w.behind > 0).count();
-        let summary = container(
-            row![
-                config_metric("WORKTREES", git.worktrees.len(), ACCENT),
-                config_metric(
-                    "CLEAN",
-                    git.worktrees.iter().filter(|w| w.is_clean).count(),
-                    OK,
-                ),
-                config_metric("DIRTY", dirty, if dirty > 0 { WARN } else { OK }),
-                config_metric(
-                    "SYNC",
-                    ahead + behind,
-                    if ahead + behind > 0 { WARN } else { OK }
-                ),
-            ]
-            .spacing(1),
-        )
-        .style(crate::theme::kpi_strip_style);
-        let items = git
-            .worktrees
-            .iter()
-            .map(|w| {
-                let state = if w.is_clean {
-                    "clean".to_owned()
-                } else {
-                    format!("dirty {}", w.dirty_count)
-                };
-                let sync = if w.ahead > 0 || w.behind > 0 {
-                    format!(" · +{} -{}", w.ahead, w.behind)
-                } else {
-                    String::new()
-                };
-                let body = column![
-                    text(if w.branch.is_empty() {
-                        "(no branch)".to_owned()
-                    } else {
-                        w.branch.clone()
-                    })
-                    .size(13),
-                    text(format!(
-                        "{state}{sync}{}",
-                        if w.is_main { " · main" } else { "" }
-                    ))
-                    .size(11)
-                    .color(DIM)
-                ];
-                button(body)
-                    .width(Length::Fill)
-                    .padding([4, 8])
-                    .style(item_style(
-                        self.worktree.as_deref() == Some(w.path.as_str()),
-                    ))
-                    .on_press(cfg(CfgMsg::SelectWorktree(w.path.clone())))
-                    .into()
-            })
-            .collect();
         let mut note = column![].spacing(4);
         if let Some(error) = &git.error {
             note = note.push(crate::panel::alert(
@@ -1235,154 +1275,278 @@ impl ConfigPanel {
         {
             note = note.push(text(n.to_owned()).size(12).color(DIM));
         }
-        let detail: Element<'a, Message> = match self
+        if git.worktrees.is_empty() {
+            return container(
+                column![
+                    note,
+                    empty_state(
+                        "No worktrees found",
+                        "This project does not currently expose any Git worktrees.",
+                    )
+                ]
+                .spacing(8),
+            )
+            .padding([16, 28])
+            .into();
+        }
+        let selected = self
             .worktree
             .as_deref()
             .and_then(|p| git.worktrees.iter().find(|w| w.path == p))
-            .or_else(|| git.worktrees.first())
-        {
-            None => note
-                .push(empty_state(
-                    "No worktrees found",
-                    "This project does not currently expose any Git worktrees.",
-                ))
-                .into(),
-            Some(w) => {
-                let sync_label = match (w.ahead, w.behind) {
-                    (0, 0) => "in sync".to_owned(),
-                    (ahead, behind) => format!("+{ahead} ahead · {behind} behind"),
-                };
-                let mut col = column![
-                    row![
-                        text(if w.branch.is_empty() {
-                            "(detached HEAD)".to_owned()
-                        } else {
-                            w.branch.clone()
-                        })
-                        .size(18)
-                        .color(crate::theme::HI),
-                        crate::panel::badge(if w.is_main { "MAIN" } else { "LINKED" }, ACCENT),
-                        crate::panel::badge(
-                            if w.is_clean {
-                                "CLEAN".to_owned()
-                            } else {
-                                format!("DIRTY {}", w.dirty_count)
+            .unwrap_or(&git.worktrees[0]);
+        let cell = |w: u16, e: Element<'a, Message>| container(e).width(Length::FillPortion(w));
+        let head = |s: &'static str, w: u16| cell(w, text(s).size(11.5).color(DIM).into());
+        let mut table = column![container(
+            row![
+                head("Branch", 3),
+                head("Worktree", 4),
+                head("Changes", 2),
+                head("Ahead / behind", 2),
+                head("Agents", 2),
+                head("Pull request", 3)
+            ]
+            .spacing(10)
+        )
+        .padding([12, 16])]
+        .spacing(0);
+        for w in &git.worktrees {
+            let sel = w.path == selected.path;
+            let branch: Element<'a, Message> = row![
+                text("⎇").size(12).color(DIM),
+                text(if w.branch.is_empty() {
+                    "(no branch)".to_owned()
+                } else {
+                    w.branch.clone()
+                })
+                .font(crate::theme::MONO_BOLD)
+                .size(12.5)
+                .color(crate::theme::HI),
+                if w.is_main {
+                    container(text("main checkout").size(10).color(ACCENT))
+                        .padding([0, 6])
+                        .style(|_| container::Style {
+                            border: iced::Border {
+                                color: ACCENT,
+                                width: 1.0,
+                                radius: 3.0.into(),
                             },
-                            if w.is_clean { OK } else { WARN }
-                        ),
-                    ]
-                    .spacing(10)
-                    .align_y(iced::Alignment::Center),
-                    text(w.path.clone()).size(12).color(DIM),
-                    text(sync_label)
-                        .size(12)
-                        .color(if w.ahead > 0 || w.behind > 0 {
-                            WARN
-                        } else {
-                            OK
-                        }),
-                ]
-                .spacing(8);
-                if let Some(upstream) = &w.upstream {
-                    col = col.push(text(format!("Upstream: {upstream}")).size(11).color(DIM));
-                }
-                let review_state = if !w.is_clean {
-                    ("Needs review", WARN)
-                } else if w.ahead > 0 {
-                    ("Ready to inspect", ACCENT)
-                } else {
-                    ("No local changes", OK)
-                };
-                col = col.push(crate::panel::card(
-                    "CHANGE SUMMARY",
-                    None,
-                    column![
-                        row![
-                            text(review_state.0).size(13).color(review_state.1),
-                            text(format!(
-                                "{} changed file(s) · {} local commit(s)",
-                                w.dirty_count, w.ahead
-                            ))
-                            .size(11)
-                            .color(DIM),
-                        ]
-                        .spacing(10),
-                        text(if w.behind > 0 {
-                            format!("{} commit(s) behind upstream", w.behind)
-                        } else {
-                            "Branch is not behind upstream.".to_owned()
+                            ..container::Style::default()
                         })
-                        .size(11)
-                        .color(if w.behind > 0 { WARN } else { DIM }),
-                    ]
-                    .spacing(4)
-                    .into(),
-                ));
-                if let Some(agent) = &w.agent_id {
-                    col = col.push(crate::panel::card(
-                        "AGENT CONTEXT",
-                        Some(crate::panel::btn_link(
-                            "Open agent workspace",
-                            crate::panel::PanelMsg::Cfg(CfgMsg::OpenAgent(agent.clone())),
-                        )),
-                        column![
-                            text(agent.clone()).size(13).color(ACCENT),
-                            text("This worktree is linked to a Shepherd agent.")
-                                .size(11)
-                                .color(DIM),
-                        ]
-                        .spacing(4)
-                        .into(),
-                    ));
-                }
-                if let Some(pr) = &w.pr {
-                    col = col.push(crate::panel::card(
-                        "PULL REQUEST",
-                        None,
-                        column![
-                            text(format!("#{} {}", pr.number, pr.title)).size(13),
-                            text(pr.state.clone())
-                                .size(11)
-                                .color(if pr.state == "OPEN" { OK } else { DIM }),
-                        ]
-                        .spacing(4)
-                        .into(),
-                    ));
                 } else {
-                    col = col.push(
-                        text("No pull request detected for this worktree.")
-                            .size(11)
-                            .color(DIM),
-                    );
-                }
-                if !w.is_main {
-                    let armed = self.armed_worktree.as_deref() == Some(w.path.as_str());
-                    col = col.push(cfg_btn(
-                        if armed {
-                            "Confirm: remove this worktree (the branch stays)"
-                        } else {
-                            "Remove worktree"
-                        },
-                        CfgMsg::WorktreeRemove(w.path.clone()),
-                        armed,
-                    ));
-                }
-                col.push(note).max_width(900).into()
-            }
+                    container(text(""))
+                },
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center)
+            .into();
+            let changes: Element<'a, Message> = if w.is_clean {
+                row![text("■").size(9).color(OK), text("clean").size(12)]
+                    .spacing(6)
+                    .into()
+            } else {
+                row![
+                    text("■").size(9).color(WARN),
+                    text(format!("{} uncommitted", w.dirty_count)).size(12)
+                ]
+                .spacing(6)
+                .into()
+            };
+            let pr: Element<'a, Message> = match &w.pr {
+                Some(p) => text(format!("#{} {}", p.number, p.state.to_lowercase()))
+                    .size(12)
+                    .color(if p.state == "OPEN" {
+                        OK
+                    } else if p.state == "MERGED" {
+                        OK
+                    } else {
+                        DIM
+                    })
+                    .into(),
+                None => text("none").size(12).color(DIM).into(),
+            };
+            let line = row![
+                cell(3, branch),
+                cell(
+                    4,
+                    text(display(Path::new(&w.path))).size(12).color(DIM).into()
+                ),
+                cell(2, changes),
+                cell(
+                    2,
+                    text(format!("+{} / {}", w.ahead, w.behind)).size(12).into()
+                ),
+                cell(
+                    2,
+                    text(w.agent_id.clone().unwrap_or_else(|| "none".into()))
+                        .size(12)
+                        .into()
+                ),
+                cell(3, pr),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center);
+            table = table.push(
+                button(line)
+                    .width(Length::Fill)
+                    .padding([10, 16])
+                    .style(move |_, status| {
+                        let hot =
+                            matches!(status, button::Status::Hovered | button::Status::Pressed);
+                        button::Style {
+                            background: (sel || hot)
+                                .then_some(Background::Color(crate::theme::SELECTED)),
+                            text_color: crate::theme::FG,
+                            border: iced::Border {
+                                color: if sel { ACCENT } else { Color::TRANSPARENT },
+                                width: 0.0,
+                                radius: 0.0.into(),
+                            },
+                            ..button::Style::default()
+                        }
+                    })
+                    .on_press(cfg(CfgMsg::SelectWorktree(w.path.clone()))),
+            );
+        }
+        let table = container(table).width(Length::Fill).style(card_style);
+        // what changed in the picked worktree
+        let w = selected;
+        let mut files = column![].spacing(0);
+        if w.changes.is_empty() {
+            files = files.push(
+                text(if w.is_clean {
+                    "Nothing to commit."
+                } else {
+                    "The files could not be listed."
+                })
+                .size(12)
+                .color(DIM),
+            );
+        }
+        for ch in &w.changes {
+            let color = match ch.status.as_str() {
+                "added" | "untracked" => OK,
+                "deleted" => crate::theme::BAD,
+                _ => WARN,
+            };
+            files = files.push(
+                container(
+                    row![
+                        text(ch.status.clone()).size(12).color(color).width(90),
+                        text(ch.path.clone()).size(12).width(Length::Fill),
+                        text(format!("+{}", ch.added)).size(11.5).color(OK),
+                        text(format!("-{}", ch.removed))
+                            .size(11.5)
+                            .color(crate::theme::BAD),
+                    ]
+                    .spacing(8),
+                )
+                .padding([8, 0]),
+            );
+        }
+        let changes_card = crate::panel::card(
+            "CHANGES",
+            Some(
+                text(format!(
+                    "{}  {}",
+                    if w.branch.is_empty() {
+                        "(detached)"
+                    } else {
+                        &w.branch
+                    },
+                    if w.is_clean {
+                        "clean".to_owned()
+                    } else {
+                        format!("{} uncommitted", w.dirty_count)
+                    }
+                ))
+                .size(11.5)
+                .color(if w.is_clean { OK } else { WARN })
+                .into(),
+            ),
+            files.into(),
+        );
+        let kv = |k: &'static str, v: String, color: Color| {
+            row![
+                text(k).size(12).color(DIM).width(90),
+                text(v).size(12).color(color)
+            ]
+            .spacing(8)
         };
-        let detail = match &self.git_form {
-            Some(form) => self.git_form_view(form),
-            None => detail,
-        };
-        let footer = vec![
-            cfg_btn("+ Branch", CfgMsg::GitFormOpen(false), false),
-            cfg_btn("+ Worktree", CfgMsg::GitFormOpen(true), false),
-            refresh_button(),
-        ];
-        column![
-            summary,
-            row![list_box(items, footer), detail_box(detail)].height(Length::Fill),
+        let mut info = column![
+            kv("folder", display(Path::new(&w.path)), crate::theme::FG),
+            kv(
+                "upstream",
+                w.upstream
+                    .clone()
+                    .unwrap_or_else(|| "not pushed yet".into()),
+                crate::theme::FG
+            ),
+            kv(
+                "agents",
+                w.agent_id.clone().unwrap_or_else(|| "none".into()),
+                crate::theme::FG
+            ),
+            kv(
+                "pull request",
+                match &w.pr {
+                    Some(p) => format!("#{} {} ({})", p.number, p.title, p.state.to_lowercase()),
+                    None => "none".into(),
+                },
+                crate::theme::FG
+            ),
         ]
+        .spacing(6);
+        if let Some(agent) = &w.agent_id {
+            info = info.push(crate::panel::btn_link(
+                "Open agent workspace",
+                crate::panel::PanelMsg::Cfg(CfgMsg::OpenAgent(agent.clone())),
+            ));
+        }
+        if !w.is_main {
+            let armed = self.armed_worktree.as_deref() == Some(w.path.as_str());
+            info = info.push(cfg_btn(
+                if armed {
+                    "Confirm: remove this worktree (the branch stays)"
+                } else {
+                    "Remove worktree"
+                },
+                CfgMsg::WorktreeRemove(w.path.clone()),
+                armed,
+            ));
+            let mut why = vec![];
+            if !w.is_clean {
+                why.push(format!("it has {} uncommitted changes", w.dirty_count));
+            }
+            if let Some(a) = &w.agent_id {
+                why.push(format!("agent {a} works in it"));
+            }
+            if !why.is_empty() {
+                info = info.push(
+                    text(format!(
+                        "The server will refuse this: {}.",
+                        why.join(" and ")
+                    ))
+                    .size(11.5)
+                    .color(WARN),
+                );
+            }
+        }
+        let worktree_card = crate::panel::card("WORKTREE", None, info.into());
+        let lower: Element<'a, Message> = match &self.git_form {
+            Some(form) => self.git_form_view(form),
+            None => row![
+                container(changes_card).width(Length::FillPortion(3)),
+                container(worktree_card).width(Length::FillPortion(2)),
+            ]
+            .spacing(16)
+            .into(),
+        };
+        scrollable(
+            container(column![note, table, lower].spacing(16))
+                .padding([20, 28])
+                .width(Length::Fill),
+        )
+        .height(Length::Fill)
         .into()
     }
 
@@ -1434,33 +1598,18 @@ impl ConfigPanel {
         .into()
     }
 
-    pub fn events_view<'a>(&'a self, frame: u32) -> Element<'a, Message> {
+    pub fn events_view<'a>(&'a self, frame: u32, filter: &str) -> Element<'a, Message> {
         if self.loading && self.topics.is_empty() {
             return loading_state("Loading event topics…");
         }
-        let paused = self.topics.iter().filter(|t| t.paused).count();
-        let unread: u64 = self
-            .topics
-            .iter()
-            .flat_map(|t| t.groups.iter())
-            .flat_map(|g| g.lag_by_partition.values())
-            .sum();
-        let summary = container(
-            row![
-                config_metric("TOPICS", self.topics.len(), ACCENT),
-                config_metric("PAUSED", paused, if paused > 0 { WARN } else { OK }),
-                config_metric(
-                    "UNREAD",
-                    unread as usize,
-                    if unread > 0 { WARN } else { OK }
-                ),
-            ]
-            .spacing(1),
-        )
-        .style(crate::theme::kpi_strip_style);
         let items = self
             .topics
             .iter()
+            .filter(|t| {
+                let f = filter.to_lowercase();
+                f.split_whitespace()
+                    .all(|w| t.name.to_lowercase().contains(w))
+            })
             .map(|t| {
                 let unread: u64 = t
                     .groups
@@ -1599,17 +1748,30 @@ impl ConfigPanel {
                 if self.feed.is_empty() {
                     feed = feed.push(text("No messages yet.").size(12).color(DIM));
                 }
-                for m in self.feed.iter().rev() {
+                for m in self
+                    .feed
+                    .iter()
+                    .rev()
+                    .filter(|m| self.msg_partition.is_none_or(|p| p == m.partition))
+                {
                     feed = feed.push(crate::panel::message_row(m, true));
                 }
+                let mut chips = row![chip_btn(
+                    "All".into(),
+                    self.msg_partition.is_none(),
+                    CfgMsg::MsgPartition(None)
+                )]
+                .spacing(6);
+                for p in 0..t.partitions {
+                    chips = chips.push(chip_btn(
+                        format!("p{p}"),
+                        self.msg_partition == Some(p),
+                        CfgMsg::MsgPartition(Some(p)),
+                    ));
+                }
                 col = col.push(crate::panel::card(
-                    "RECENT MESSAGES",
-                    Some(
-                        text(format!("{} shown", self.feed.len()))
-                            .size(11)
-                            .color(DIM)
-                            .into(),
-                    ),
+                    "MESSAGES · NEWEST FIRST",
+                    Some(chips.into()),
                     feed.into(),
                 ));
                 col.max_width(1000).into()
@@ -1624,10 +1786,13 @@ impl ConfigPanel {
             cfg_btn("Send message", CfgMsg::TopicFormOpen(true), false),
             refresh_button(),
         ];
-        column![
-            summary,
-            row![list_box(items, footer), detail_box(detail)].height(Length::Fill),
+        let _ = footer;
+        let top = crate::ui::filter_bar("Filter topics", filter, &[], 0);
+        row![
+            crate::panel::list_box_with(Some(top), items, vec![]),
+            detail_box(detail)
         ]
+        .height(Length::Fill)
         .into()
     }
 
@@ -1699,8 +1864,8 @@ impl ConfigPanel {
             .find(|(f, _)| *f == field)
             .map(|(_, v)| v.as_str())
             .unwrap_or("");
-        row![
-            iced::widget::container(text(label).size(12).color(DIM)).width(110),
+        column![
+            text(label).size(12).color(DIM),
             text_input("", value)
                 .on_input(move |v| cfg(CfgMsg::VendorField(field, v)))
                 .size(13)
@@ -1708,7 +1873,8 @@ impl ConfigPanel {
                 .style(crate::theme::input_style)
                 .width(Length::Fill)
         ]
-        .spacing(8)
+        .spacing(6)
+        .width(Length::Fill)
         .into()
     }
 
@@ -1736,19 +1902,6 @@ impl ConfigPanel {
         if self.loading && self.models.vendors.is_empty() && self.models.roles.is_empty() {
             return loading_state("Loading models and roles…");
         }
-        let summary = container(
-            row![
-                config_metric("VENDORS", self.models.vendors.len(), ACCENT),
-                config_metric("ROLES", self.models.roles.len(), OK),
-                config_metric(
-                    "DISABLED",
-                    self.models.vendors.values().filter(|v| v.disabled).count(),
-                    WARN,
-                ),
-            ]
-            .spacing(1),
-        )
-        .style(crate::theme::kpi_strip_style);
         let mut items: Vec<Element<'a, Message>> = vec![
             crate::theme::label("INSTALLED").into(),
             button(column![
@@ -1802,18 +1955,7 @@ impl ConfigPanel {
                 .into(),
             );
         }
-        let footer = vec![
-            button(text("+ Vendor").size(12))
-                .padding([4, 10])
-                .style(item_style(false))
-                .on_press(cfg(CfgMsg::NewVendor))
-                .into(),
-            button(text("+ Role").size(12))
-                .padding([4, 10])
-                .style(item_style(false))
-                .on_press(cfg(CfgMsg::NewRole))
-                .into(),
-        ];
+        let footer: Vec<Element<'a, Message>> = vec![];
         let target = format!("Saved in {}", display(&self.models.target));
         let detail: Element<'a, Message> = match &self.editing {
             None => text("Pick a vendor or a role.").color(DIM).into(),
@@ -1822,18 +1964,60 @@ impl ConfigPanel {
                 let mut form = column![].spacing(6);
                 match editing {
                     Editing::Vendor(_) => {
-                        form = form.push(text("VENDOR").size(11).color(DIM));
-                        for (label, f) in [
-                            ("name", VField::Name),
-                            ("command", VField::Command),
-                            ("args", VField::Args),
-                            ("models", VField::Models),
-                            ("default model", VField::DefaultModel),
-                            ("model flag", VField::ModelFlag),
-                            ("shepherd agent", VField::ShepherdAgent),
-                        ] {
-                            form = form.push(self.vbox(label, f));
-                        }
+                        let val = |f: VField| {
+                            self.vfields
+                                .iter()
+                                .find(|(x, _)| *x == f)
+                                .map(|(_, v)| v.clone())
+                                .unwrap_or_default()
+                        };
+                        let users: Vec<&str> = self
+                            .models
+                            .roles
+                            .iter()
+                            .filter(|(_, r)| r.vendor == val(VField::Name))
+                            .map(|(n, _)| n.as_str())
+                            .collect();
+                        form = form.push(
+                            row![
+                                text(format!("Vendor {}", val(VField::Name)))
+                                    .font(crate::theme::MONO_BOLD)
+                                    .size(18)
+                                    .color(crate::theme::HI),
+                                text(if users.is_empty() {
+                                    "used by no role".to_owned()
+                                } else {
+                                    format!("used by {}", users.join(", "))
+                                })
+                                .size(11.5)
+                                .color(DIM),
+                            ]
+                            .spacing(12)
+                            .align_y(iced::Alignment::Center),
+                        );
+                        form = form
+                            .push(
+                                row![
+                                    self.vbox("Name", VField::Name),
+                                    self.vbox("Command", VField::Command)
+                                ]
+                                .spacing(16),
+                            )
+                            .push(
+                                row![
+                                    self.vbox("Extra arguments", VField::Args),
+                                    self.vbox("Model flag", VField::ModelFlag)
+                                ]
+                                .spacing(16),
+                            )
+                            .push(
+                                row![
+                                    self.vbox("Models (comma or space separated)", VField::Models),
+                                    self.vbox("Default model", VField::DefaultModel)
+                                ]
+                                .spacing(16),
+                            )
+                            .push(self.vbox("Shepherd agent", VField::ShepherdAgent));
                         form = form.push(self.model_chips());
                         form = form.push(
                             checkbox(self.vendor.mcp.supported)
@@ -1848,6 +2032,21 @@ impl ConfigPanel {
                                 .on_toggle(|on| cfg(CfgMsg::VendorDisabled(on)))
                                 .size(14)
                                 .text_size(12),
+                        );
+                        let flag = val(VField::ModelFlag);
+                        let model = val(VField::DefaultModel);
+                        let mut starts = format!("Starts as: {}", val(VField::Command));
+                        if !val(VField::Args).is_empty() {
+                            starts.push_str(&format!(" {}", val(VField::Args)));
+                        }
+                        if !flag.is_empty() && !model.is_empty() {
+                            starts.push_str(&format!(" {flag} {model}"));
+                        }
+                        form = form.push(
+                            container(text(starts).size(12))
+                                .padding([12, 14])
+                                .width(Length::Fill)
+                                .style(card_style),
                         );
                     }
                     Editing::Installed => {}
@@ -1890,12 +2089,10 @@ impl ConfigPanel {
                     .into()
             }
         };
-        let base: Element<'a, Message> = column![
-            summary,
-            row![list_box(items, footer), detail_box(detail)].height(Length::Fill),
-        ]
-        .spacing(8)
-        .into();
+        let _ = footer;
+        let base: Element<'a, Message> = row![list_box(items, vec![]), detail_box(detail)]
+            .height(Length::Fill)
+            .into();
         match &self.skill_picker {
             Some(picker) => iced::widget::stack![base, self.skill_picker_view(picker)].into(),
             None => base,
@@ -2235,6 +2432,15 @@ fn chip<'a>(label: String, msg: CfgMsg) -> Element<'a, Message> {
         .into()
 }
 
+/// A filter chip of the config views.
+fn chip_btn<'a>(label: String, on: bool, msg: CfgMsg) -> Element<'a, Message> {
+    button(text(label).size(11.5))
+        .padding([3, 10])
+        .style(crate::theme::chip_style(on))
+        .on_press(cfg(msg))
+        .into()
+}
+
 fn refresh_button<'a>() -> Element<'a, Message> {
     button(container(text("Refresh").size(13)).center_y(Length::Fill))
         .padding([0, 12])
@@ -2260,44 +2466,6 @@ fn empty_state<'a>(title: &'static str, detail: &'static str) -> Element<'a, Mes
     .into()
 }
 
-/// A small markdown reader for SKILL.md (`.md`): headings, fenced code, list lines and paragraphs.
-fn markdown<'a>(body: &str) -> Element<'a, Message> {
-    let mut col = column![].spacing(4);
-    let mut code: Option<Vec<String>> = None;
-    for line in body.lines() {
-        if line.trim_start().starts_with("```") {
-            match code.take() {
-                Some(lines) => {
-                    col = col.push(
-                        container(text(lines.join("\n")).size(12).color(crate::theme::FG))
-                            .padding(12)
-                            .width(Length::Fill)
-                            .style(crate::theme::graph_style),
-                    );
-                }
-                None => code = Some(Vec::new()),
-            }
-        } else if let Some(lines) = code.as_mut() {
-            lines.push(line.to_owned());
-        } else if line.starts_with('#') {
-            col = col.push(
-                container(
-                    text(line.to_owned())
-                        .font(crate::theme::MONO_BOLD)
-                        .size(13)
-                        .color(crate::theme::HI),
-                )
-                .padding(crate::theme::pad(12.0, 0.0, 2.0, 0.0)),
-            );
-        } else if line.trim().is_empty() {
-            col = col.push(container(text("")).height(4));
-        } else {
-            col = col.push(text(line.to_owned()).size(13).color(crate::theme::FG));
-        }
-    }
-    col.into()
-}
-
 fn loading_state<'a>(label: &'static str) -> Element<'a, Message> {
     container(
         column![
@@ -2312,10 +2480,6 @@ fn loading_state<'a>(label: &'static str) -> Element<'a, Message> {
     .padding(20)
     .style(crate::theme::card_style)
     .into()
-}
-
-fn config_metric<'a>(label: &'static str, value: usize, color: Color) -> Element<'a, Message> {
-    crate::panel::kpi_cell(label, value.to_string(), color, None)
 }
 
 fn display(path: &Path) -> String {

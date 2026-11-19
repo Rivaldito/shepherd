@@ -596,6 +596,16 @@ pub(crate) fn btn_ghost<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, 
         .into()
 }
 
+/// A quiet button (`Refresh`): no border, dim text.
+pub(crate) fn btn_quiet<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Message> {
+    button(btn_body(label))
+        .padding([0, 12])
+        .height(34)
+        .style(theme::outline_button_style(true))
+        .on_press(Message::Panel(msg))
+        .into()
+}
+
 pub(crate) fn btn_link<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Message> {
     button(btn_body(label))
         .padding([0, 8])
@@ -1680,9 +1690,11 @@ impl Panel {
             Tab::Tasks => self.tasks_view(ctx),
             Tab::Patterns => self.patterns_view(ctx),
             Tab::Monitor => self.monitor_view(ctx),
-            Tab::Skills => self.cfg.skills_view(),
+            Tab::Skills => self
+                .cfg
+                .skills_view(&self.filter, self.chip, &ctx.data.agents),
             Tab::Git => self.cfg.git_view(),
-            Tab::Events => self.cfg.events_view(ctx.frame),
+            Tab::Events => self.cfg.events_view(ctx.frame, &self.filter),
             Tab::Models => self.cfg.models_view(),
             Tab::Snapshots => self.snapshots_view(ctx),
         };
@@ -1813,23 +1825,68 @@ impl Panel {
             ),
             Tab::Skills => (
                 "Skills",
-                "What agents can do; the catalog of built-in, global and project skills".to_owned(),
-                vec![],
+                "Agents load a skill when its description fits the work.".to_owned(),
+                vec![
+                    btn_quiet(
+                        "Refresh",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::Refresh),
+                    ),
+                    btn_primary(
+                        "+ New skill",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::SkillNewOpen),
+                    ),
+                ],
             ),
             Tab::Git => (
                 "Git",
-                "Worktrees, branches and pull requests".to_owned(),
-                vec![],
+                format!("Worktrees of {}", d.root.display()),
+                vec![
+                    btn_quiet(
+                        "Refresh",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::Refresh),
+                    ),
+                    btn(
+                        "+ Branch",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::GitFormOpen(false)),
+                    ),
+                    btn_primary(
+                        "+ Worktree",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::GitFormOpen(true)),
+                    ),
+                ],
             ),
             Tab::Events => (
                 "Events",
-                "The bus: topics, partitions and messages".to_owned(),
-                vec![],
+                "The bus: topics, partitions and the messages on them".to_owned(),
+                vec![
+                    btn_quiet(
+                        "Refresh",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::Refresh),
+                    ),
+                    btn(
+                        "Send message",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::TopicFormOpen(true)),
+                    ),
+                    btn_primary(
+                        "+ New topic",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::TopicFormOpen(false)),
+                    ),
+                ],
             ),
             Tab::Models => (
                 "Models",
-                "Vendors, models and the role of each agent".to_owned(),
-                vec![],
+                "Which command runs each vendor, and which vendor and model each role uses."
+                    .to_owned(),
+                vec![
+                    btn(
+                        "+ Vendor",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::NewVendor),
+                    ),
+                    btn(
+                        "+ Role",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::NewRole),
+                    ),
+                ],
             ),
             Tab::Snapshots => {
                 let agents: Vec<String> = d.agents.iter().map(|a| a.id.clone()).collect();
