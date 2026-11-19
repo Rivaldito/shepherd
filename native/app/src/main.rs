@@ -13,6 +13,7 @@ mod pattern_editor;
 mod prism;
 mod sessions;
 mod theme;
+mod ui;
 
 use iced::keyboard;
 use iced::widget::canvas::Canvas;
@@ -1004,6 +1005,12 @@ impl App {
             DIM
         };
         let base = self.app_window(body, status_color_val);
+        let base: Element<'_, Message> = match (self.mode, self.panel.toast()) {
+            (Mode::Shepherd, Some(toast)) => {
+                iced::widget::stack![base, ui::toast_view(toast)].into()
+            }
+            _ => base,
+        };
         let content: Element<'_, Message> = match &self.palette {
             Some(palette) => iced::widget::stack![base, self.palette_view(palette)].into(),
             None => base,

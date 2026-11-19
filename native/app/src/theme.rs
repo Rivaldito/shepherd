@@ -229,6 +229,63 @@ pub fn danger_button_style() -> impl Fn(&Theme, button::Status) -> button::Style
     }
 }
 
+/// Destructive action before its confirmation: red outline, fills red once armed (`danger_button_style`).
+pub fn destructive_button_style() -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_theme, status| {
+        let hovered = hovered(status);
+        button::Style {
+            background: hovered.then_some(Background::Color(Color { a: 0.12, ..BAD })),
+            text_color: BAD,
+            border: Border {
+                color: if hovered {
+                    BAD
+                } else {
+                    Color { a: 0.55, ..BAD }
+                },
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..button::Style::default()
+        }
+    }
+}
+
+/// A filter chip (`All`, `Running`, ...): outlined pill, cyan when it is the active one.
+pub fn chip_style(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_theme, status| {
+        let hovered = hovered(status);
+        button::Style {
+            background: active.then_some(Background::Color(SELECTED)),
+            text_color: if active {
+                HI
+            } else if hovered {
+                FG
+            } else {
+                DIM
+            },
+            border: Border {
+                color: if active { ACCENT } else { LINE2 },
+                width: 1.0,
+                radius: 14.0.into(),
+            },
+            ..button::Style::default()
+        }
+    }
+}
+
+/// A toast: a card with a coloured edge (green for success, red for a server refusal).
+pub fn toast_style(color: Color) -> impl Fn(&Theme) -> iced::widget::container::Style {
+    move |_| iced::widget::container::Style {
+        background: Some(Background::Color(BAR)),
+        border: Border {
+            color,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..iced::widget::container::Style::default()
+    }
+}
+
 /// `.btn` (outlined) and `.btn.ghost` (no border, `ghost = true`).
 #[allow(dead_code)] // used by the views of phase 3
 pub fn outline_button_style(ghost: bool) -> impl Fn(&Theme, button::Status) -> button::Style {

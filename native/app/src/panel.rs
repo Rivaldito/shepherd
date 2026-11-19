@@ -136,6 +136,10 @@ pub enum PanelMsg {
     TaskCancel,
     /// Open the agent form for this task.
     RunTaskWithAgent(u32),
+    /// The list filter box and its chips.
+    Filter(String),
+    Chip(usize),
+    DismissToast,
 }
 
 /// The create / edit form of a task.
@@ -217,6 +221,14 @@ pub struct Panel {
     importing: Option<String>,
     /// Why a gate is being rejected (optional): the planner or coder reads it.
     reject_reason: String,
+    /// What the list filter holds, and which chip is on (reset when the view changes).
+    filter: String,
+    chip: usize,
+    /// The notice shown as a toast, and the last notice seen (to know when a new one arrives).
+    toast: Option<crate::ui::Toast>,
+    seen_notice: String,
+    /// Every notice of this session, newest last, for the status bar history.
+    pub history: Vec<String>,
 }
 
 /// What the panel needs from the app to act.
@@ -278,6 +290,11 @@ impl Default for Panel {
                 .then(TaskForm::new),
             importing: None,
             reject_reason: String::new(),
+            filter: String::new(),
+            chip: 0,
+            toast: None,
+            seen_notice: String::new(),
+            history: Vec::new(),
         }
     }
 }
@@ -664,6 +681,37 @@ pub(crate) fn alert<'a>(content: Element<'a, Message>, color: Color) -> Element<
 
 impl Panel {
     pub fn update(&mut self, message: PanelMsg, ctx: &Ctx<'_>) -> Task<Message> {
+        let task = self.update_inner(message, ctx);
+        self.sync_toast();
+        task
+    }
+
+    /// A new notice (the panel's or the config tabs') becomes a toast and a line of the history.
+    fn sync_toast(&mut self) {
+        let current = if matches!(self.tab, Tab::Skills | Tab::Git | Tab::Events | Tab::Models)
+            && !self.cfg.notice.is_empty()
+        {
+            self.cfg.notice.clone()
+        } else {
+            self.notice.clone()
+        };
+        if current != self.seen_notice {
+            self.seen_notice = current.clone();
+            if !current.is_empty() {
+                self.history.push(current.clone());
+                let extra = self.history.len().saturating_sub(crate::ui::HISTORY);
+                self.history.drain(..extra);
+                self.toast = Some(crate::ui::Toast::new(current));
+            }
+        }
+    }
+
+    /// The toast to draw now, if any (a success goes away after a few seconds).
+    pub fn toast(&self) -> Option<&crate::ui::Toast> {
+        self.toast.as_ref().filter(|t| !t.expired())
+    }
+
+    fn update_inner(&mut self, message: PanelMsg, ctx: &Ctx<'_>) -> Task<Message> {
         self.cfg.set_api(&ctx.api);
         // any action other than arming disarms
         if !matches!(message, PanelMsg::Arm(_) | PanelMsg::Confirm) {
@@ -674,6 +722,8 @@ impl Panel {
         match message {
             PanelMsg::Tab(tab) => {
                 self.tab = tab;
+                self.filter.clear();
+                self.chip = 0;
                 if let Some(task) = self.load_config_tab(tab, ctx) {
                     return task;
                 }
@@ -691,6 +741,9 @@ impl Panel {
                 }
             }
             PanelMsg::Cfg(msg) => return self.cfg.update(msg, &ctx.data.root),
+            PanelMsg::Filter(t) => self.filter = t,
+            PanelMsg::Chip(i) => self.chip = i,
+            PanelMsg::DismissToast => self.toast = None,
             PanelMsg::SelectRun(id) => {
                 self.tab = Tab::Runs;
                 self.run = Some(id);
@@ -1338,6 +1391,7 @@ impl Panel {
         armed_label: &'a str,
     ) -> Element<'a, Message> {
         let armed = self.armed.as_ref() == Some(&key);
+        let approving = matches!(key, Armed::ApproveGate(..));
         let msg = if armed {
             PanelMsg::Confirm
         } else {
@@ -1350,11 +1404,16 @@ impl Panel {
                 .padding([0, 12])
                 .height(34)
                 .style(danger_button_style())
+        } else if approving {
+            button(content)
+                .padding([0, 12])
+                .height(34)
+                .style(primary_button_style())
         } else {
             button(content)
                 .padding([0, 12])
                 .height(34)
-                .style(theme::outline_button_style(false))
+                .style(theme::destructive_button_style())
         }
         .on_press(Message::Panel(msg))
         .into()
@@ -1489,7 +1548,122 @@ impl Panel {
             Tab::Models => self.cfg.models_view(),
             Tab::Snapshots => self.snapshots_view(ctx),
         };
-        column![tabs, body].into()
+        column![tabs, self.header(ctx), body].into()
+    }
+
+    /// The view's header (`title`, one line saying what is in it, and its actions at the top right).
+    fn header<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        let d = ctx.data;
+        let waiting = d.gates.len();
+        let (title, sub, actions): (&'static str, String, Vec<Element<'a, Message>>) = match self
+            .tab
+        {
+            Tab::Overview => (
+                "Overview",
+                format!("Workspace in {}", d.root.display()),
+                vec![
+                    btn("+ New agent", PanelMsg::OpenSpawnAgent),
+                    btn("+ New task", PanelMsg::TaskNew),
+                    btn_primary("Run a pattern", PanelMsg::OpenLauncher(None)),
+                ],
+            ),
+            Tab::Runs => {
+                let running = d
+                    .runs
+                    .iter()
+                    .filter(|r| matches!(r.run.state, PatternRunState::Running))
+                    .count();
+                let mut s = format!(
+                    "{} runs: {running} running, {} finished.",
+                    d.runs.len(),
+                    d.runs
+                        .iter()
+                        .filter(|r| matches!(r.run.state, PatternRunState::Done))
+                        .count()
+                );
+                if waiting > 0 {
+                    s.push_str(&format!(" {waiting} gate waits for you."));
+                }
+                (
+                    "Runs",
+                    s,
+                    vec![
+                        self.arm_button(
+                            Armed::CleanRuns,
+                            "Clean finished",
+                            "Confirm: delete finished",
+                        ),
+                        btn_primary("Run a pattern", PanelMsg::OpenLauncher(None)),
+                    ],
+                )
+            }
+            Tab::Agents => {
+                let working = d.agents.iter().filter(|a| a.state == "working").count();
+                let idle = d.agents.iter().filter(|a| a.state == "idle").count();
+                let blocked = d.agents.iter().filter(|a| a.state == "blocked").count();
+                (
+                    "Agents",
+                    format!(
+                        "{} agents: {working} working, {idle} idle, {blocked} blocked",
+                        d.agents.len()
+                    ),
+                    vec![
+                        self.arm_button(
+                            Armed::CleanRuns,
+                            "Clean finished",
+                            "Confirm: delete finished",
+                        ),
+                        btn("Resume idle", PanelMsg::ResumeAgents),
+                        btn_primary("+ New agent", PanelMsg::OpenSpawnAgent),
+                    ],
+                )
+            }
+            Tab::Tasks => (
+                "Tasks",
+                format!("{} tasks in {}", d.tasks.len(), d.root.display()),
+                vec![
+                    btn("Import issue", PanelMsg::ImportOpen),
+                    self.arm_button(Armed::ArchiveDone, "Archive done", "Confirm: archive done"),
+                    btn_primary("+ New task", PanelMsg::TaskNew),
+                ],
+            ),
+            Tab::Patterns => (
+                "Patterns",
+                "Teams of agents, written as YAML. Built-in ones are read-only.".to_owned(),
+                vec![],
+            ),
+            Tab::Monitor => (
+                "Activity",
+                "Live state of every agent and what they say to each other".to_owned(),
+                vec![],
+            ),
+            Tab::Skills => (
+                "Skills",
+                "What agents can do; the catalog of built-in, global and project skills".to_owned(),
+                vec![],
+            ),
+            Tab::Git => (
+                "Git",
+                "Worktrees, branches and pull requests".to_owned(),
+                vec![],
+            ),
+            Tab::Events => (
+                "Events",
+                "The bus: topics, partitions and messages".to_owned(),
+                vec![],
+            ),
+            Tab::Models => (
+                "Models",
+                "Vendors, models and the role of each agent".to_owned(),
+                vec![],
+            ),
+            Tab::Snapshots => (
+                "Snapshots",
+                format!("{} saved copies of agent worktrees", d.snapshots.len()),
+                vec![],
+            ),
+        };
+        crate::ui::page_header(title, sub, actions)
     }
 
     /// The window now looks at another session: forget what was picked and loaded from the previous one.
@@ -1577,6 +1751,32 @@ impl Panel {
         list_box(items, footer)
     }
 
+    /// A list with the filter box and chips of the redesign above it.
+    fn filtered_list<'a>(
+        &self,
+        placeholder: &'static str,
+        chips: &[(&'static str, usize)],
+        items: Vec<Element<'a, Message>>,
+        footer: Vec<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        let top = crate::ui::filter_bar(placeholder, &self.filter, chips, self.chip);
+        list_box_with(Some(top), items, footer)
+    }
+
+    #[cfg(test)]
+    fn update_filter_for_test(&mut self, t: &str) {
+        self.filter = t.into();
+    }
+
+    /// Does this text pass the filter box (case-insensitive, every word must appear)?
+    fn passes(&self, haystack: &str) -> bool {
+        let h = haystack.to_lowercase();
+        self.filter
+            .to_lowercase()
+            .split_whitespace()
+            .all(|w| h.contains(w))
+    }
+
     fn detail<'a>(&self, content: Element<'a, Message>) -> Element<'a, Message> {
         detail_box(content)
     }
@@ -1632,10 +1832,45 @@ impl Panel {
             .spacing(1),
         )
         .style(kpi_strip_style);
+        let finished_runs = ctx
+            .data
+            .runs
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.run.state,
+                    PatternRunState::Done | PatternRunState::Stopped
+                )
+            })
+            .count();
+        let chips = [
+            ("All", ctx.data.runs.len()),
+            ("Running", active),
+            ("Finished", finished_runs),
+        ];
         let items = ctx
             .data
             .runs
             .iter()
+            .filter(|r| {
+                let is_active = matches!(
+                    r.run.state,
+                    PatternRunState::Running
+                        | PatternRunState::Paused
+                        | PatternRunState::Stalled
+                        | PatternRunState::Degraded
+                );
+                let is_finished = matches!(
+                    r.run.state,
+                    PatternRunState::Done | PatternRunState::Stopped
+                );
+                let chip_ok = match self.chip {
+                    1 => is_active,
+                    2 => is_finished,
+                    _ => true,
+                };
+                chip_ok && self.passes(&format!("{} {} {}", r.run.pattern, r.run.id, r.run.task))
+            })
             .map(|r| {
                 let (label, color) = state_badge(r.run.state);
                 let body = column![
@@ -1674,14 +1909,7 @@ impl Panel {
                     .into()
             })
             .collect();
-        let footer = vec![
-            btn_link("+ Run pattern", PanelMsg::OpenLauncher(None)),
-            self.arm_button(
-                Armed::CleanRuns,
-                "Clean finished",
-                "Confirm: delete finished",
-            ),
-        ];
+        let footer: Vec<Element<'a, Message>> = vec![];
         let detail = if self.launching {
             self.launcher_view(ctx)
         } else {
@@ -1720,8 +1948,14 @@ impl Panel {
             .align_y(iced::Alignment::Center);
             page = page.push(alert(waiting.into(), WARN));
         }
-        page.push(row![self.list(items, footer), self.detail(detail)].height(Length::Fill))
-            .into()
+        page.push(
+            row![
+                self.filtered_list("Filter by pattern, run or task", &chips, items, footer),
+                self.detail(detail)
+            ]
+            .height(Length::Fill),
+        )
+        .into()
     }
 
     fn overview_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
@@ -2246,10 +2480,28 @@ impl Panel {
             .and_then(|id| ctx.data.agents.iter().find(|a| a.id == id))
             .or_else(|| ctx.data.agents.first())
             .map(|a| a.id.clone());
+        let idle = ctx.data.agents.iter().filter(|a| a.state == "idle").count();
+        let chips = [
+            ("All", ctx.data.agents.len()),
+            ("Working", working),
+            ("Idle", idle),
+            ("Blocked", needs_you),
+            ("Done", finished),
+        ];
         let items = ctx
             .data
             .agents
             .iter()
+            .filter(|a| {
+                let chip_ok = match self.chip {
+                    1 => matches!(a.state.as_str(), "working" | "starting"),
+                    2 => a.state == "idle",
+                    3 => a.state == "blocked" || !a.notice.is_empty(),
+                    4 => matches!(a.state.as_str(), "done" | "exited" | "killed" | "failed"),
+                    _ => true,
+                };
+                chip_ok && self.passes(&format!("{} {} {} {}", a.id, a.role, a.vendor, a.model))
+            })
             .map(|a| {
                 let status = agent_status(&a.state);
                 let needs_you = a.state == "blocked" || !a.notice.is_empty();
@@ -2276,15 +2528,7 @@ impl Panel {
                     .into()
             })
             .collect();
-        let footer = vec![
-            btn_link("+ New agent", PanelMsg::OpenSpawnAgent),
-            btn_ghost("Resume idle", PanelMsg::ResumeAgents),
-            self.arm_button(
-                Armed::CleanRuns,
-                "Clean finished",
-                "Confirm: delete finished",
-            ),
-        ];
+        let footer: Vec<Element<'a, Message>> = vec![];
         let summary = container(
             row![
                 agent_metric("TOTAL", ctx.data.agents.len(), FG),
@@ -2316,7 +2560,16 @@ impl Panel {
         };
         column![
             summary,
-            row![self.list(items, footer), self.detail(detail)].height(Length::Fill),
+            row![
+                self.filtered_list(
+                    "Filter by name, role, vendor or task",
+                    &chips,
+                    items,
+                    footer
+                ),
+                self.detail(detail)
+            ]
+            .height(Length::Fill),
         ]
         .spacing(8)
         .into()
@@ -2699,10 +2952,29 @@ impl Panel {
             .and_then(|id| ctx.data.task(id))
             .or_else(|| ctx.data.tasks.first())
             .map(|t| t.status.id);
+        let done_n = ctx
+            .data
+            .tasks
+            .iter()
+            .filter(|t| is_done(&t.status.state))
+            .count();
+        let chips = [
+            ("All", ctx.data.tasks.len()),
+            ("Open", open),
+            ("Done", done_n),
+        ];
         let items = ctx
             .data
             .tasks
             .iter()
+            .filter(|t| {
+                let chip_ok = match self.chip {
+                    1 => !is_done(&t.status.state),
+                    2 => is_done(&t.status.state),
+                    _ => true,
+                };
+                chip_ok && self.passes(&format!("#{} {}", t.status.id, t.status.title))
+            })
             .map(|t| {
                 let in_run = ctx
                     .data
@@ -2729,11 +3001,7 @@ impl Panel {
                     .into()
             })
             .collect();
-        let footer = vec![
-            btn_link("+ Task", PanelMsg::TaskNew),
-            btn_link("Import issue", PanelMsg::ImportOpen),
-            self.arm_button(Armed::ArchiveDone, "Archive done", "Confirm: archive done"),
-        ];
+        let footer: Vec<Element<'a, Message>> = vec![];
         let detail: Element<'a, Message> = match ctx
             .data
             .tasks
@@ -2863,7 +3131,11 @@ impl Panel {
         };
         column![
             summary,
-            row![self.list(items, footer), self.detail(detail)].height(Length::Fill),
+            row![
+                self.filtered_list("Filter by number or title", &chips, items, footer),
+                self.detail(detail)
+            ]
+            .height(Length::Fill),
         ]
         .into()
     }
@@ -3132,6 +3404,15 @@ pub fn list_box<'a>(
     items: Vec<Element<'a, Message>>,
     footer: Vec<Element<'a, Message>>,
 ) -> Element<'a, Message> {
+    list_box_with(None, items, footer)
+}
+
+/// `list_box` with something (the filter) above the items.
+pub fn list_box_with<'a>(
+    top: Option<Element<'a, Message>>,
+    items: Vec<Element<'a, Message>>,
+    footer: Vec<Element<'a, Message>>,
+) -> Element<'a, Message> {
     let line = || {
         container(text(""))
             .width(Length::Fill)
@@ -3142,14 +3423,18 @@ pub fn list_box<'a>(
             })
     };
     let list = scrollable(column(items).spacing(2).padding(8)).height(Length::Fill);
+    let mut col = column![];
+    if let Some(top) = top {
+        col = col.push(top);
+    }
+    col = col.push(list);
+    if !footer.is_empty() {
+        col = col
+            .push(line())
+            .push(container(row(footer).spacing(4).wrap()).padding(8));
+    }
     row![
-        container(column![
-            list,
-            line(),
-            container(row(footer).spacing(4).wrap()).padding(8)
-        ])
-        .width(300)
-        .height(Length::Fill),
+        container(col).width(300).height(Length::Fill),
         container(text(""))
             .width(1)
             .height(Length::Fill)
@@ -3477,5 +3762,22 @@ mod tests {
         assert_eq!(panel.reject_reason, "split it");
         let _ = panel.update(PanelMsg::Confirm, &ctx);
         assert_eq!(panel.reject_reason, "");
+    }
+
+    #[test]
+    fn a_new_notice_becomes_a_toast_a_refusal_stays_and_the_filter_needs_every_word() {
+        let mut panel = Panel::default();
+        panel.notice = "Saved task #1".into();
+        panel.sync_toast();
+        assert!(panel.toast().is_some_and(|t| !t.error));
+        panel.notice = "error: refused: cannot remove".into();
+        panel.sync_toast();
+        let toast = panel.toast().expect("a refusal stays");
+        assert!(toast.error && !toast.expired());
+        assert_eq!(panel.history.len(), 2);
+        panel.update_filter_for_test("api team");
+        assert!(!panel.passes("api only 231"));
+        assert!(panel.passes("api team 231"));
+        assert!(panel.passes("TEAM api"));
     }
 }
