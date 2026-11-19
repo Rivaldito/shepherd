@@ -32,14 +32,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use theme::{
-    item_style, mini_button_style, pad, primary_button_style, status_color, status_name, ACCENT,
-    BG, DIM, LINE, PANEL,
+    item_style, mini_button_style, pad, primary_button_style, status_color, status_name, BG, DIM,
+    LINE, PANEL,
 };
 
 const SIDEBAR_W: f32 = 232.0;
 /// The height of a terminal row, which the pane headers take.
 const CELL_ROW: f32 = grid::CELL_H;
-const SIDEBAR_COLLAPSED_W: f32 = 48.0;
 const TABBAR_H: f32 = 42.0;
 const STATUS_H: f32 = 30.0;
 const TOPBAR_H: f32 = 46.0;
@@ -206,7 +205,6 @@ enum Message {
     /// One frame of the demo film: its number and the picture.
     FilmShot(u32, iced::window::Screenshot),
     ArmClose(PendingClose),
-    ToggleSidebar,
     ContextMenuOpened(ContextMenuTarget),
     ContextMenuClosed,
     RenameStarted(String),
@@ -301,7 +299,6 @@ struct App {
     snapshot: Snapshot,
     status: String,
     pending_close: Option<PendingClose>,
-    sidebar_collapsed: bool,
     /// Animation step of the prism canvases.
     frame: u32,
     /// Demo recording (`SHEPHERD_NATIVE_FILM=<dir>`), see [`Film`].
@@ -358,7 +355,6 @@ impl App {
             snapshot: Snapshot::default(),
             status: "connecting…".into(),
             pending_close: None,
-            sidebar_collapsed: std::env::var_os("SHEPHERD_NATIVE_SIDEBAR_COLLAPSED").is_some(),
             window: start_size(),
             sent: None,
             api_socket: api::api_socket_for(&client_socket()),
@@ -427,12 +423,7 @@ impl App {
     }
 
     fn geometry(&self) -> Geometry {
-        let sidebar_width = if self.sidebar_collapsed {
-            SIDEBAR_COLLAPSED_W
-        } else {
-            SIDEBAR_W
-        };
-        let (cols, rows) = terminal_cells(self.window, sidebar_width);
+        let (cols, rows) = terminal_cells(self.window, SIDEBAR_W);
         Geometry {
             cols,
             rows,
@@ -554,13 +545,6 @@ impl App {
                         matches!(key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("s"));
                     if is_s && modifiers.control() && modifiers.shift() {
                         return Task::done(Message::SetMode(self.mode.other()));
-                    }
-                    let is_b = matches!(
-                        key,
-                        keyboard::Key::Character(c) if c.eq_ignore_ascii_case("b")
-                    );
-                    if is_b && modifiers.control() {
-                        return Task::done(Message::ToggleSidebar);
                     }
                     // `/` jumps to the filter of the list (a focused input has already taken the key)
                     if self.mode == Mode::Shepherd
@@ -806,11 +790,6 @@ impl App {
             Message::ArmClose(pending) => {
                 self.pending_close = Some(pending);
                 self.status = "Press close again to confirm closing the group.".into();
-            }
-            Message::ToggleSidebar => {
-                self.sidebar_collapsed = !self.sidebar_collapsed;
-                self.sent = None;
-                self.sync_size();
             }
             Message::ContextMenuOpened(target) => {
                 self.context_menu = Some((self.mouse_position, target));
@@ -1835,106 +1814,6 @@ impl App {
     }
 
     fn sidebar(&self) -> Element<'_, Message> {
-        if self.sidebar_collapsed {
-            // Orca-style collapsed sidebar: icon-only, very narrow
-            let working = self
-                .snapshot
-                .agents
-                .iter()
-                .filter(|agent| {
-                    matches!(agent.status(), shepherd_app_core::snapshot::Status::Working)
-                })
-                .count();
-            let _blocked = self
-                .snapshot
-                .agents
-                .iter()
-                .filter(|agent| {
-                    matches!(agent.status(), shepherd_app_core::snapshot::Status::Blocked)
-                })
-                .count();
-
-            let mut items = column![].spacing(0).align_x(iced::Alignment::Center);
-
-            // Top section: Shepherd button
-            items = items.push(
-                container(
-                    column![tooltip(
-                        button(text("◆").size(15))
-                            .padding(6)
-                            .width(32.0)
-                            .height(32.0)
-                            .style(item_style(self.mode == Mode::Shepherd))
-                            .on_press(Message::SetMode(Mode::Shepherd)),
-                        text("Shepherd").size(11),
-                        tooltip::Position::Right,
-                    ),]
-                    .spacing(4),
-                )
-                .padding(pad(10.0, 0.0, 6.0, 0.0)),
-            );
-
-            items = items.push(
-                container(
-                    column![
-                        tooltip(
-                            button(text("⌂").size(15))
-                                .padding(6)
-                                .width(32.0)
-                                .height(32.0)
-                                .style(mini_button_style())
-                                .on_press(Message::ToggleSidebar),
-                            text("Workspaces").size(11),
-                            tooltip::Position::Right,
-                        ),
-                        tooltip(
-                            button(
-                                container(text("◉").size(11).color(if working > 0 {
-                                    ACCENT
-                                } else {
-                                    DIM
-                                }))
-                                .width(32.0)
-                                .align_x(iced::Alignment::Center)
-                                .height(32.0)
-                            )
-                            .padding(0)
-                            .width(32.0)
-                            .height(32.0)
-                            .style(mini_button_style())
-                            .on_press(Message::Panel(panel::PanelMsg::Tab(panel::Tab::Agents))),
-                            text(format!("Agents ({working})")).size(11),
-                            tooltip::Position::Right,
-                        ),
-                    ]
-                    .spacing(0),
-                )
-                .padding([6, 0]),
-            );
-
-            // Bottom: expand button
-            items = items.push(container(text("")).height(Length::Fill));
-            items = items.push(tooltip(
-                button(text("›").size(15))
-                    .padding(6)
-                    .width(32.0)
-                    .height(32.0)
-                    .style(mini_button_style())
-                    .on_press(Message::ToggleSidebar),
-                text("Expand sidebar").size(11),
-                tooltip::Position::Right,
-            ));
-
-            return container(items)
-                .width(SIDEBAR_COLLAPSED_W)
-                .height(Length::Fill)
-                .style(|_| container::Style {
-                    background: Some(Background::Color(PANEL)),
-                    ..container::Style::default()
-                })
-                .into();
-        }
-
         // Rail (`.rail`): pixel-font section labels, square bullets, agents with a state square.
         // Workspaces (the terminal containers): a row per workspace with the state of its most urgent agent;
         // opening one expands it in place with its tabs, its agents and New terminal.
@@ -2066,86 +1945,94 @@ impl App {
             if !open {
                 continue;
             }
-            // its tabs, with how many panes each holds
-            let mut tabs = row![text("tabs").size(11).color(DIM)]
-                .spacing(6)
-                .align_y(iced::Alignment::Center);
+            // its tabs, one under the other, each with the agents running in its panes
+            let mut inner = column![].spacing(2);
             for tab in self.snapshot.tabs_of(&workspace.workspace_id) {
+                let in_tab: Vec<&&shepherd_app_core::snapshot::Agent> =
+                    mine.iter().filter(|a| a.tab_id == tab.tab_id).collect();
                 let panes = self
                     .snapshot
                     .panes
                     .iter()
                     .filter(|p| p.tab_id == tab.tab_id)
                     .count();
-                let on = tab.focused;
-                tabs = tabs.push(
-                    button(
-                        row![
-                            text(if tab.label.chars().count() > 12 {
-                                format!("{}…", tab.label.chars().take(11).collect::<String>())
-                            } else {
-                                tab.label.clone()
-                            })
-                            .size(11.5),
-                            text(panes.to_string()).size(10).color(DIM)
-                        ]
-                        .spacing(5),
-                    )
-                    .padding([2, 7])
-                    .style(theme::chip_style(on))
-                    .on_press(Message::Act(Action::FocusTab(tab.tab_id.clone()))),
-                );
-            }
-            let mut inner = column![tabs.wrap()].spacing(6);
-            for agent in &mine {
-                let status = agent_state(agent);
-                let color = status_color(status);
-                let square = container(
-                    text(theme::status_glyph(status))
-                        .size(10)
-                        .font(theme::MONO_BOLD)
-                        .color(BG),
-                )
-                .width(18)
-                .height(18)
-                .center_x(18)
-                .center_y(18)
-                .style(move |_| container::Style {
-                    background: Some(Background::Color(color)),
-                    border: Border {
-                        radius: 3.0.into(),
-                        ..Border::default()
-                    },
-                    ..container::Style::default()
-                });
-                let target = if in_shepherd {
-                    Message::GoToPane(agent.pane_id.clone())
-                } else {
-                    Message::Act(Action::FocusPane(agent.pane_id.clone()))
-                };
                 inner = inner.push(
                     button(
                         row![
-                            square,
-                            text(agent.display_name()).size(12).width(Length::Fill),
-                            text(if status == shepherd_app_core::snapshot::Status::Blocked {
-                                "needs you"
+                            text("›_").size(11).color(DIM),
+                            text(if tab.label.chars().count() > 22 {
+                                format!("{}…", tab.label.chars().take(21).collect::<String>())
                             } else {
-                                status_name(status)
+                                tab.label.clone()
                             })
-                            .size(11)
-                            .color(color),
+                            .size(12)
+                            .width(Length::Fill),
+                            text(format!("{panes}")).size(10.5).color(DIM),
                         ]
-                        .align_y(iced::Alignment::Center)
-                        .spacing(10)
-                        .width(Length::Fill),
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
                     )
                     .width(Length::Fill)
-                    .height(30)
+                    .height(28)
                     .padding([0, 8])
-                    .style(item_style(agent.focused))
-                    .on_press(target),
+                    .style(item_style(tab.focused))
+                    .on_press(Message::Act(Action::FocusTab(tab.tab_id.clone()))),
                 );
+                for agent in in_tab {
+                    let status = agent_state(agent);
+                    let color = status_color(status);
+                    let square = container(
+                        text(theme::status_glyph(status))
+                            .size(10)
+                            .font(theme::MONO_BOLD)
+                            .color(BG),
+                    )
+                    .width(18)
+                    .height(18)
+                    .center_x(18)
+                    .center_y(18)
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(color)),
+                        border: Border {
+                            radius: 3.0.into(),
+                            ..Border::default()
+                        },
+                        ..container::Style::default()
+                    });
+                    let target = if in_shepherd {
+                        Message::GoToPane(agent.pane_id.clone())
+                    } else {
+                        Message::Act(Action::FocusPane(agent.pane_id.clone()))
+                    };
+                    inner = inner.push(
+                        container(
+                            button(
+                                row![
+                                    square,
+                                    text(agent.display_name()).size(12).width(Length::Fill),
+                                    text(
+                                        if status == shepherd_app_core::snapshot::Status::Blocked {
+                                            "needs you"
+                                        } else {
+                                            status_name(status)
+                                        }
+                                    )
+                                    .size(11)
+                                    .color(color),
+                                ]
+                                .align_y(iced::Alignment::Center)
+                                .spacing(10)
+                                .width(Length::Fill),
+                            )
+                            .width(Length::Fill)
+                            .height(28)
+                            .padding([0, 8])
+                            .style(item_style(agent.focused))
+                            .on_press(target),
+                        )
+                        .padding(pad(0.0, 0.0, 0.0, 12.0)),
+                    );
+                }
             }
             let plain = self
                 .snapshot
@@ -2186,27 +2073,9 @@ impl App {
         } else {
             container(text("")).height(0).into()
         };
-        // the brand and the switch live in the top bar; here only the toggle that gives the terminal more room
-        let brand: Element<'_, Message> = if self.mode == Mode::Shepherd {
-            container(text("")).height(0).into()
-        } else {
-            row![
-                container(text("")).width(Length::Fill),
-                button(text("‹").size(13))
-                    .padding(5)
-                    .style(mini_button_style())
-                    .on_press(Message::ToggleSidebar),
-            ]
-            .align_y(iced::Alignment::Center)
-            .padding(pad(6.0, 10.0, 0.0, 10.0))
-            .into()
-        };
         container(scrollable(
-            column![
-                brand,
-                container(column![spaces, agents, nav].spacing(6)).padding([14, 10])
-            ]
-            .spacing(0),
+            column![container(column![spaces, agents, nav].spacing(6)).padding([14, 10])]
+                .spacing(0),
         ))
         .width(SIDEBAR_W)
         .height(Length::Fill)
