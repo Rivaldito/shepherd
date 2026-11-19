@@ -140,6 +140,8 @@ pub enum PanelMsg {
     Filter(String),
     Chip(usize),
     DismissToast,
+    /// What the agents' panes show now.
+    Outputs(Vec<(String, String)>),
 }
 
 /// The create / edit form of a task.
@@ -229,6 +231,10 @@ pub struct Panel {
     seen_notice: String,
     /// Every notice of this session, newest last, for the status bar history.
     pub history: Vec<String>,
+    /// The graph of the shown run's pattern, for the live topology (cached by pattern name).
+    run_graph: Option<(String, shepherd_app_core::pattern_graph::Graph)>,
+    /// The last lines each agent's pane shows, by pane id (asked from the API while Agents is open).
+    outputs: std::collections::HashMap<String, String>,
 }
 
 /// What the panel needs from the app to act.
@@ -295,6 +301,8 @@ impl Default for Panel {
             toast: None,
             seen_notice: String::new(),
             history: Vec::new(),
+            run_graph: None,
+            outputs: Default::default(),
         }
     }
 }
@@ -346,14 +354,26 @@ fn agent_skill_buttons<'a>(
             PanelMsg::AgentSkill(a.id.clone(), skill.to_owned(), enable),
         )
     };
-    let row_of = |skill: &str, buttons: Vec<Element<'a, Message>>| {
-        let mut r = row![text(skill.to_owned()).size(12).width(Length::Fill)]
-            .spacing(4)
+    // the first of a row's buttons becomes the switch; "Reset" stays a small link
+    let row_of = |skill: &str, enabled: bool, buttons: Vec<Element<'a, Message>>| {
+        let id = a.id.clone();
+        let name = skill.to_owned();
+        let mut r = row![text(skill.to_owned()).size(12.5).width(Length::Fill)]
+            .spacing(8)
             .align_y(iced::Alignment::Center);
-        for b in buttons {
+        if enabled || !a.skills.add.contains(&name) || a.skills.remove.contains(&name) {
+            r = r.push(
+                iced::widget::toggler(enabled)
+                    .size(16)
+                    .on_toggle(move |on| {
+                        Message::Panel(PanelMsg::AgentSkill(id.clone(), name.clone(), Some(on)))
+                    }),
+            );
+        }
+        for b in buttons.into_iter().skip(1) {
             r = r.push(b);
         }
-        Element::from(r)
+        Element::from(container(r).padding([7, 12]).width(Length::Fill))
     };
     let mut rows = Vec::new();
     for skill in a
@@ -365,11 +385,12 @@ fn agent_skill_buttons<'a>(
         if a.skills.add.contains(skill) {
             buttons.push(pick(skill, "Reset", None));
         }
-        rows.push(row_of(skill, buttons));
+        rows.push(row_of(skill, true, buttons));
     }
     for skill in &a.skills.remove {
         rows.push(row_of(
             skill,
+            false,
             vec![
                 pick(skill, "Turn on", Some(true)),
                 pick(skill, "Reset", None),
@@ -377,7 +398,7 @@ fn agent_skill_buttons<'a>(
         ));
     }
     for skill in a.skills.add.iter().filter(|s| !a.active_skills.contains(s)) {
-        rows.push(row_of(skill, vec![pick(skill, "Reset", None)]));
+        rows.push(row_of(skill, true, vec![pick(skill, "Reset", None)]));
     }
     if !rows.is_empty() {
         rows.push(
@@ -406,6 +427,14 @@ fn reason_of(typed: &str) -> Option<String> {
 }
 
 /// A task whose run can still be cancelled: it has started and has not ended.
+fn tail_is_empty(o: &std::collections::HashMap<String, String>, pane: &str) -> bool {
+    o.get(pane).is_none_or(|t| t.trim().is_empty())
+}
+
+fn msg_hot(status: button::Status) -> bool {
+    matches!(status, button::Status::Hovered | button::Status::Pressed)
+}
+
 fn has_run(state: &str) -> bool {
     !matches!(
         state,
@@ -684,6 +713,7 @@ impl Panel {
     pub fn update(&mut self, message: PanelMsg, ctx: &Ctx<'_>) -> Task<Message> {
         let task = self.update_inner(message, ctx);
         self.sync_toast();
+        self.refresh_run_graph(ctx);
         task
     }
 
@@ -707,6 +737,52 @@ impl Panel {
         }
     }
 
+    /// Asks the API for the tail of every agent pane (the cards of Agents show it as live output).
+    fn load_outputs(&self, ctx: &Ctx<'_>) -> Task<Message> {
+        let api = ctx.api.clone();
+        let panes: Vec<String> = ctx
+            .data
+            .agents
+            .iter()
+            .filter(|a| !a.pane.is_empty())
+            .map(|a| a.pane.clone())
+            .collect();
+        if panes.is_empty() {
+            return Task::none();
+        }
+        Task::perform(
+            async move {
+                panes
+                    .into_iter()
+                    .filter_map(|p| actions::pane_tail(&api, &p, 4).ok().map(|t| (p, t)))
+                    .collect::<Vec<_>>()
+            },
+            |l| Message::Panel(PanelMsg::Outputs(l)),
+        )
+    }
+
+    /// The run shown in Runs: the picked one, else the first.
+    fn shown_run<'a>(&self, ctx: &Ctx<'a>) -> Option<&'a shepherd_app_core::data::RunRow> {
+        self.run
+            .as_deref()
+            .and_then(|id| ctx.data.runs.iter().find(|r| r.run.id == id))
+            .or_else(|| ctx.data.runs.first())
+    }
+
+    /// Loads the graph of the shown run's pattern when it changed (it is a small file read).
+    fn refresh_run_graph(&mut self, ctx: &Ctx<'_>) {
+        let Some(run) = self.shown_run(ctx) else {
+            self.run_graph = None;
+            return;
+        };
+        if self.run_graph.as_ref().map(|(n, _)| n.as_str()) == Some(run.run.pattern.as_str()) {
+            return;
+        }
+        self.run_graph = shepherd_app_core::pattern_graph::load(&ctx.data.root, &run.run.pattern)
+            .ok()
+            .map(|v| (run.run.pattern.clone(), v.graph));
+    }
+
     /// The toast to draw now, if any (a success goes away after a few seconds).
     pub fn toast(&self) -> Option<&crate::ui::Toast> {
         self.toast.as_ref().filter(|t| !t.expired())
@@ -725,6 +801,9 @@ impl Panel {
                 self.tab = tab;
                 self.filter.clear();
                 self.chip = 0;
+                if tab == Tab::Agents {
+                    return self.load_outputs(ctx);
+                }
                 if let Some(task) = self.load_config_tab(tab, ctx) {
                     return task;
                 }
@@ -745,6 +824,7 @@ impl Panel {
             PanelMsg::Filter(t) => self.filter = t,
             PanelMsg::Chip(i) => self.chip = i,
             PanelMsg::DismissToast => self.toast = None,
+            PanelMsg::Outputs(list) => self.outputs = list.into_iter().collect(),
             PanelMsg::SelectRun(id) => {
                 self.tab = Tab::Runs;
                 self.run = Some(id);
@@ -1340,6 +1420,7 @@ impl Panel {
 
     pub fn on_data(&mut self, ctx: &Ctx<'_>) -> Task<Message> {
         self.cfg.set_api(&ctx.api);
+        self.refresh_run_graph(ctx);
         if let Some(id) = std::env::var("SHEPHERD_NATIVE_TASKFORM")
             .ok()
             .and_then(|v| v.strip_prefix("edit:").and_then(|n| n.parse::<u32>().ok()))
@@ -1357,6 +1438,9 @@ impl Panel {
         }
         if self.tab == Tab::Snapshots {
             return self.snap_show(ctx);
+        }
+        if self.tab == Tab::Agents {
+            return self.load_outputs(ctx);
         }
         if self.tab == Tab::Patterns && self.pattern_sel.is_none() {
             if let Some(first) = ctx.data.patterns.first().map(|p| p.name.clone()) {
@@ -1863,29 +1947,44 @@ impl Panel {
             })
             .map(|r| {
                 let (label, color) = state_badge(r.run.state);
-                let body = column![
-                    text(format!(
-                        "{} · {}",
-                        r.run.pattern,
-                        r.run.id.trim_start_matches("run-")
-                    ))
-                    .size(13)
-                    .color(theme::HI),
-                    text(format!(
-                        "{label} · {}/{} agents",
-                        r.live_agents,
-                        r.run.agents.len()
-                    ))
-                    .size(11)
-                    .color(color),
-                    text(if r.run.task.is_empty() {
-                        "No objective".to_owned()
-                    } else {
-                        r.run.task.chars().take(56).collect()
+                let task_id = task_of_run(&r.run.task);
+                let waits = ctx.data.gates.iter().any(|g| Some(g.task_id) == task_id);
+                let mut body = column![
+                    row![
+                        text("■").size(9).color(color),
+                        text(r.run.pattern.clone())
+                            .font(theme::MONO_BOLD)
+                            .size(13)
+                            .color(theme::HI)
+                            .width(Length::Fill),
+                        text(label).size(11).color(color),
+                    ]
+                    .spacing(8)
+                    .align_y(iced::Alignment::Center),
+                    text(r.run.id.clone()).size(11).color(DIM),
+                    text(match task_id.and_then(|id| ctx.data.task(id)) {
+                        Some(t) => format!(
+                            "#{} {}   {} of {} agents live",
+                            t.status.id,
+                            t.status.title,
+                            r.live_agents,
+                            r.run.agents.len()
+                        ),
+                        None => format!("{} of {} agents live", r.live_agents, r.run.agents.len()),
                     })
-                    .size(10)
-                    .color(DIM)
-                ];
+                    .size(11)
+                    .color(DIM),
+                ]
+                .spacing(3);
+                if waits {
+                    body = body.push(
+                        row![
+                            text("■").size(9).color(WARN),
+                            text("gate waits for you").size(11).color(WARN)
+                        ]
+                        .spacing(6),
+                    );
+                }
                 button(body)
                     .width(Length::Fill)
                     .padding([4, 8])
@@ -2555,18 +2654,29 @@ impl Panel {
                 "Confirm: delete this run"
             },
         ));
+        let linked_task = task_of_run(&run.task);
+        if let Some(t) = linked_task.and_then(|id| ctx.data.task(id)) {
+            if has_run(&t.status.state) {
+                controls = controls.push(self.arm_button(
+                    Armed::CancelRun(t.status.id),
+                    "Cancel task's run",
+                    "Confirm: cancel the run",
+                ));
+            }
+        }
         let mut col = column![
             row![
-                text(format!("RUN: {}", run.pattern))
-                    .size(18)
+                text(run.pattern.clone())
+                    .font(theme::MONO_BOLD)
+                    .size(22)
                     .color(theme::HI),
-                text(run.id.clone()).size(13).color(DIM),
-                badge(label.to_uppercase(), color),
+                text(format!("run {}", run.id)).size(12).color(DIM),
+                badge(label, color),
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center),
             text(format!(
-                "Topology {} · created {} · updated {}",
+                "topology {}   started {}   updated {}",
                 run.kind, run.created_at, run.updated_at
             ))
             .size(12)
@@ -2589,6 +2699,16 @@ impl Panel {
                 BAD,
             ));
         }
+        for g in ctx
+            .data
+            .gates
+            .iter()
+            .filter(|g| Some(g.task_id) == linked_task)
+        {
+            col = col.push(self.gate_card(ctx, g));
+        }
+        col = col.push(self.run_chain(ctx, r));
+        col = col.push(self.topology_card(ctx, r));
         let mut objective = column![text(if run.task.is_empty() {
             "No objective.".to_owned()
         } else {
@@ -2638,6 +2758,164 @@ impl Panel {
         container(col).max_width(980).into()
     }
 
+    /// The pills that follow one piece of work: task > run > agents > branches > publish.
+    fn run_chain<'a>(
+        &'a self,
+        ctx: &Ctx<'a>,
+        r: &'a shepherd_app_core::data::RunRow,
+    ) -> Element<'a, Message> {
+        let d = ctx.data;
+        let task_id = task_of_run(&r.run.task);
+        let agents: Vec<_> = d
+            .agents
+            .iter()
+            .filter(|a| r.run.agents.iter().any(|ra| ra.id == a.id))
+            .collect();
+        let mut branches: Vec<String> = vec![];
+        for a in &agents {
+            let b = if a.branch.is_empty() {
+                "main".to_owned()
+            } else {
+                a.branch.clone()
+            };
+            if !branches.contains(&b) {
+                branches.push(b);
+            }
+        }
+        let waits = d.gates.iter().any(|g| Some(g.task_id) == task_id);
+        let pill = |key: &'static str, value: String, color: Color, msg: Option<PanelMsg>| {
+            let body = row![
+                text(key).size(11).color(DIM),
+                text(value).size(12).color(color),
+            ]
+            .spacing(8);
+            let b = button(body).padding([4, 12]).style(move |_, status| {
+                let hot = msg_hot(status);
+                button::Style {
+                    background: hot.then_some(Background::Color(theme::SURFACE)),
+                    text_color: FG,
+                    border: iced::Border {
+                        color: if color == ACCENT {
+                            ACCENT
+                        } else {
+                            theme::LINE2
+                        },
+                        width: 1.0,
+                        radius: 14.0.into(),
+                    },
+                    ..button::Style::default()
+                }
+            });
+            match msg {
+                Some(m) => b.on_press(Message::Panel(m)),
+                None => b,
+            }
+        };
+        let arrow = || text("›").size(14).color(DIM);
+        let mut r_ = row![].spacing(8).align_y(iced::Alignment::Center);
+        if let Some(id) = task_id {
+            let title = d
+                .task(id)
+                .map(|t| t.status.title.clone())
+                .unwrap_or_default();
+            r_ = r_
+                .push(pill(
+                    "task",
+                    format!("#{id} {title}"),
+                    FG,
+                    Some(PanelMsg::SelectTask(id)),
+                ))
+                .push(arrow());
+        }
+        r_ = r_
+            .push(pill("run", r.run.id.clone(), ACCENT, None))
+            .push(arrow())
+            .push(pill(
+                "agents",
+                agents.len().max(r.run.agents.len()).to_string(),
+                FG,
+                Some(PanelMsg::Tab(Tab::Agents)),
+            ))
+            .push(arrow())
+            .push(pill(
+                "branches",
+                branches.join(", "),
+                FG,
+                Some(PanelMsg::Tab(Tab::Git)),
+            ))
+            .push(arrow())
+            .push(pill(
+                "publish",
+                if waits {
+                    "waits for you".to_owned()
+                } else {
+                    "no publish step".to_owned()
+                },
+                if waits { WARN } else { DIM },
+                None,
+            ));
+        r_.wrap().into()
+    }
+
+    /// `Live topology`: who publishes to which topic and who reads it.
+    fn topology_card<'a>(
+        &'a self,
+        ctx: &Ctx<'a>,
+        r: &'a shepherd_app_core::data::RunRow,
+    ) -> Element<'a, Message> {
+        let legend = |color: Color, name: &'static str| {
+            row![
+                text("■").size(10).color(color),
+                text(name).size(11).color(DIM)
+            ]
+            .spacing(4)
+        };
+        let right: Element<'a, Message> = row![
+            legend(ACCENT, "working"),
+            legend(theme::IDLE, "idle"),
+            legend(WARN, "blocked"),
+            legend(theme::VIOLET, "topic"),
+        ]
+        .spacing(12)
+        .into();
+        let body: Element<'a, Message> = match &self.run_graph {
+            Some((_, graph)) if !graph.nodes.is_empty() => {
+                let agents = r
+                    .run
+                    .agents
+                    .iter()
+                    .map(|a| {
+                        let live = ctx.data.agents.iter().find(|x| x.id == a.id);
+                        let state = live.map_or(a.state.as_str(), |x| x.state.as_str());
+                        let color = status_color(agent_status(state));
+                        let word = if state == "blocked" {
+                            "needs you"
+                        } else {
+                            state
+                        };
+                        (a.id.clone(), a.role.clone(), color, word.to_owned())
+                    })
+                    .collect();
+                Canvas::new(crate::graph_view::TopologyView {
+                    graph,
+                    agents,
+                    live: matches!(r.run.state, PatternRunState::Running),
+                    frame: ctx.frame,
+                })
+                .width(Length::Fill)
+                .height(graph.height + 40.0)
+                .into()
+            }
+            _ => text(
+                "The pattern of this run could not be loaded, so there is no topology to draw.",
+            )
+            .size(12)
+            .color(DIM)
+            .into(),
+        };
+        card("LIVE TOPOLOGY", Some(right), body)
+    }
+
     fn agents_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
         let working = ctx
             .data
@@ -2671,7 +2949,7 @@ impl Panel {
             ("Blocked", needs_you),
             ("Done", finished),
         ];
-        let items = ctx
+        let items: Vec<Element<'a, Message>> = ctx
             .data
             .agents
             .iter()
@@ -2688,25 +2966,121 @@ impl Panel {
             .map(|a| {
                 let status = agent_status(&a.state);
                 let needs_you = a.state == "blocked" || !a.notice.is_empty();
+                let (state_word, state_color) = if needs_you {
+                    ("needs you", WARN)
+                } else {
+                    (a.state.as_str(), status_color(status))
+                };
+                let selected_card = selected.as_deref() == Some(a.id.as_str());
+                let empty = tail_is_empty(&self.outputs, &a.pane);
+                let tail: String = self
+                    .outputs
+                    .get(&a.pane)
+                    .map(|t| {
+                        let lines: Vec<&str> = t.lines().filter(|l| !l.trim().is_empty()).collect();
+                        let from = lines.len().saturating_sub(3);
+                        lines[from..]
+                            .iter()
+                            .map(|l| l.chars().take(46).collect::<String>())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                let output = container(
+                    text(if empty {
+                        "No output yet".to_owned()
+                    } else {
+                        tail
+                    })
+                    .size(11)
+                    .color(if empty { DIM } else { FG }),
+                )
+                .padding([8, 10])
+                .width(Length::Fill)
+                .height(64)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(theme::BG)),
+                    border: iced::Border {
+                        color: LINE,
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..container::Style::default()
+                });
                 let body = column![
                     row![
                         agent_square(status),
-                        text(a.id.clone()).size(13).color(theme::HI)
+                        column![
+                            text(a.id.clone())
+                                .font(theme::MONO_BOLD)
+                                .size(13)
+                                .color(theme::HI),
+                            text(format!("{}, {} {}", a.role, a.vendor, a.model))
+                                .size(11)
+                                .color(DIM),
+                        ]
+                        .spacing(1)
+                        .width(Length::Fill),
+                        container(text(state_word).size(10.5).color(state_color))
+                            .padding([1, 7])
+                            .style(move |_| container::Style {
+                                border: iced::Border {
+                                    color: state_color,
+                                    width: 1.0,
+                                    radius: 3.0.into(),
+                                },
+                                ..container::Style::default()
+                            }),
                     ]
-                    .spacing(8)
+                    .spacing(10)
                     .align_y(iced::Alignment::Center),
-                    text(format!(
-                        "{} · {} {} · {}",
-                        a.role, a.vendor, a.model, a.state
-                    ))
-                    .size(11)
-                    .color(if needs_you { WARN } else { DIM }),
+                    text(if a.task_text.is_empty() {
+                        "No task".to_owned()
+                    } else {
+                        a.task_text.chars().take(52).collect()
+                    })
+                    .size(12)
+                    .color(FG),
+                    output,
+                    row![
+                        text(if a.branch.is_empty() {
+                            "main".to_owned()
+                        } else {
+                            a.branch.clone()
+                        })
+                        .size(11)
+                        .color(DIM)
+                        .width(Length::Fill),
+                        text(if a.pane.is_empty() {
+                            String::new()
+                        } else {
+                            format!("pane {}", a.pane)
+                        })
+                        .size(11)
+                        .color(DIM),
+                    ],
                 ]
-                .spacing(1);
+                .spacing(8);
                 button(body)
                     .width(Length::Fill)
-                    .padding([8, 10])
-                    .style(item_style(selected.as_deref() == Some(a.id.as_str())))
+                    .padding([12, 12])
+                    .style(move |_, status| {
+                        let hot = msg_hot(status);
+                        button::Style {
+                            background: Some(Background::Color(if selected_card || hot {
+                                theme::SELECTED
+                            } else {
+                                theme::SURFACE
+                            })),
+                            text_color: FG,
+                            border: iced::Border {
+                                color: if selected_card { ACCENT } else { LINE },
+                                width: 1.0,
+                                radius: 6.0.into(),
+                            },
+                            ..button::Style::default()
+                        }
+                    })
                     .on_press(Message::Panel(PanelMsg::SelectAgent(a.id.clone())))
                     .into()
             })
@@ -2741,16 +3115,38 @@ impl Panel {
                 Some(a) => self.agent_detail(ctx, a),
             }
         };
+        // cards on the left (two per row), the selected agent on the right
+        let mut grid = column![].spacing(12);
+        let mut cards = items.into_iter();
+        while let Some(first) = cards.next() {
+            let second = cards
+                .next()
+                .unwrap_or_else(|| container(text("")).width(Length::Fill).into());
+            grid = grid.push(row![first, second].spacing(12));
+        }
+        let left = column![
+            crate::ui::filter_bar(
+                "Filter by name, role, vendor or task",
+                &self.filter,
+                &chips,
+                self.chip
+            ),
+            scrollable(container(grid).padding([4, 12])).height(Length::Fill),
+        ]
+        .width(Length::Fill);
+        let _ = footer;
         column![
             summary,
             row![
-                self.filtered_list(
-                    "Filter by name, role, vendor or task",
-                    &chips,
-                    items,
-                    footer
-                ),
-                self.detail(detail)
+                left,
+                container(text(""))
+                    .width(1)
+                    .height(Length::Fill)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(LINE)),
+                        ..container::Style::default()
+                    }),
+                container(self.detail(detail)).width(440),
             ]
             .height(Length::Fill),
         ]
@@ -2827,7 +3223,7 @@ impl Panel {
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center),
-            actions,
+            actions.wrap(),
         ]
         .spacing(14);
 

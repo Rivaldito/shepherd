@@ -27,6 +27,144 @@ pub fn node_at(graph: &Graph, p: Point) -> Option<&Node> {
         .find(|n| p.x >= n.x && p.x <= n.x + NODE_W && p.y >= n.y && p.y <= n.y + NODE_H)
 }
 
+/// The right-angled route of an arrow between two nodes.
+pub fn edge_route(from_node: &Node, to_node: &Node) -> Vec<Point> {
+    let (a, b) = anchors(from_node, to_node);
+    let horizontal = (to_node.x - from_node.x).abs() > 1.0;
+    if (a.x - b.x).abs() < 1.0 || (a.y - b.y).abs() < 1.0 {
+        vec![a, b]
+    } else if horizontal {
+        let mx = (a.x + b.x) / 2.0;
+        vec![a, Point::new(mx, a.y), Point::new(mx, b.y), b]
+    } else {
+        let my = (a.y + b.y) / 2.0;
+        vec![a, Point::new(a.x, my), Point::new(b.x, my), b]
+    }
+}
+
+/// The live topology of a run: the pattern's graph, read-only, each agent coloured by its state and the
+/// edges' dashes running while the run is live.
+pub struct TopologyView<'a> {
+    pub graph: &'a Graph,
+    /// `(agent id, role, state colour, state word)` of the run's agents.
+    pub agents: Vec<(String, String, Color, String)>,
+    pub live: bool,
+    pub frame: u32,
+}
+
+impl canvas::Program<crate::Message> for TopologyView<'_> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let dx = ((bounds.width - self.graph.width) / 2.0).max(8.0);
+        frame.translate(Vector::new(dx, 16.0));
+        // a run's agents are matched to the nodes by name, else by role in order (the n-th node of a role is
+        // the n-th agent of that role)
+        let state_of = |node: &Node| {
+            let label = node.label.as_str();
+            if let Some(a) = self
+                .agents
+                .iter()
+                .find(|(id, _, _, _)| id == label || id.starts_with(&format!("{label}-")))
+            {
+                return Some(a);
+            }
+            let role = node.detail.split(',').next().unwrap_or("").trim();
+            let nth = self
+                .graph
+                .nodes
+                .iter()
+                .filter(|n| {
+                    matches!(n.kind, NodeKind::Agent)
+                        && n.detail.split(',').next().unwrap_or("").trim() == role
+                })
+                .position(|n| n.key == node.key)?;
+            self.agents.iter().filter(|(_, r, _, _)| r == role).nth(nth)
+        };
+        for edge in &self.graph.edges {
+            let route = edge_route(&self.graph.nodes[edge.from], &self.graph.nodes[edge.to]);
+            let path = Path::new(|p| {
+                p.move_to(route[0]);
+                for point in &route[1..] {
+                    p.line_to(*point);
+                }
+            });
+            frame.stroke(
+                &path,
+                Stroke {
+                    style: canvas::Style::Solid(Color { a: 0.7, ..ACCENT }),
+                    width: 1.0,
+                    line_dash: canvas::LineDash {
+                        segments: &[4.0, 5.0],
+                        offset: if self.live {
+                            (9 - (self.frame as usize * 2) % 9) % 9
+                        } else {
+                            0
+                        },
+                    },
+                    ..Stroke::default()
+                },
+            );
+        }
+        for node in &self.graph.nodes {
+            let is_agent = matches!(node.kind, NodeKind::Agent);
+            let state = is_agent.then(|| state_of(node)).flatten();
+            let edge_color = state.map_or(LINE2, |(_, _, c, _)| *c);
+            let rect = Path::rounded_rectangle(
+                Point::new(node.x, node.y),
+                Size::new(NODE_W, NODE_H),
+                6.0.into(),
+            );
+            frame.fill(&rect, Color::from_rgb8(0x10, 0x10, 0x18));
+            let mut stroke = Stroke::default().with_color(edge_color).with_width(1.0);
+            if !is_agent {
+                stroke.line_dash = canvas::LineDash {
+                    segments: &[4.0, 3.0],
+                    offset: 0,
+                };
+                stroke.style = canvas::Style::Solid(crate::theme::VIOLET);
+            }
+            frame.stroke(&rect, stroke);
+            frame.fill_rectangle(
+                Point::new(node.x + 12.0, node.y + 14.0),
+                Size::new(7.0, 7.0),
+                if is_agent {
+                    edge_color
+                } else {
+                    crate::theme::VIOLET
+                },
+            );
+            frame.fill_text(Text {
+                content: node.label.clone(),
+                position: Point::new(node.x + 26.0, node.y + 10.0),
+                color: HI,
+                size: 13.0.into(),
+                ..Text::default()
+            });
+            let detail = match state {
+                Some((_, _, _, word)) => format!("{}, {word}", node.detail),
+                None => node.detail.clone(),
+            };
+            frame.fill_text(Text {
+                content: detail.chars().take(26).collect(),
+                position: Point::new(node.x + 12.0, node.y + 34.0),
+                color: DIM,
+                size: 10.5.into(),
+                ..Text::default()
+            });
+        }
+        vec![frame.into_geometry()]
+    }
+}
+
 /// Where an arrow leaves `from` and enters `to`: the facing sides, or bottom to top in the same column.
 pub fn anchors(from: &Node, to: &Node) -> (Point, Point) {
     let mid = |n: &Node, side_x: f32| Point::new(n.x + side_x, n.y + NODE_H / 2.0);
@@ -144,17 +282,7 @@ impl canvas::Program<crate::Message> for GraphView<'_> {
         // Edges leave and enter with a right-angled route, like the mockup; the arrow head follows the last leg.
         for edge in &self.graph.edges {
             let (a, b) = anchors(&self.graph.nodes[edge.from], &self.graph.nodes[edge.to]);
-            let (from_node, to_node) = (&self.graph.nodes[edge.from], &self.graph.nodes[edge.to]);
-            let horizontal = (to_node.x - from_node.x).abs() > 1.0;
-            let route = if (a.x - b.x).abs() < 1.0 || (a.y - b.y).abs() < 1.0 {
-                vec![a, b]
-            } else if horizontal {
-                let mx = (a.x + b.x) / 2.0;
-                vec![a, Point::new(mx, a.y), Point::new(mx, b.y), b]
-            } else {
-                let my = (a.y + b.y) / 2.0;
-                vec![a, Point::new(a.x, my), Point::new(b.x, my), b]
-            };
+            let route = edge_route(&self.graph.nodes[edge.from], &self.graph.nodes[edge.to]);
             let path = Path::new(|p| {
                 p.move_to(route[0]);
                 for point in &route[1..] {

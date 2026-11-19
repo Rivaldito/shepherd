@@ -708,3 +708,13 @@ mod tests {
         assert_eq!(seen[0]["params"]["confirm"], true);
     }
 }
+
+/// The last `lines` lines of what a pane shows (an agent's live output), asked from the API.
+pub fn pane_tail(api: &Path, pane: &str, lines: u32) -> Result<String, String> {
+    let v = crate::api::call(
+        api,
+        "pane.read",
+        serde_json::json!({ "pane_id": pane, "source": "recent", "lines": lines }),
+    )?;
+    Ok(v["read"]["text"].as_str().unwrap_or("").trim_end().to_owned())
+}
