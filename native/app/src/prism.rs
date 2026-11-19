@@ -7,15 +7,25 @@ use crate::Message;
 use iced::widget::canvas::{self, Frame};
 use iced::{mouse, Color, Point, Rectangle, Size, Theme};
 
-const RAMP: [[f64; 3]; 7] = [
-    [255.0, 45.0, 85.0],
-    [255.0, 122.0, 26.0],
-    [255.0, 212.0, 0.0],
-    [54.0, 240.0, 122.0],
-    [25.0, 211.0, 255.0],
-    [77.0, 107.0, 255.0],
-    [177.0, 77.0, 255.0],
+/// White crest breaking into colour, in order across the ribbon (no green).
+const RAMP: [[f64; 3]; 14] = [
+    [244.0, 244.0, 246.0],
+    [250.0, 230.0, 0.0],
+    [248.0, 192.0, 0.0],
+    [248.0, 154.0, 0.0],
+    [248.0, 58.0, 0.0],
+    [248.0, 42.0, 80.0],
+    [250.0, 0.0, 160.0],
+    [220.0, 0.0, 204.0],
+    [100.0, 40.0, 204.0],
+    [56.0, 24.0, 208.0],
+    [42.0, 10.0, 160.0],
+    [0.0, 52.0, 248.0],
+    [42.0, 120.0, 248.0],
+    [0.0, 192.0, 248.0],
 ];
+/// Entries of the ramp that are warm (white to pink): a half-intensity pixel there is drawn white.
+const WARM: usize = 7;
 /// 4x4 Bayer matrix (as sixteenths) used to dither the brightness.
 const BAYER: [f64; 16] = [
     0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0,
@@ -69,18 +79,6 @@ impl Preset {
         seed: 1.0,
         ..BASE
     };
-    /// The small logo next to the title.
-    pub const fn logo(bg: Color) -> Preset {
-        Preset {
-            streams: 2,
-            reach: 0.8,
-            thick: 0.2,
-            wave: 4.0,
-            seed: 5.0,
-            bg,
-            ..BASE
-        }
-    }
     /// The sparkline in a KPI cell.
     pub const SPARK: Preset = Preset {
         seed: 2.0,
@@ -157,12 +155,20 @@ pub fn cells(size: Size, preset: &Preset, frame: u32) -> Vec<(u32, u32, [u8; 3])
     let t = fr / f64::from(LOOP) * std::f64::consts::TAU;
     let reach = (cols * preset.reach).max(2.0);
     let mut paint = |x: f64, y: f64, hue: f64, m: f64| {
-        let h = hue.clamp(0.0, 0.999) * 6.0;
+        let last = RAMP.len() - 1;
+        let h = hue.clamp(0.0, 0.999) * last as f64;
         let i = h.floor() as usize;
         let k = h - h.floor();
-        let (a, b) = (RAMP[i], RAMP[(i + 1).min(6)]);
-        let channel = |n: usize| ((a[n] + (b[n] - a[n]) * k) * m) as u8;
-        out.push((x as u32, y as u32, [channel(0), channel(1), channel(2)]));
+        let (a, b) = (RAMP[i], RAMP[(i + 1).min(last)]);
+        let mix = |n: usize| (a[n] + (b[n] - a[n]) * k) as u8;
+        // no dimmed pixels: a half-intensity pixel on the warm half would read as brown, so it is white;
+        // on the cool half it keeps its full colour
+        let rgb = if m < 1.0 && i < WARM {
+            [244, 244, 246]
+        } else {
+            [mix(0), mix(1), mix(2)]
+        };
+        out.push((x as u32, y as u32, rgb));
     };
     for s in 0..preset.streams {
         let s_f = f64::from(s);
@@ -348,22 +354,23 @@ mod tests {
         assert!(far(0.2) < far(0.9));
     }
 
-    /// Values taken from running the mockup's own `prism()` (prismux · Shepherd.html) under Node for the same
-    /// canvas size, preset and frame, so the port cannot drift from the design.
+    /// Pixel positions taken from running the mockup's own `prism()` (prismux · Shepherd.html) under Node for the
+    /// same canvas size, preset and frame; the colours follow the palette of the Nov 2026 redesign (white crest
+    /// into colour, no green, no dimmed warm pixels).
     #[test]
     fn the_port_matches_the_mockups_own_pixels() {
         let strip = cells(Size::new(1280.0, 6.0), &Preset::STRIP, 3);
         assert_eq!(
             strip[..8],
             [
-                (0, 0, [127, 68, 10]),
-                (0, 1, [53, 239, 124]),
-                (0, 2, [35, 60, 127]),
-                (1, 0, [127, 68, 10]),
-                (1, 1, [26, 119, 62]),
-                (1, 2, [35, 60, 127]),
-                (2, 0, [127, 68, 10]),
-                (2, 1, [53, 239, 124]),
+                (0, 0, [244, 244, 246]),
+                (0, 1, [233, 0, 183]),
+                (0, 2, [19, 32, 208]),
+                (1, 0, [244, 244, 246]),
+                (1, 1, [244, 244, 246]),
+                (1, 2, [18, 33, 209]),
+                (2, 0, [244, 244, 246]),
+                (2, 1, [233, 0, 184]),
             ]
         );
         let total = |c: &[(u32, u32, [u8; 3])]| -> (usize, u32) {
@@ -375,14 +382,14 @@ mod tests {
             )
         };
         let spark = cells(Size::new(120.0, 26.0), &Preset::SPARK, 5);
-        assert_eq!(total(&spark), (189, 53142));
+        assert_eq!(total(&spark), (189, 91173));
         let pulse = Preset {
             grain: 0.0,
             ..Preset::pulse(false)
         };
         assert_eq!(
             total(&cells(Size::new(1000.0, 120.0), &pulse, 4)),
-            (2220, 642883)
+            (2220, 1056551)
         );
     }
 }

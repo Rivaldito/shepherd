@@ -7,6 +7,7 @@ mod editor;
 mod graph_view;
 mod grid;
 mod keys;
+mod logo;
 mod palette;
 mod panel;
 mod pattern_editor;
@@ -534,6 +535,9 @@ impl App {
             },
             Message::Key(event) => {
                 if let keyboard::Event::KeyPressed { key, modifiers, .. } = &event {
+                    if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
+                        self.panel.disarm();
+                    }
                     let is_p =
                         matches!(key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("p"));
                     if is_p && modifiers.control() && modifiers.shift() {
@@ -629,6 +633,7 @@ impl App {
             }
             Message::Tick => {
                 self.clock = self.clock.wrapping_add(1);
+                self.panel.expire_armed();
                 if !self.still {
                     self.frame = self.frame.wrapping_add(1);
                 }
@@ -1492,12 +1497,7 @@ impl App {
         let connected = self.status.starts_with("connected");
         let top_bar = container(
             row![
-                Canvas::new(prism::Prism {
-                    preset: prism::Preset::logo(theme::BAR),
-                    frame: self.frame + 3,
-                })
-                .width(34)
-                .height(20),
+                Canvas::new(logo::Flock).width(36).height(18),
                 text("SHEPHERD")
                     .font(theme::PIXEL_BOLD)
                     .size(15)

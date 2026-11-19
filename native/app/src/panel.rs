@@ -40,6 +40,9 @@ pub enum Tab {
     Snapshots,
 }
 
+/// Seconds an armed (two-click) button waits for its second click.
+const ARM_SECS: f32 = 4.0;
+
 /// A button that needs a second click (no pop-ups).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Armed {
@@ -253,6 +256,8 @@ pub struct Panel {
     snap_capture_agent: Option<String>,
     snap_agent_filter: Option<String>,
     snap_reason_filter: Option<String>,
+    /// When the armed button was armed: it disarms by itself after `ARM_SECS`.
+    armed_at: Option<std::time::Instant>,
     /// Activity: 0 = last 5 min, 1 = 30 min, 2 = 2 h.
     activity_window: usize,
     /// The communication screen of a run (opened from Runs), the senders hidden in it, the topic it shows
@@ -332,6 +337,7 @@ impl Default for Panel {
             snap_capture_agent: None,
             snap_agent_filter: None,
             snap_reason_filter: None,
+            armed_at: None,
             activity_window: 1,
             // picture aid: `SHEPHERD_NATIVE_COMM=1` opens the communication screen
             comm_open: std::env::var_os("SHEPHERD_NATIVE_COMM").is_some(),
@@ -1042,7 +1048,10 @@ impl Panel {
                     |r| Message::Panel(PanelMsg::Done(r)),
                 );
             }
-            PanelMsg::Arm(what) => self.armed = Some(what),
+            PanelMsg::Arm(what) => {
+                self.armed = Some(what);
+                self.armed_at = Some(std::time::Instant::now());
+            }
             PanelMsg::Confirm => {
                 let Some(armed) = self.armed.take() else {
                     return Task::none();
@@ -1598,10 +1607,32 @@ impl Panel {
         let btn_label = if armed { armed_label } else { label };
         let content = btn_body(btn_label);
         if armed {
-            button(content)
-                .padding([0, 12])
-                .height(34)
-                .style(danger_button_style())
+            // the bar along the bottom edge drains over `ARM_SECS`, then the button disarms
+            let left = self.armed_at.map_or(0.0, |t| {
+                (1.0 - t.elapsed().as_secs_f32() / ARM_SECS).clamp(0.0, 1.0)
+            });
+            let portion = (left * 1000.0) as u16;
+            let bar = row![
+                container(text(""))
+                    .width(Length::FillPortion(portion.max(1)))
+                    .height(3)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(theme::BG)),
+                        ..container::Style::default()
+                    }),
+                container(text(""))
+                    .width(Length::FillPortion(1000 - portion.min(999)))
+                    .height(3),
+            ];
+            return iced::widget::stack![
+                button(content)
+                    .padding([0, 12])
+                    .height(34)
+                    .style(danger_button_style())
+                    .on_press(Message::Panel(msg)),
+                container(bar).align_bottom(Length::Fill).padding([0, 1]),
+            ]
+            .into();
         } else if approving {
             button(content)
                 .padding([0, 12])
@@ -4246,6 +4277,24 @@ impl Panel {
         self.history.clear();
     }
 
+    /// Esc: an armed button goes back to normal.
+    pub fn disarm(&mut self) {
+        self.armed = None;
+        self.armed_at = None;
+    }
+
+    /// An armed button goes back to normal after `ARM_SECS` (called on every tick).
+    pub fn expire_armed(&mut self) {
+        if self.armed.is_some()
+            && self
+                .armed_at
+                .is_none_or(|t| t.elapsed().as_secs_f32() >= ARM_SECS)
+        {
+            self.armed = None;
+            self.armed_at = None;
+        }
+    }
+
     /// Whether the communication screen of a run is open (it reads the bus again on every change).
     pub fn comm_open(&self) -> bool {
         self.comm_open
@@ -5159,5 +5208,22 @@ mod tests {
         assert!(!panel.comm_open());
         let _ = panel.update(PanelMsg::Tab(Tab::Monitor), &ctx);
         let _ = panel.view(&ctx);
+    }
+
+    #[test]
+    fn an_armed_button_disarms_after_its_time_or_on_esc() {
+        let data = Data::default();
+        let snapshot = Snapshot::default();
+        let ctx = ctx_of(&data, &snapshot);
+        let mut panel = Panel::default();
+        let _ = panel.update(PanelMsg::Arm(Armed::CleanRuns), &ctx);
+        panel.expire_armed();
+        assert!(panel.armed.is_some(), "still within its seconds");
+        panel.armed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(5));
+        panel.expire_armed();
+        assert!(panel.armed.is_none(), "its time is up");
+        let _ = panel.update(PanelMsg::Arm(Armed::CleanRuns), &ctx);
+        panel.disarm();
+        assert!(panel.armed.is_none() && panel.armed_at.is_none());
     }
 }
