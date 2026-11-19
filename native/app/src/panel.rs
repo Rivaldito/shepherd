@@ -446,7 +446,7 @@ fn agent_skill_buttons<'a>(
     rows
 }
 
-fn agent_status(state: &str) -> Status {
+pub(crate) fn agent_status(state: &str) -> Status {
     match state {
         "working" | "starting" => Status::Working,
         "blocked" => Status::Blocked,
@@ -496,17 +496,6 @@ pub(crate) fn kpi_cell<'a>(
     kpi_inner(label, value, color, sub, None)
 }
 
-/// A KPI cell with the animated sparkline on its right.
-fn kpi_cell_spark<'a>(
-    label: &'static str,
-    value: String,
-    color: Color,
-    sub: Option<String>,
-    frame: u32,
-) -> Element<'a, Message> {
-    kpi_inner(label, value, color, sub, Some(frame))
-}
-
 fn kpi_inner<'a>(
     label: &'static str,
     value: String,
@@ -542,19 +531,6 @@ fn kpi_inner<'a>(
         .padding([12, 16])
         .style(kpi_cell_style)
         .into()
-}
-
-fn agent_metric<'a>(label: &'static str, value: usize, color: Color) -> Element<'a, Message> {
-    kpi_cell(label, value.to_string(), color, None)
-}
-
-fn agent_metric_spark<'a>(
-    label: &'static str,
-    value: usize,
-    color: Color,
-    frame: u32,
-) -> Element<'a, Message> {
-    kpi_cell_spark(label, value.to_string(), color, None, frame)
 }
 
 /// `.sq`: 18 px square with the state glyph, filled with the state color.
@@ -2128,42 +2104,6 @@ impl Panel {
                 )
             })
             .count();
-        let healthy = ctx
-            .data
-            .runs
-            .iter()
-            .filter(|r| {
-                matches!(
-                    r.run.state,
-                    PatternRunState::Running | PatternRunState::Done
-                )
-            })
-            .count();
-        let attention = ctx
-            .data
-            .runs
-            .iter()
-            .filter(|r| {
-                matches!(
-                    r.run.state,
-                    PatternRunState::Stalled | PatternRunState::Degraded | PatternRunState::Failed
-                )
-            })
-            .count();
-        let summary = container(
-            row![
-                agent_metric("TOTAL", ctx.data.runs.len(), FG),
-                agent_metric_spark("ACTIVE", active, ACCENT, ctx.frame),
-                agent_metric("HEALTHY", healthy, OK),
-                agent_metric(
-                    "ATTENTION",
-                    attention,
-                    if attention > 0 { WARN } else { DIM }
-                ),
-            ]
-            .spacing(1),
-        )
-        .style(kpi_strip_style);
         let finished_runs = ctx
             .data
             .runs
@@ -2262,7 +2202,7 @@ impl Panel {
         } else {
             self.run_detail(ctx)
         };
-        let mut page = column![summary].spacing(8);
+        let mut page = column![].spacing(8);
         for g in &ctx.data.gates {
             page = page.push(self.gate_card(ctx, g));
         }
@@ -3357,20 +3297,6 @@ impl Panel {
             })
             .collect();
         let footer: Vec<Element<'a, Message>> = vec![];
-        let summary = container(
-            row![
-                agent_metric("TOTAL", ctx.data.agents.len(), FG),
-                agent_metric_spark("WORKING", working, ACCENT, ctx.frame),
-                agent_metric(
-                    "NEEDS YOU",
-                    needs_you,
-                    if needs_you > 0 { WARN } else { OK }
-                ),
-                agent_metric("FINISHED", finished, DIM),
-            ]
-            .spacing(1),
-        )
-        .style(kpi_strip_style);
         let detail: Element<'a, Message> = if self.spawning_agent {
             self.spawn_agent_view(ctx)
         } else {
@@ -3406,21 +3332,18 @@ impl Panel {
         ]
         .width(Length::Fill);
         let _ = footer;
-        column![
-            summary,
-            row![
-                left,
-                container(text(""))
-                    .width(1)
-                    .height(Length::Fill)
-                    .style(|_| container::Style {
-                        background: Some(Background::Color(LINE)),
-                        ..container::Style::default()
-                    }),
-                container(self.detail(detail)).width(440),
-            ]
-            .height(Length::Fill),
+        column![row![
+            left,
+            container(text(""))
+                .width(1)
+                .height(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(LINE)),
+                    ..container::Style::default()
+                }),
+            container(self.detail(detail)).width(440),
         ]
+        .height(Length::Fill),]
         .spacing(8)
         .into()
     }

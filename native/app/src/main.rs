@@ -2005,9 +2005,16 @@ impl App {
             agents = agents
                 .push(container(text("No agents running").size(11).color(DIM)).padding([6, 8]));
         }
-        for (status, group) in self.snapshot.agents_by_state() {
-            let color = status_color(status);
+        for (terminal_status, group) in self.snapshot.agents_by_state() {
             for agent in group {
+                // Shepherd's own record of the agent says more than the terminal's guess, so it wins
+                let status = self
+                    .data
+                    .agents
+                    .iter()
+                    .find(|a| a.id == agent.display_name())
+                    .map_or(terminal_status, |a| panel::agent_status(&a.state));
+                let color = status_color(status);
                 let square = container(
                     text(theme::status_glyph(status))
                         .size(10)
