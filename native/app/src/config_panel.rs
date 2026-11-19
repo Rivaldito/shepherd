@@ -261,6 +261,11 @@ impl ConfigPanel {
         ])
     }
 
+    /// The topics loaded so far, with their consumer groups.
+    pub fn topic_rows(&self) -> &[TopicRow] {
+        &self.topics
+    }
+
     /// Worktrees of the repository, once the Git tab has loaded them.
     pub fn git_count(&self) -> Option<usize> {
         self.git.as_ref().map(|g| g.worktrees.len())
@@ -1354,9 +1359,7 @@ impl ConfigPanel {
             let pr: Element<'a, Message> = match &w.pr {
                 Some(p) => text(format!("#{} {}", p.number, p.state.to_lowercase()))
                     .size(12)
-                    .color(if p.state == "OPEN" {
-                        OK
-                    } else if p.state == "MERGED" {
+                    .color(if matches!(p.state.as_str(), "OPEN" | "MERGED") {
                         OK
                     } else {
                         DIM

@@ -150,6 +150,13 @@ pub enum PanelMsg {
     SnapAgent(String),
     SnapFilterAgent(Option<String>),
     SnapFilterReason(Option<String>),
+    ActivityWindow(usize),
+    CommClose,
+    /// Shows or hides the messages of one sender in the communication screen.
+    CommToggle(String),
+    CommTopic(Option<String>),
+    CommText(String),
+    CommSend,
 }
 
 /// The create / edit form of a task.
@@ -246,6 +253,14 @@ pub struct Panel {
     snap_capture_agent: Option<String>,
     snap_agent_filter: Option<String>,
     snap_reason_filter: Option<String>,
+    /// Activity: 0 = last 5 min, 1 = 30 min, 2 = 2 h.
+    activity_window: usize,
+    /// The communication screen of a run (opened from Runs), the senders hidden in it, the topic it shows
+    /// and what is being typed to the team.
+    comm_open: bool,
+    comm_hidden: std::collections::HashSet<String>,
+    comm_topic: Option<String>,
+    comm_text: String,
 }
 
 /// What the panel needs from the app to act.
@@ -317,6 +332,12 @@ impl Default for Panel {
             snap_capture_agent: None,
             snap_agent_filter: None,
             snap_reason_filter: None,
+            activity_window: 1,
+            // picture aid: `SHEPHERD_NATIVE_COMM=1` opens the communication screen
+            comm_open: std::env::var_os("SHEPHERD_NATIVE_COMM").is_some(),
+            comm_hidden: Default::default(),
+            comm_topic: None,
+            comm_text: String::new(),
         }
     }
 }
@@ -823,6 +844,7 @@ impl Panel {
         match message {
             PanelMsg::Tab(tab) => {
                 self.tab = tab;
+                self.comm_open = false;
                 self.filter.clear();
                 self.chip = 0;
                 if tab == Tab::Agents {
@@ -832,7 +854,8 @@ impl Panel {
                     return task;
                 }
                 if tab == Tab::Monitor {
-                    return self.load_feed(ctx);
+                    self.cfg.loading = true;
+                    return crate::config_panel::ConfigPanel::load_topics(&ctx.api);
                 }
                 if tab == Tab::Patterns && self.edit.is_none() {
                     if let Some(first) = self
@@ -848,6 +871,43 @@ impl Panel {
             PanelMsg::Filter(t) => self.filter = t,
             PanelMsg::Chip(i) => self.chip = i,
             PanelMsg::DismissToast => self.toast = None,
+            PanelMsg::ActivityWindow(i) => self.activity_window = i,
+            PanelMsg::CommClose => {
+                self.comm_open = false;
+                self.tab = Tab::Runs;
+            }
+            PanelMsg::CommToggle(who) => {
+                if !self.comm_hidden.remove(&who) {
+                    self.comm_hidden.insert(who);
+                }
+            }
+            PanelMsg::CommTopic(t) => self.comm_topic = t,
+            PanelMsg::CommText(t) => self.comm_text = t,
+            PanelMsg::CommSend => {
+                let text = self.comm_text.trim().to_owned();
+                let topic = self.comm_topic.clone().or_else(|| {
+                    self.monitor
+                        .as_deref()
+                        .and_then(|id| ctx.data.runs.iter().find(|r| r.run.id == id))
+                        .and_then(|r| r.run.topics.first().cloned())
+                });
+                let Some(topic) = topic else {
+                    self.notice = "error: this run has no topic to write to".into();
+                    return Task::none();
+                };
+                if text.is_empty() {
+                    self.notice = "error: write something to send".into();
+                    return Task::none();
+                }
+                self.comm_text.clear();
+                return Task::perform(
+                    async move {
+                        actions::topic_publish(&api, &topic, &text)
+                            .map(|_| format!("Sent to #{topic}"))
+                    },
+                    |r| Message::Panel(PanelMsg::Done(r)),
+                );
+            }
             PanelMsg::SnapAgent(a) => self.snap_capture_agent = Some(a),
             PanelMsg::SnapFilterAgent(a) => self.snap_agent_filter = a,
             PanelMsg::SnapFilterReason(r) => self.snap_reason_filter = r,
@@ -1239,8 +1299,11 @@ impl Panel {
                 }
             }
             PanelMsg::ShowMonitor(run) => {
-                self.tab = Tab::Monitor;
-                self.monitor = Some(run);
+                self.tab = Tab::Runs;
+                self.comm_open = true;
+                self.comm_topic = None;
+                self.comm_hidden.clear();
+                self.monitor = (!run.is_empty()).then_some(run);
                 return self.load_feed(ctx);
             }
             PanelMsg::Feed(feed) => self.feed = feed,
@@ -1698,6 +1761,9 @@ impl Panel {
             Tab::Models => self.cfg.models_view(),
             Tab::Snapshots => self.snapshots_view(ctx),
         };
+        if self.comm_open {
+            return self.comm_view(ctx);
+        }
         column![self.header(ctx), body].into()
     }
 
@@ -1818,11 +1884,26 @@ impl Panel {
                 "Teams of agents and the topics they talk on. Stored as YAML.".to_owned(),
                 vec![btn_primary("+ New pattern", PanelMsg::NewPattern)],
             ),
-            Tab::Monitor => (
-                "Activity",
-                "Live state of every agent and what they say to each other".to_owned(),
-                vec![],
-            ),
+            Tab::Monitor => {
+                let chip = |label: &'static str, i: usize| {
+                    button(text(label).size(11.5))
+                        .padding([4, 12])
+                        .style(theme::chip_style(self.activity_window == i))
+                        .on_press(Message::Panel(PanelMsg::ActivityWindow(i)))
+                        .into()
+                };
+                (
+                    "Activity",
+                    "What every agent did over time, and how far each reader is behind on the bus"
+                        .to_owned(),
+                    vec![
+                        chip("5 min", 0),
+                        chip("30 min", 1),
+                        chip("2 h", 2),
+                        text("● live").size(11.5).color(ACCENT).into(),
+                    ],
+                )
+            }
             Tab::Skills => (
                 "Skills",
                 "Agents load a skill when its description fits the work.".to_owned(),
@@ -4219,97 +4300,472 @@ impl Panel {
         .into()
     }
 
+    /// Whether the communication screen of a run is open (it reads the bus again on every change).
+    pub fn comm_open(&self) -> bool {
+        self.comm_open
+    }
+
+    /// The seconds the Activity window covers.
+    fn activity_secs(&self) -> u64 {
+        [300, 1800, 7200][self.activity_window.min(2)]
+    }
+
+    /// Activity: what every agent did over the window, and how far each reader is behind on the bus.
     fn monitor_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
-        let mut items: Vec<Element<'a, Message>> = vec![button(text("All agents").size(13))
-            .width(Length::Fill)
-            .padding([4, 8])
-            .style(item_style(self.monitor.is_none()))
-            .on_press(Message::Panel(PanelMsg::ShowMonitor(String::new())))
-            .into()];
-        for r in &ctx.data.runs {
-            items.push(
-                button(
-                    text(format!(
-                        "{} · {}",
-                        r.run.pattern,
-                        r.run.id.trim_start_matches("run-")
-                    ))
-                    .size(13),
-                )
-                .width(Length::Fill)
-                .padding([4, 8])
-                .style(item_style(
-                    self.monitor.as_deref() == Some(r.run.id.as_str()),
-                ))
-                .on_press(Message::Panel(PanelMsg::ShowMonitor(r.run.id.clone())))
-                .into(),
-            );
-        }
-        let key = if self.armed == Some(Armed::CleanBusForce) {
-            Armed::CleanBusForce
-        } else {
-            Armed::CleanBus
+        use shepherd_app_core::timeline;
+        let d = ctx.data;
+        let secs = self.activity_secs();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |t| t.as_secs());
+        let from = now.saturating_sub(secs);
+        let state_color = |s: &str| match s {
+            "working" | "starting" => ACCENT,
+            "blocked" => WARN,
+            "done" => OK,
+            "failed" | "killed" => BAD,
+            timeline::UNKNOWN => theme::LINE,
+            _ => theme::LINE2,
         };
-        let force = key == Armed::CleanBusForce;
-        let footer = vec![self.arm_button(
-            key,
-            "Clean communication",
-            if force {
-                "Live agents: force clean"
-            } else {
-                "Confirm: delete messages"
-            },
-        )];
-        let summary = container(
-            row![
-                agent_metric("RUNS", ctx.data.runs.len(), FG),
-                agent_metric_spark("MESSAGES", self.feed.len(), ACCENT, ctx.frame),
-                agent_metric(
-                    "SCOPE",
-                    if self.monitor.is_some() {
-                        1
-                    } else {
-                        ctx.data.agents.len()
-                    },
-                    OK,
-                ),
-            ]
-            .spacing(1),
-        )
-        .style(kpi_strip_style);
-        let mut feed = column![row![
-            theme::label("COMMUNICATION"),
-            text(format!("{} messages", self.feed.len()))
-                .size(12)
-                .color(ACCENT),
-        ]
-        .spacing(8)]
-        .spacing(6);
-        if self.feed.is_empty() {
-            feed = feed.push(
-                container(
-                    column![
-                        text("No communication yet").size(15),
-                        text("Messages will appear here as agents publish to the selected scope.")
-                            .size(12)
-                            .color(DIM),
-                    ]
-                    .spacing(8),
-                )
-                .padding(16)
-                .style(card_style),
+        let legend = |c: Color, n: &'static str| {
+            row![text("■").size(10).color(c), text(n).size(11).color(DIM)].spacing(4)
+        };
+        let mut rows = column![].spacing(14);
+        if d.agents.is_empty() {
+            rows = rows.push(
+                text("No agents yet. Their timelines appear here once they start.")
+                    .size(12)
+                    .color(DIM),
             );
         }
-        for m in &self.feed {
-            feed = feed.push(message_row(m, false));
+        for a in &d.agents {
+            let segs = timeline::segments(&d.state_log, &a.id, &a.state, from, now);
+            let mut bar = row![].spacing(0).height(10);
+            for (state, dur) in &segs {
+                let c = state_color(state);
+                bar = bar.push(
+                    container(text(""))
+                        .width(Length::FillPortion((*dur).clamp(1, 65_000) as u16))
+                        .height(10)
+                        .style(move |_| container::Style {
+                            background: Some(Background::Color(c)),
+                            ..container::Style::default()
+                        }),
+                );
+            }
+            let status = agent_status(&a.state);
+            let word = if a.state == "blocked" {
+                "needs you"
+            } else {
+                a.state.as_str()
+            };
+            rows = rows.push(
+                row![
+                    row![
+                        text("■").size(10).color(status_color(status)),
+                        text(a.id.clone())
+                            .font(theme::MONO_BOLD)
+                            .size(12.5)
+                            .color(theme::HI),
+                        text(word).size(11).color(status_color(status)),
+                    ]
+                    .spacing(8)
+                    .width(Length::FillPortion(3)),
+                    container(bar).width(Length::FillPortion(8)),
+                    text(if a.task_text.is_empty() {
+                        String::new()
+                    } else {
+                        a.task_text.chars().take(44).collect()
+                    })
+                    .size(11.5)
+                    .color(DIM)
+                    .width(Length::FillPortion(4)),
+                ]
+                .spacing(16)
+                .align_y(iced::Alignment::Center),
+            );
         }
-        column![
-            summary,
-            row![self.list(items, footer), self.detail(feed.into())].height(Length::Fill),
-        ]
-        .spacing(8)
+        // time axis: five marks from the start of the window to now
+        let mut axis = row![container(text("")).width(Length::FillPortion(3))].spacing(16);
+        let mut marks = row![].width(Length::FillPortion(8));
+        for k in 0..5u64 {
+            let t = from + secs * k / 4;
+            let label = if k == 4 { "now".to_owned() } else { clock(t) };
+            marks = marks.push(text(label).size(10.5).color(DIM).width(Length::Fill));
+        }
+        axis = axis
+            .push(marks)
+            .push(container(text("")).width(Length::FillPortion(4)));
+        let timelines = card(
+            "AGENT TIMELINES",
+            Some(
+                row![
+                    legend(ACCENT, "working"),
+                    legend(theme::LINE2, "idle"),
+                    legend(WARN, "blocked"),
+                    legend(OK, "done")
+                ]
+                .spacing(12)
+                .into(),
+            ),
+            column![rows, axis].spacing(14).into(),
+        );
+
+        // reader lag: per topic and consumer group
+        let mut lag_rows = column![].spacing(14);
+        let topics = self.cfg.topic_rows();
+        let max_lag = topics
+            .iter()
+            .flat_map(|t| t.groups.iter())
+            .map(|g| g.lag_by_partition.values().sum::<u64>())
+            .max()
+            .unwrap_or(0)
+            .max(1);
+        let mut any = false;
+        for t in topics {
+            for (k, g) in t.groups.iter().enumerate() {
+                any = true;
+                let lag: u64 = g.lag_by_partition.values().sum();
+                let mut parts: Vec<(u32, u64)> =
+                    g.lag_by_partition.iter().map(|(p, l)| (*p, *l)).collect();
+                parts.sort_unstable();
+                let detail = if parts.is_empty() {
+                    "p0 0".to_owned()
+                } else {
+                    parts
+                        .iter()
+                        .map(|(p, l)| format!("p{p} {l}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let reach = 0.08 + 0.9 * lag as f64 / max_lag as f64;
+                lag_rows = lag_rows.push(
+                    row![
+                        text(format!("#{}", t.name))
+                            .size(12.5)
+                            .color(theme::VIOLET)
+                            .width(Length::FillPortion(2)),
+                        row![
+                            text(g.group.clone())
+                                .font(theme::MONO_BOLD)
+                                .size(12.5)
+                                .color(theme::HI),
+                            text(g.members.join(", ")).size(11).color(DIM),
+                        ]
+                        .spacing(8)
+                        .width(Length::FillPortion(3)),
+                        Canvas::new(Prism {
+                            preset: Preset::lag(reach, (k as f64) * 7.0),
+                            frame: ctx.frame.wrapping_add(k as u32 * 3),
+                        })
+                        .width(Length::FillPortion(8))
+                        .height(14),
+                        row![
+                            if lag == 0 {
+                                text("caught up").size(12).color(OK)
+                            } else {
+                                text(format!("lag {lag}")).size(12).color(WARN)
+                            },
+                            text(detail).size(11).color(DIM),
+                        ]
+                        .spacing(8)
+                        .width(Length::FillPortion(4)),
+                    ]
+                    .spacing(16)
+                    .align_y(iced::Alignment::Center),
+                );
+            }
+        }
+        if !any {
+            lag_rows = lag_rows.push(
+                text("No reader has joined a topic yet.")
+                    .size(12)
+                    .color(DIM),
+            );
+        }
+        let lag = card(
+            "READER LAG",
+            Some(btn_link("Open events", PanelMsg::Tab(Tab::Events))),
+            column![
+                text("Messages each consumer group has not read yet, per topic. A longer prism means more waiting.")
+                    .size(11.5)
+                    .color(DIM),
+                lag_rows
+            ]
+            .spacing(12)
+            .into(),
+        );
+        scrollable(
+            container(column![timelines, lag].spacing(16))
+                .padding([20, 28])
+                .width(Length::Fill),
+        )
+        .height(Length::Fill)
         .into()
     }
+
+    /// The communication of a run: who said what to whom, filtered by sender and topic, with a box to write to
+    /// the team as the human.
+    fn comm_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        let d = ctx.data;
+        let run = self
+            .monitor
+            .as_deref()
+            .and_then(|id| d.runs.iter().find(|r| r.run.id == id));
+        let topics: Vec<String> = run.map(|r| r.run.topics.clone()).unwrap_or_default();
+        let chip = |label: String, on: bool, t: Option<String>| {
+            button(text(label).size(11.5))
+                .padding([3, 10])
+                .style(theme::chip_style(on))
+                .on_press(Message::Panel(PanelMsg::CommTopic(t)))
+        };
+        let mut chips = row![chip("All topics".into(), self.comm_topic.is_none(), None)].spacing(6);
+        for t in &topics {
+            chips = chips.push(chip(
+                format!("#{t}"),
+                self.comm_topic.as_deref() == Some(t.as_str()),
+                Some(t.clone()),
+            ));
+        }
+        let title = column![
+            row![
+                button(text("Runs").size(11.5).color(ACCENT))
+                    .padding(0)
+                    .style(theme::link_button_style())
+                    .on_press(Message::Panel(PanelMsg::CommClose)),
+                text("›").size(11.5).color(DIM),
+                text(
+                    run.map(|r| r.run.id.clone())
+                        .unwrap_or_else(|| "all agents".into())
+                )
+                .size(11.5)
+                .color(DIM),
+            ]
+            .spacing(6),
+            text("What the agents say to each other")
+                .font(theme::MONO_BOLD)
+                .size(20)
+                .color(theme::HI),
+        ]
+        .spacing(6);
+        let header = container(
+            row![
+                title,
+                container(text("")).width(Length::Fill),
+                chips.wrap(),
+                btn("Back to the run", PanelMsg::CommClose),
+            ]
+            .spacing(12)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding([14, 28])
+        .width(Length::Fill)
+        .style(theme::bottom_line_style);
+
+        // senders: the run's agents and the human
+        let mut senders = column![theme::label("SHOW MESSAGES FROM")].spacing(10);
+        let agents: Vec<String> = match run {
+            Some(r) => r.run.agents.iter().map(|a| a.id.clone()).collect(),
+            None => d.agents.iter().map(|a| a.id.clone()).collect(),
+        };
+        let mut names: Vec<(String, String, Color)> = agents
+            .iter()
+            .map(|id| {
+                let st = d
+                    .agents
+                    .iter()
+                    .find(|a| &a.id == id)
+                    .map_or("", |a| a.state.as_str());
+                let word = if st == "blocked" { "needs you" } else { st };
+                (id.clone(), word.to_owned(), status_color(agent_status(st)))
+            })
+            .collect();
+        names.push(("user".into(), "human".into(), theme::VIOLET));
+        for (id, word, color) in names {
+            let shown = !self.comm_hidden.contains(&id);
+            let key = id.clone();
+            senders = senders.push(
+                row![
+                    checkbox(shown)
+                        .on_toggle(move |_| Message::Panel(PanelMsg::CommToggle(key.clone())))
+                        .size(14),
+                    text("■").size(9).color(color),
+                    text(id.clone()).size(12.5).width(Length::Fill),
+                    text(word).size(11).color(color),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            );
+        }
+        let side = container(senders)
+            .padding(16)
+            .width(250)
+            .height(Length::Fill);
+
+        // messages
+        let mut feed = column![].spacing(0);
+        let visible: Vec<&BusMessage> = self
+            .feed
+            .iter()
+            .filter(|m| !self.comm_hidden.contains(&m.from))
+            .filter(|m| self.comm_topic.as_deref().is_none_or(|t| t == m.topic))
+            .collect();
+        if visible.is_empty() {
+            feed = feed.push(
+                column![
+                    text("No communication yet").size(14).color(theme::HI),
+                    text("Messages appear here as the agents publish to this run's topics.")
+                        .size(12)
+                        .color(DIM),
+                ]
+                .spacing(6),
+            );
+        }
+        for m in visible {
+            let time: String = m.ts.chars().skip(11).take(8).collect();
+            let who_color = theme::emitter_color(&m.from);
+            let system = m.from.is_empty() || m.kind == "event" || m.kind == "system";
+            if system {
+                feed = feed.push(
+                    container(row![
+                        text(time).size(11.5).color(DIM).width(80),
+                        text(m.content.clone()).size(12).color(DIM),
+                    ])
+                    .padding([6, 0]),
+                );
+                continue;
+            }
+            let letter: String = m
+                .from
+                .chars()
+                .next()
+                .map(|c| c.to_uppercase().to_string())
+                .unwrap_or_default();
+            let mut head = row![text(m.from.clone())
+                .font(theme::MONO_BOLD)
+                .size(12.5)
+                .color(theme::HI)]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
+            if !m.to.is_empty() {
+                head = head
+                    .push(text("to").size(11.5).color(DIM))
+                    .push(text(m.to.clone()).size(12).color(FG));
+            }
+            if !m.topic.is_empty() {
+                head = head.push(text("to").size(11.5).color(DIM)).push(
+                    container(
+                        text(format!("#{} p{}", m.topic, m.partition))
+                            .size(11)
+                            .color(theme::VIOLET),
+                    )
+                    .padding([0, 6])
+                    .style(|_| container::Style {
+                        border: iced::Border {
+                            color: theme::VIOLET,
+                            width: 1.0,
+                            radius: 3.0.into(),
+                        },
+                        ..container::Style::default()
+                    }),
+                );
+            }
+            feed = feed.push(
+                container(
+                    row![
+                        text(time).size(11.5).color(DIM).width(80),
+                        container(
+                            text(letter)
+                                .size(11)
+                                .font(theme::MONO_BOLD)
+                                .color(theme::BG)
+                        )
+                        .width(22)
+                        .height(22)
+                        .center_x(22)
+                        .center_y(22)
+                        .style(move |_| container::Style {
+                            background: Some(Background::Color(who_color)),
+                            border: iced::Border {
+                                radius: 4.0.into(),
+                                ..iced::Border::default()
+                            },
+                            ..container::Style::default()
+                        }),
+                        column![head, text(m.content.clone()).size(13).color(theme::FG)].spacing(3),
+                    ]
+                    .spacing(12),
+                )
+                .padding([9, 0]),
+            );
+        }
+        // a gate that waits for the human closes the feed
+        let task_id = run.and_then(|r| task_of_run(&r.run.task));
+        if let Some(g) = d.gates.iter().find(|g| Some(g.task_id) == task_id) {
+            feed = feed.push(alert(
+                row![
+                    text(format!(
+                        "{} waits for a human. Nothing is pushed until you approve.",
+                        g.gate.label()
+                    ))
+                    .size(12.5)
+                    .width(Length::Fill),
+                    btn("Decide in the run", PanelMsg::CommClose),
+                ]
+                .spacing(12)
+                .align_y(iced::Alignment::Center)
+                .into(),
+                WARN,
+            ));
+        }
+        let target = self.comm_topic.clone().or_else(|| topics.first().cloned());
+        let composer = container(
+            row![
+                text(match &target {
+                    Some(t) => format!("to #{t}"),
+                    None => "no topic".into(),
+                })
+                .size(12)
+                .color(DIM),
+                text_input("Tell the team something, sent as you", &self.comm_text)
+                    .on_input(|t| Message::Panel(PanelMsg::CommText(t)))
+                    .on_submit(Message::Panel(PanelMsg::CommSend))
+                    .style(theme::input_style)
+                    .padding([9, 12])
+                    .size(12.5)
+                    .width(Length::Fill),
+                btn_primary("Send", PanelMsg::CommSend),
+            ]
+            .spacing(12)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding([12, 28])
+        .width(Length::Fill)
+        .style(theme::top_line_style);
+        column![
+            header,
+            row![
+                side,
+                container(text(""))
+                    .width(1)
+                    .height(Length::Fill)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(LINE)),
+                        ..container::Style::default()
+                    }),
+                scrollable(container(feed).padding([8, 28]).width(Length::Fill))
+                    .height(Length::Fill),
+            ]
+            .height(Length::Fill),
+            composer,
+        ]
+        .into()
+    }
+}
+
+/// `HH:MM` (UTC) of a unix time, for the Activity axis.
+fn clock(t: u64) -> String {
+    format!("{:02}:{:02}", (t / 3600) % 24, (t / 60) % 60)
 }
 
 /// `.list`: 300 px column with a 1 px line on its right, items on top and the footer buttons below.
@@ -4733,5 +5189,29 @@ mod tests {
         let delete = Armed::DeletePattern("my-pattern".into());
         let _ = panel.update(PanelMsg::Arm(delete.clone()), &ctx);
         assert_eq!(panel.armed, Some(delete));
+    }
+
+    #[test]
+    fn the_communication_screen_opens_from_a_run_hides_senders_and_refuses_an_empty_send() {
+        let data = Data::default();
+        let snapshot = Snapshot::default();
+        let ctx = ctx_of(&data, &snapshot);
+        let mut panel = Panel::default();
+        let _ = panel.update(PanelMsg::ShowMonitor("run-x".into()), &ctx);
+        assert!(panel.comm_open());
+        assert_eq!(panel.monitor.as_deref(), Some("run-x"));
+        let _ = panel.update(PanelMsg::CommToggle("coder-1".into()), &ctx);
+        assert!(panel.comm_hidden.contains("coder-1"));
+        let _ = panel.update(PanelMsg::CommToggle("coder-1".into()), &ctx);
+        assert!(panel.comm_hidden.is_empty());
+        let _ = panel.view(&ctx);
+        // no topic and no text: nothing is sent, the reason is a notice
+        let _ = panel.update(PanelMsg::CommSend, &ctx);
+        assert!(panel.notice.starts_with("error"), "{}", panel.notice);
+        // any view closes the screen again
+        let _ = panel.update(PanelMsg::Tab(Tab::Agents), &ctx);
+        assert!(!panel.comm_open());
+        let _ = panel.update(PanelMsg::Tab(Tab::Monitor), &ctx);
+        let _ = panel.view(&ctx);
     }
 }

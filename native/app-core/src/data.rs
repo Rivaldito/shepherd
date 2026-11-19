@@ -84,6 +84,8 @@ pub struct Data {
     pub snapshots: Vec<SnapshotInfo>,
     pub patterns: Vec<PatternSummary>,
     pub models: Models,
+    /// What each agent's state did over the last day (Activity draws its timelines from it).
+    pub state_log: Vec<shepherd_core::StateChange>,
 }
 
 /// The project a folder belongs to: the one with the nearest `.shepherd/config.yaml`, else the folder.
@@ -251,7 +253,14 @@ impl Data {
                 cfg,
             )
         });
+        let since = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |t| t.as_secs())
+            .saturating_sub(24 * 3600);
+        let state_log =
+            shepherd_core::load_state_log(&config::state_dir().join("agents.json"), since);
         Self {
+            state_log,
             runs,
             tasks,
             snapshots,

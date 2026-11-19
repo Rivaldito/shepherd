@@ -570,6 +570,13 @@ impl App {
                             return Task::done(Message::Panel(panel::PanelMsg::Tab(tab)));
                         }
                     }
+                    if self.mode == Mode::Shepherd
+                        && self.panel.comm_open()
+                        && self.palette.is_none()
+                        && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
+                    {
+                        return Task::done(Message::Panel(panel::PanelMsg::CommClose));
+                    }
                     if self.new_session.is_some()
                         && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
                     {
@@ -847,8 +854,19 @@ impl App {
                     snapshot: &self.snapshot,
                     frame: self.frame,
                 };
+                if self.mode == Mode::Shepherd && self.panel.comm_open() {
+                    return Task::batch([
+                        again,
+                        self.panel.on_data(&ctx),
+                        self.panel.load_feed(&ctx),
+                    ]);
+                }
                 if self.mode == Mode::Shepherd && self.panel.tab == panel::Tab::Monitor {
-                    return Task::batch([again, self.panel.load_feed(&ctx)]);
+                    return Task::batch([
+                        again,
+                        self.panel.on_data(&ctx),
+                        self.panel.refresh_events(),
+                    ]);
                 }
                 if self.mode == Mode::Shepherd && self.panel.tab == panel::Tab::Events {
                     return Task::batch([

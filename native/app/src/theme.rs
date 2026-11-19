@@ -420,6 +420,19 @@ pub fn count_style(selected: bool, warn: bool) -> iced::widget::container::Style
 }
 
 /// A bar with a 1 px line along its bottom edge (`border-bottom: 1px solid var(--line)`).
+/// A bar with a hairline on its top edge (the composer).
+pub fn top_line_style(_: &Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        background: Some(Background::Color(BAR)),
+        border: Border {
+            color: LINE,
+            width: 0.5,
+            radius: 0.0.into(),
+        },
+        ..iced::widget::container::Style::default()
+    }
+}
+
 pub fn bottom_line_style(_: &Theme) -> iced::widget::container::Style {
     iced::widget::container::Style {
         background: Some(Background::Color(PANEL)),
