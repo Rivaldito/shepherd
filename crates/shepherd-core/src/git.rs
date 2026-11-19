@@ -327,6 +327,58 @@ pub struct GitPrSummary {
     pub is_draft: bool,
 }
 
+/// One file with uncommitted changes in a worktree.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GitChange {
+    /// `modified`, `added`, `deleted`, `renamed` or `untracked`.
+    pub status: String,
+    pub path: String,
+    pub added: u64,
+    pub removed: u64,
+}
+
+/// The files `git status --porcelain=v1 -b` lists, as changes (no line counts yet).
+pub fn parse_git_changes(text: &str) -> Vec<GitChange> {
+    text.lines()
+        .filter(|l| !l.starts_with("## ") && l.len() > 3)
+        .map(|l| {
+            let code = &l[..2];
+            let path = l[3..].rsplit(" -> ").next().unwrap_or("").trim().trim_matches('"');
+            let status = if code == "??" {
+                "untracked"
+            } else if code.contains('R') {
+                "renamed"
+            } else if code.contains('D') {
+                "deleted"
+            } else if code.contains('A') {
+                "added"
+            } else {
+                "modified"
+            };
+            GitChange {
+                status: status.to_owned(),
+                path: path.to_owned(),
+                added: 0,
+                removed: 0,
+            }
+        })
+        .collect()
+}
+
+/// Adds the line counts of `git diff HEAD --numstat` to the changes it names (binary files stay at 0).
+pub fn add_numstat(changes: &mut [GitChange], numstat: &str) {
+    for line in numstat.lines() {
+        let mut parts = line.split('\t');
+        let (Some(a), Some(r), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        if let Some(c) = changes.iter_mut().find(|c| c.path == path) {
+            c.added = a.parse().unwrap_or(0);
+            c.removed = r.parse().unwrap_or(0);
+        }
+    }
+}
+
 /// Information about a single worktree in the repository.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GitWorktreeInfo {
@@ -340,6 +392,9 @@ pub struct GitWorktreeInfo {
     pub upstream: Option<String>,
     pub agent_id: Option<String>,
     pub pr: Option<GitPrSummary>,
+    /// The files with uncommitted changes (at most 50).
+    #[serde(default)]
+    pub changes: Vec<GitChange>,
 }
 
 /// Full repository git status returned by `git_status` API call.
@@ -499,6 +554,7 @@ where
             }
         });
 
+        let mut changes: Vec<GitChange> = Vec::new();
         let (status, ahead, behind) = match runner(
             "git",
             &["status", "--porcelain=v1", "-b"],
@@ -508,6 +564,18 @@ where
             Ok(out) if out.status.success() => {
                 let text = String::from_utf8_lossy(&out.stdout);
                 let st = parse_git_status_porcelain(&text);
+                changes = parse_git_changes(&text);
+                changes.truncate(50);
+                if let Ok(num) = runner(
+                    "git",
+                    &["diff", "HEAD", "--numstat"],
+                    &wt.path,
+                    cmd_timeout,
+                ) {
+                    if num.status.success() {
+                        add_numstat(&mut changes, &String::from_utf8_lossy(&num.stdout));
+                    }
+                }
                 let mut ahead = st.ahead;
                 let mut behind = st.behind;
 
@@ -577,6 +645,7 @@ where
             upstream: status.upstream,
             agent_id,
             pr,
+            changes,
         });
     }
 
@@ -1030,5 +1099,26 @@ branch refs/heads/shep/1-coder
         assert!(!res.worktrees[1].is_main);
         assert!(!res.worktrees[1].is_clean);
         assert_eq!(res.worktrees[1].agent_id.as_deref(), Some("coder-1"));
+    }
+
+    #[test]
+    fn changes_come_from_porcelain_and_numstat() {
+        let mut c = parse_git_changes(
+            "## main...origin/main\n M auth/logout.go\n?? auth/new.go\nA  auth/added.go\n D old.go\nR  a.go -> b.go\n",
+        );
+        let status: Vec<_> = c.iter().map(|x| (x.status.as_str(), x.path.as_str())).collect();
+        assert_eq!(
+            status,
+            [
+                ("modified", "auth/logout.go"),
+                ("untracked", "auth/new.go"),
+                ("added", "auth/added.go"),
+                ("deleted", "old.go"),
+                ("renamed", "b.go"),
+            ]
+        );
+        add_numstat(&mut c, "9\t3\tauth/logout.go\n-\t-\tlogo.png\n");
+        assert_eq!((c[0].added, c[0].removed), (9, 3));
+        assert_eq!((c[1].added, c[1].removed), (0, 0));
     }
 }

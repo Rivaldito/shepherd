@@ -9,6 +9,14 @@
       "ahead": 0,
       "behind": 0,
       "branch": "master",
+      "changes": [
+        {
+          "added": 0,
+          "path": ".shepherd/",
+          "removed": 0,
+          "status": "untracked"
+        }
+      ],
       "dirty_count": 1,
       "is_clean": false,
       "is_main": true,
