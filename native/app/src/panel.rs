@@ -2321,6 +2321,19 @@ impl Panel {
             head = head.push(text(format!("run {}", r.run.id)).size(12).color(ACCENT));
         }
         let mut body = column![head, text(what).size(12).color(DIM)].spacing(8);
+        if let Some((files, added, removed)) = g.change {
+            body = body.push(
+                row![
+                    text("changes").size(12).color(DIM),
+                    text(format!("{files} file{}", if files == 1 { "" } else { "s" }))
+                        .size(12)
+                        .color(FG),
+                    text(format!("+{added}")).size(12).color(OK),
+                    text(format!("-{removed}")).size(12).color(BAD),
+                ]
+                .spacing(10),
+            );
+        }
         if let Some(s) = subtask {
             let mut by = String::new();
             if !s.coder.is_empty() {
@@ -4298,6 +4311,16 @@ impl Panel {
         ]
         .height(Length::Fill)
         .into()
+    }
+
+    /// Every notice of this session, oldest first (the status bar shows them in a list).
+    pub fn history(&self) -> &[String] {
+        &self.history
+    }
+
+    /// Forgets the notices kept.
+    pub fn clear_history(&mut self) {
+        self.history.clear();
     }
 
     /// Whether the communication screen of a run is open (it reads the bus again on every change).

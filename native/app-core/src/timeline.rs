@@ -62,11 +62,20 @@ mod tests {
 
     #[test]
     fn segments_follow_the_changes_and_merge_equal_neighbours() {
-        let log = vec![change(50, "working"), change(120, "idle"), change(150, "idle"), change(180, "working")];
+        let log = vec![
+            change(50, "working"),
+            change(120, "idle"),
+            change(150, "idle"),
+            change(180, "working"),
+        ];
         // window 100..200: working until 120, idle 120..180, working 180..200
         assert_eq!(
             segments(&log, "a", "working", 100, 200),
-            [("working".into(), 20), ("idle".into(), 60), ("working".into(), 20)]
+            [
+                ("working".into(), 20),
+                ("idle".into(), 60),
+                ("working".into(), 20)
+            ]
         );
     }
 

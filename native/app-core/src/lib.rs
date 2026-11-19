@@ -12,8 +12,8 @@ pub mod installed;
 pub mod pattern_edit;
 pub mod pattern_graph;
 pub mod reload;
-pub mod timeline;
 pub mod snapshot;
+pub mod timeline;
 pub mod watch;
 pub mod wire;
 

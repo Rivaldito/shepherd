@@ -36,6 +36,8 @@ use theme::{
 };
 
 const SIDEBAR_W: f32 = 232.0;
+/// The height of a terminal row, which the pane headers take.
+const CELL_ROW: f32 = grid::CELL_H;
 const SIDEBAR_COLLAPSED_W: f32 = 48.0;
 const TABBAR_H: f32 = 42.0;
 const STATUS_H: f32 = 30.0;
@@ -186,6 +188,11 @@ enum Message {
     StateChanged,
     TogglePalette,
     ToggleMotion,
+    /// The list of notices opened from the status bar.
+    ToggleHistory,
+    ClearHistory,
+    /// A pane of the terminal: open its agent in the Shepherd panel.
+    OpenInShepherd(String),
     PaletteQuery(String),
     PaletteMove(isize),
     PaletteRun,
@@ -311,6 +318,7 @@ struct App {
     reloads: shepherd_app_core::reload::Coalesce,
     /// The prism stands still (reduced motion), by choice in the status bar or `SHEPHERD_REDUCE_MOTION`.
     still: bool,
+    history_open: bool,
     /// Counts every tick, even while the prism stands still: timers use it, not `frame`.
     clock: u32,
 }
@@ -353,6 +361,7 @@ impl App {
             reloads: shepherd_app_core::reload::Coalesce::running(), // the first load starts below
             still: std::env::var_os("SHEPHERD_REDUCE_MOTION").is_some(),
             clock: 0,
+            history_open: false,
             frame: 0,
             film: std::env::var_os("SHEPHERD_NATIVE_FILM").map(|dir| Film {
                 dir: PathBuf::from(dir),
@@ -892,6 +901,17 @@ impl App {
                 return self.panel.update(msg, &ctx);
             }
             Message::ToggleMotion => self.still = !self.still,
+            Message::ToggleHistory => self.history_open = !self.history_open,
+            Message::ClearHistory => {
+                self.panel.clear_history();
+                self.history_open = false;
+            }
+            Message::OpenInShepherd(agent) => {
+                return Task::batch([
+                    Task::done(Message::SetMode(Mode::Shepherd)),
+                    Task::done(Message::Panel(panel::PanelMsg::SelectAgent(agent))),
+                ]);
+            }
             Message::TogglePalette => {
                 if self.palette.take().is_none() {
                     self.palette = Some(Palette {
@@ -1042,6 +1062,11 @@ impl App {
             DIM
         };
         let base = self.app_window(body, status_color_val);
+        let base: Element<'_, Message> = if self.history_open && self.mode == Mode::Shepherd {
+            iced::widget::stack![base, self.history_view()].into()
+        } else {
+            base
+        };
         let base: Element<'_, Message> = match (self.mode, self.panel.toast()) {
             (Mode::Shepherd, Some(toast)) => {
                 iced::widget::stack![base, ui::toast_view(toast)].into()
@@ -1060,6 +1085,61 @@ impl App {
         } else {
             content
         }
+    }
+
+    /// The notices of this session, newest first, over the bottom left corner (opened from the status bar).
+    fn history_view(&self) -> Element<'_, Message> {
+        let notices = self.panel.history();
+        let mut list = column![row![
+            text("Notices")
+                .font(theme::MONO_BOLD)
+                .size(13)
+                .color(theme::HI),
+            container(text("")).width(Length::Fill),
+            button(text("Clear").size(11.5))
+                .padding([2, 8])
+                .style(theme::link_button_style())
+                .on_press(Message::ClearHistory),
+            button(text("×").size(14))
+                .padding([0, 6])
+                .style(theme::close_button_style())
+                .on_press(Message::ToggleHistory),
+        ]
+        .align_y(iced::Alignment::Center)]
+        .spacing(8);
+        if notices.is_empty() {
+            list = list.push(
+                text("Nothing yet. Every notice of this session is kept here.")
+                    .size(12)
+                    .color(DIM),
+            );
+        }
+        for n in notices.iter().rev().take(40) {
+            let bad = ui::is_error(n);
+            list = list.push(
+                row![
+                    text(if bad { "✖" } else { "●" }).size(10).color(if bad {
+                        theme::BAD
+                    } else {
+                        theme::OK
+                    }),
+                    text(n.clone()).size(12).color(theme::FG),
+                ]
+                .spacing(8),
+            );
+        }
+        container(
+            container(scrollable(list).height(Length::Shrink))
+                .padding(14)
+                .width(520)
+                .max_height(420)
+                .style(theme::toast_style(theme::LINE2)),
+        )
+        .padding(pad(0.0, 0.0, 34.0, 12.0))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_bottom(Length::Fill)
+        .into()
     }
 
     /// The box in the top bar that opens the command palette.
@@ -1273,10 +1353,17 @@ impl App {
     /// The terminal: the tabs of the workspace, and the screen in a thin frame with some margin.
     fn terminal_pane(&self) -> Element<'_, Message> {
         let screen: Element<'_, Message> = match &self.surface {
-            Some(surface) => Canvas::new(grid::Grid { surface })
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
+            Some(surface) => {
+                let canvas = Canvas::new(grid::Grid { surface })
+                    .width(Length::Fill)
+                    .height(Length::Fill);
+                let mut layers: Vec<Element<'_, Message>> = vec![canvas.into()];
+                layers.extend(self.pane_headers(surface));
+                iced::widget::stack(layers)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+            }
             None => container(text("waiting for the server…").color(DIM))
                 .center(Length::Fill)
                 .into(),
@@ -1303,6 +1390,73 @@ impl App {
             .height(Length::Fill),
         ]
         .into()
+    }
+
+    /// A strip over the top row of every pane that holds an agent: its name, kind and state, and two buttons
+    /// (open it in the Shepherd panel, focus it). The row is the pane's own top border, which it covers.
+    fn pane_headers<'a>(&'a self, surface: &'a PaneSurface) -> Vec<Element<'a, Message>> {
+        let mut out = Vec::new();
+        for pane in &surface.panes {
+            let Some(agent) = self
+                .snapshot
+                .agents
+                .iter()
+                .find(|a| a.pane_id == pane.pane_id)
+            else {
+                continue;
+            };
+            let status = agent.status();
+            let color = status_color(status);
+            let name = agent.display_name();
+            let word = if status == shepherd_app_core::snapshot::Status::Blocked {
+                "needs you"
+            } else {
+                status_name(status)
+            };
+            let mini = |label: &'static str, msg: Message| {
+                button(text(label).size(10.5))
+                    .padding([0, 7])
+                    .height(CELL_ROW)
+                    .style(theme::link_button_style())
+                    .on_press(msg)
+            };
+            let strip = container(
+                row![
+                    text("■").size(9).color(color),
+                    text(name.clone())
+                        .font(theme::MONO_BOLD)
+                        .size(11)
+                        .color(theme::HI),
+                    text(agent.agent.clone().unwrap_or_default())
+                        .size(10.5)
+                        .color(DIM),
+                    text(word).size(10.5).color(color),
+                    container(text("")).width(Length::Fill),
+                    mini("Open in Shepherd", Message::OpenInShepherd(name)),
+                    mini(
+                        "Focus",
+                        Message::Act(Action::FocusPane(pane.pane_id.clone()))
+                    ),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            )
+            .padding([0, 8])
+            .width(f32::from(pane.rect.width) * grid::CELL_W)
+            .height(CELL_ROW)
+            .style(theme::bar_style);
+            out.push(
+                container(strip)
+                    .padding(pad(
+                        f32::from(pane.rect.y) * grid::CELL_H,
+                        0.0,
+                        0.0,
+                        f32::from(pane.rect.x) * grid::CELL_W,
+                    ))
+                    .into(),
+            );
+        }
+        out
     }
 
     /// `workspace › tab` of what the terminal shows now.
@@ -1372,7 +1526,11 @@ impl App {
         .style(theme::bar_style);
         // left of the status bar: the panel's own notice, or where the terminal is and how big it is
         let left: Element<'a, Message> = match self.mode {
-            Mode::Shepherd => self.panel.notice(),
+            Mode::Shepherd => button(self.panel.notice())
+                .padding(0)
+                .style(theme::link_button_style())
+                .on_press(Message::ToggleHistory)
+                .into(),
             Mode::Terminal => {
                 let g = self.geometry();
                 row![
@@ -1567,7 +1725,22 @@ impl App {
                 .into();
         };
 
-        let mut tabs = row![].spacing(0);
+        let workspace_label = self
+            .snapshot
+            .workspaces
+            .iter()
+            .find(|w| w.workspace_id == workspace)
+            .map(|w| w.label.clone())
+            .unwrap_or_default();
+        let mut tabs = row![container(
+            text(workspace_label)
+                .font(theme::MONO_BOLD)
+                .size(13)
+                .color(theme::HI)
+        )
+        .padding([0, 12])
+        .center_y(Length::Fill)]
+        .spacing(0);
         for tab in self.snapshot.tabs_of(workspace) {
             let label = tab.label.clone();
             let tab_id = tab.tab_id.clone();
@@ -1604,11 +1777,30 @@ impl App {
                 .on_press(Message::Act(Action::NewTab(workspace.to_owned()))),
         );
 
+        let panes = self.surface.as_ref().map_or(0, |s| s.panes.len());
+        let focused_tab = self
+            .snapshot
+            .tabs_of(workspace)
+            .find(|t| t.focused)
+            .map_or(1, |t| t.number);
         let content = row![
             scrollable(tabs).direction(scrollable::Direction::Horizontal(
                 scrollable::Scrollbar::new().width(0).scroller_width(0),
             )),
+            container(text("")).width(Length::Fill),
+            text(if self.window.width >= 1500.0 {
+                format!(
+                    "{panes} pane{} in tab {focused_tab}. Mouse and scrollback work as in your terminal. Ctrl+Shift+S goes to Shepherd.",
+                    if panes == 1 { "" } else { "s" }
+                )
+            } else {
+                format!("{panes} pane{} in tab {focused_tab}", if panes == 1 { "" } else { "s" })
+            })
+            .size(11)
+            .color(DIM)
+            .wrapping(iced::widget::text::Wrapping::None),
         ]
+        .align_y(iced::Alignment::Center)
         .width(Length::Fill);
 
         container(content)
