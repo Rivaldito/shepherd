@@ -369,6 +369,7 @@ pub fn save_agent_registry(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    record_state_changes(path, registry);
     let mut registry = registry.clone();
     registry.recover_counters();
     registry.agents.sort_by_key(|agent| agent.seq);
@@ -393,6 +394,71 @@ pub fn save_agent_registry(
     }
     std::fs::rename(tmp, path)?;
     Ok(())
+}
+
+/// One change of an agent's state, as `agent_states.jsonl` keeps it (next to `agents.json`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateChange {
+    /// Unix seconds.
+    pub t: u64,
+    pub agent: String,
+    pub state: String,
+}
+
+/// The file the state changes go to, for a registry at `registry_path`.
+pub fn state_log_path(registry_path: &Path) -> std::path::PathBuf {
+    registry_path.with_file_name("agent_states.jsonl")
+}
+
+/// Appends a line for every agent whose state differs from what `agents.json` says now (and for new agents),
+/// so the GUI can draw what each agent did over time. Best effort: a failure here never stops a save.
+fn record_state_changes(registry_path: &Path, new: &AgentRegistryFile) {
+    let old: std::collections::HashMap<String, String> = load_agent_registry(registry_path)
+        .map(|r| r.agents.into_iter().map(|a| (a.id, a.state)).collect())
+        .unwrap_or_default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let mut lines = String::new();
+    for agent in &new.agents {
+        if old.get(&agent.id) != Some(&agent.state) {
+            let change = StateChange {
+                t: now,
+                agent: agent.id.clone(),
+                state: agent.state.clone(),
+            };
+            if let Ok(line) = serde_json::to_string(&change) {
+                lines.push_str(&line);
+                lines.push('\n');
+            }
+        }
+    }
+    if lines.is_empty() {
+        return;
+    }
+    let log = state_log_path(registry_path);
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&log) {
+        let _ = file.write_all(lines.as_bytes());
+    }
+    // keep the file small: past 512 KB only the newest 2000 lines stay
+    if std::fs::metadata(&log).map_or(false, |m| m.len() > 512 * 1024) {
+        if let Ok(text) = std::fs::read_to_string(&log) {
+            let all: Vec<&str> = text.lines().collect();
+            let keep = &all[all.len().saturating_sub(2000)..];
+            let _ = std::fs::write(&log, format!("{}\n", keep.join("\n")));
+        }
+    }
+}
+
+/// The state changes recorded at or after `since` (unix seconds), oldest first.
+pub fn load_state_log(registry_path: &Path, since: u64) -> Vec<StateChange> {
+    std::fs::read_to_string(state_log_path(registry_path))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<StateChange>(l).ok())
+        .filter(|c| c.t >= since)
+        .collect()
 }
 
 fn is_zero(value: &u32) -> bool {
@@ -1123,5 +1189,27 @@ Depends on: 1, 2
         assert!(parsed_unavail[0]["error"].as_str().is_some());
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_save_records_the_agents_whose_state_changed() {
+        let dir = std::env::temp_dir().join(format!("shep-states-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("agents.json");
+        let mut registry = AgentRegistryFile::default();
+        registry.agents.push(Agent {
+            id: "a1".into(),
+            state: "working".into(),
+            ..Agent::default()
+        });
+        save_agent_registry(&path, &registry).unwrap();
+        save_agent_registry(&path, &registry).unwrap(); // unchanged: nothing new
+        registry.agents[0].state = "idle".into();
+        save_agent_registry(&path, &registry).unwrap();
+        let log = load_state_log(&path, 0);
+        let seen: Vec<_> = log.iter().map(|c| (c.agent.as_str(), c.state.as_str())).collect();
+        assert_eq!(seen, [("a1", "working"), ("a1", "idle")]);
+        assert!(load_state_log(&path, u64::MAX).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
