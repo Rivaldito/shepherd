@@ -379,6 +379,41 @@ pub fn add_numstat(changes: &mut [GitChange], numstat: &str) {
     }
 }
 
+/// `(files, added, removed)` from `git diff --numstat` output (binary files count as a file, no lines).
+pub fn sum_numstat(text: &str) -> (usize, u64, u64) {
+    let mut files = 0;
+    let (mut added, mut removed) = (0, 0);
+    for line in text.lines() {
+        let mut parts = line.split('\t');
+        if let (Some(a), Some(r), Some(_)) = (parts.next(), parts.next(), parts.next()) {
+            files += 1;
+            added += a.parse::<u64>().unwrap_or(0);
+            removed += r.parse::<u64>().unwrap_or(0);
+        }
+    }
+    (files, added, removed)
+}
+
+/// What `branch` changes compared with the project's base branch: `(files, added, removed)`. `None` when git
+/// cannot say (no such branch, no git).
+pub fn branch_stat(root: &Path, branch: &str) -> Option<(usize, u64, u64)> {
+    if branch.is_empty() {
+        return None;
+    }
+    let base = crate::mcp::default_base(&root.display().to_string(), "");
+    let range = format!("{base}...{branch}");
+    let out = run_cmd_with_timeout(
+        "git",
+        &["diff", "--numstat", &range],
+        root,
+        Duration::from_secs(5),
+    )
+    .ok()?;
+    out.status
+        .success()
+        .then(|| sum_numstat(&String::from_utf8_lossy(&out.stdout)))
+}
+
 /// Information about a single worktree in the repository.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GitWorktreeInfo {
@@ -1120,5 +1155,11 @@ branch refs/heads/shep/1-coder
         add_numstat(&mut c, "9\t3\tauth/logout.go\n-\t-\tlogo.png\n");
         assert_eq!((c[0].added, c[0].removed), (9, 3));
         assert_eq!((c[1].added, c[1].removed), (0, 0));
+    }
+
+    #[test]
+    fn numstat_sums_files_and_lines() {
+        assert_eq!(sum_numstat("9\t3\ta.go\n5\t0\tb.go\n-\t-\tlogo.png\n"), (3, 14, 3));
+        assert_eq!(sum_numstat(""), (0, 0, 0));
     }
 }
