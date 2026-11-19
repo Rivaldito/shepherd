@@ -256,6 +256,11 @@ impl ConfigPanel {
         ])
     }
 
+    /// Worktrees of the repository, once the Git tab has loaded them.
+    pub fn git_count(&self) -> Option<usize> {
+        self.git.as_ref().map(|g| g.worktrees.len())
+    }
+
     /// `(skills, topics, vendors)` loaded so far, for the counters on the tabs.
     pub fn counts(&self) -> (usize, usize, usize) {
         (

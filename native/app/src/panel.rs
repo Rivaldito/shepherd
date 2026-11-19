@@ -543,6 +543,7 @@ pub(crate) fn btn<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Messag
         .into()
 }
 
+#[allow(dead_code)]
 pub(crate) fn btn_ghost<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Message> {
     button(btn_body(label))
         .padding([0, 12])
@@ -1419,122 +1420,111 @@ impl Panel {
         .into()
     }
 
-    /// Section tabs (`.tabs`): a pixel-font group label, then its tabs; a count badge turns orange
-    /// when something in that section needs the user.
-    fn section_tabs<'a>(&self, ctx: &Ctx<'a>) -> Element<'a, Message> {
-        let runs_warn = ctx.data.runs.iter().any(|r| {
-            matches!(
-                r.run.state,
-                PatternRunState::Stalled | PatternRunState::Degraded | PatternRunState::Failed
-            )
-        });
+    /// The navigation of the sidebar (`ORCHESTRATE` and `INSPECT`): a square bullet, the name, a count (orange
+    /// when something in that view needs the user) and the shortcut.
+    pub fn nav<'a>(&self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        let runs_warn = !ctx.data.gates.is_empty()
+            || ctx.data.runs.iter().any(|r| {
+                matches!(
+                    r.run.state,
+                    PatternRunState::Stalled | PatternRunState::Degraded | PatternRunState::Failed
+                )
+            });
         let agents_warn = ctx
             .data
             .agents
             .iter()
             .any(|a| a.state == "blocked" || !a.notice.is_empty());
         let counts = self.cfg.counts();
-        let tab_button = |tab: Tab, name: &'static str| {
+        let item = |tab: Tab, name: &'static str, key: &'static str| {
             let (count, warn) = match tab {
                 Tab::Runs => (Some(ctx.data.runs.len()), runs_warn),
                 Tab::Agents => (Some(ctx.data.agents.len()), agents_warn),
                 Tab::Tasks => (Some(ctx.data.tasks.len()), false),
                 Tab::Patterns => (Some(ctx.data.patterns.len()), false),
                 Tab::Skills => (Some(counts.0), false),
+                Tab::Git => (self.cfg.git_count(), false),
                 Tab::Events => (Some(counts.1), false),
                 Tab::Models => (Some(counts.2), false),
                 Tab::Snapshots => (Some(ctx.data.snapshots.len()), false),
                 _ => (None, false),
             };
             let selected = self.tab == tab;
-            let mut content = row![text(name).size(13)]
-                .spacing(8)
-                .align_y(iced::Alignment::Center);
+            let mut r = row![
+                container(text(""))
+                    .width(6)
+                    .height(6)
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(if selected {
+                            ACCENT
+                        } else {
+                            theme::LINE2
+                        })),
+                        border: iced::Border {
+                            radius: 1.0.into(),
+                            ..iced::Border::default()
+                        },
+                        ..container::Style::default()
+                    }),
+                text(name)
+                    .size(12.5)
+                    .color(if selected { theme::HI } else { FG }),
+                container(text("")).width(Length::Fill),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center);
             if let Some(count) = count {
-                content = content.push(
-                    container(text(count.to_string()).size(10.5))
-                        .padding([0, 5])
-                        .style(move |_| theme::count_style(selected, warn)),
+                r = r.push(
+                    container(text(count.to_string()).size(10.5).color(if warn {
+                        theme::BG
+                    } else {
+                        DIM
+                    }))
+                    .padding([0, 6])
+                    .style(move |_| {
+                        let mut s = theme::count_style(false, false);
+                        if warn {
+                            s.background = Some(Background::Color(WARN));
+                        }
+                        s
+                    }),
                 );
             }
-            let tab_btn = button(container(content).padding([0, 4]).center_y(Length::Fill))
-                .padding([0, 4])
-                .height(34)
+            if !key.is_empty() {
+                r = r.push(
+                    text(key)
+                        .size(10.5)
+                        .color(theme::LINE2)
+                        .width(Length::Fixed(46.0)),
+                );
+            }
+            button(container(r).center_y(Length::Fill))
+                .width(Length::Fill)
+                .height(30)
+                .padding([0, 10])
                 .style(item_style(selected))
-                .on_press(Message::Panel(PanelMsg::Tab(tab)));
-            if selected {
-                // the underline is a layer over the tab, so it takes the tab's width instead of widening it
-                iced::widget::stack![
-                    tab_btn,
-                    container(
-                        Canvas::new(Prism {
-                            preset: Preset::TABBAR,
-                            frame: ctx.frame,
-                        })
-                        .width(Length::Fill)
-                        .height(2)
-                    )
-                    .padding([0, 4])
-                    .align_bottom(Length::Fill),
-                ]
-                .into()
-            } else {
-                Element::from(tab_btn)
-            }
+                .on_press(Message::Panel(PanelMsg::Tab(tab)))
         };
-        let group = |name: &'static str, tabs: &[(Tab, &'static str)]| {
-            let mut r = row![container(theme::label(name)).padding(pad(0.0, 10.0, 0.0, 4.0))]
-                .spacing(2)
-                .align_y(iced::Alignment::Center);
-            for (tab, label) in tabs {
-                r = r.push(tab_button(*tab, label));
-            }
-            r
-        };
-        let separator =
-            container(text(""))
-                .width(1)
-                .height(22)
-                .style(|_| iced::widget::container::Style {
-                    background: Some(Background::Color(theme::LINE2)),
-                    ..iced::widget::container::Style::default()
-                });
-        container(
-            row![
-                group(
-                    "WORKSPACE",
-                    &[
-                        (Tab::Overview, "Overview"),
-                        (Tab::Runs, "Runs"),
-                        (Tab::Agents, "Agents"),
-                        (Tab::Tasks, "Tasks"),
-                        (Tab::Patterns, "Patterns"),
-                    ]
-                ),
-                container(separator).padding([0, 12]),
-                group(
-                    "INSPECT",
-                    &[
-                        (Tab::Monitor, "Activity"),
-                        (Tab::Skills, "Skills"),
-                        (Tab::Git, "Git"),
-                        (Tab::Events, "Events"),
-                        (Tab::Models, "Models"),
-                        (Tab::Snapshots, "Snapshots"),
-                    ]
-                ),
-            ]
-            .align_y(iced::Alignment::Center)
-            .wrap(),
-        )
-        .padding([8, 14])
-        .width(Length::Fill)
-        .style(theme::bottom_line_style)
+        column![
+            container(theme::label("ORCHESTRATE")).padding(pad(10.0, 8.0, 4.0, 8.0)),
+            item(Tab::Overview, "Overview", "Ctrl+1"),
+            item(Tab::Runs, "Runs", "Ctrl+2"),
+            item(Tab::Agents, "Agents", "Ctrl+3"),
+            item(Tab::Tasks, "Tasks", "Ctrl+4"),
+            item(Tab::Patterns, "Patterns", "Ctrl+5"),
+            container(theme::label("INSPECT")).padding(pad(14.0, 8.0, 4.0, 8.0)),
+            item(Tab::Monitor, "Activity", "Ctrl+6"),
+            item(Tab::Skills, "Skills", "Ctrl+7"),
+            item(Tab::Git, "Git", "Ctrl+8"),
+            item(Tab::Events, "Events", "Ctrl+9"),
+            item(Tab::Models, "Models", ""),
+            item(Tab::Snapshots, "Snapshots", ""),
+        ]
+        .spacing(2)
         .into()
     }
 
     pub fn view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
-        let tabs = self.section_tabs(ctx);
         let body = match self.tab {
             Tab::Overview => self.overview_view(ctx),
             Tab::Runs => self.runs_view(ctx),
@@ -1548,7 +1538,7 @@ impl Panel {
             Tab::Models => self.cfg.models_view(),
             Tab::Snapshots => self.snapshots_view(ctx),
         };
-        column![tabs, self.header(ctx), body].into()
+        column![self.header(ctx), body].into()
     }
 
     /// The view's header (`title`, one line saying what is in it, and its actions at the top right).
@@ -1917,36 +1907,7 @@ impl Panel {
         };
         let mut page = column![summary].spacing(8);
         for g in &ctx.data.gates {
-            let waiting = row![
-                text(format!(
-                    "Task #{} \"{}\" waits for you to approve {}",
-                    g.task_id,
-                    g.task_title,
-                    g.gate.label()
-                ))
-                .size(12)
-                .color(theme::HI)
-                .width(Length::Fill),
-                text_input("Reason for rejecting (optional)", &self.reject_reason)
-                    .on_input(|t| Message::Panel(PanelMsg::RejectReason(t)))
-                    .style(theme::input_style)
-                    .padding([6, 8])
-                    .size(12)
-                    .width(Length::Fixed(280.0)),
-                self.arm_button(
-                    Armed::ApproveGate(g.task_id, g.gate.clone()),
-                    "Approve",
-                    "Confirm: approve",
-                ),
-                self.arm_button(
-                    Armed::RejectGate(g.task_id, g.gate.clone()),
-                    "Reject",
-                    "Confirm: reject",
-                ),
-            ]
-            .spacing(8)
-            .align_y(iced::Alignment::Center);
-            page = page.push(alert(waiting.into(), WARN));
+            page = page.push(self.gate_card(ctx, g));
         }
         page.push(
             row![
@@ -1958,9 +1919,94 @@ impl Panel {
         .into()
     }
 
-    fn overview_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
-        let running = ctx
+    /// A gate that waits for the human (`Needs you`): what is being approved, who made it, and the buttons.
+    /// Approving publishes the branch and opens the pull request; rejecting sends the reason back.
+    fn gate_card<'a>(
+        &'a self,
+        ctx: &Ctx<'a>,
+        g: &'a shepherd_app_core::data::GateRow,
+    ) -> Element<'a, Message> {
+        let task = ctx.data.task(g.task_id);
+        let subtask = match (&g.gate, task) {
+            (Gate::PushPr(n), Some(t)) => t.status.subtasks.iter().find(|s| s.number == *n),
+            _ => None,
+        };
+        let run = ctx
             .data
+            .runs
+            .iter()
+            .find(|r| task_of_run(&r.run.task) == Some(g.task_id));
+        let title = match (&g.gate, subtask) {
+            (Gate::PushPr(n), Some(s)) => {
+                format!("Publish subtask {n} of task #{}: {}", g.task_id, s.title)
+            }
+            (Gate::PushPr(n), None) => format!("Publish subtask {n} of task #{}", g.task_id),
+            (Gate::Plan, _) => format!("Approve the plan of task #{}: {}", g.task_id, g.task_title),
+        };
+        let what = match (&g.gate, subtask) {
+            (Gate::PushPr(_), Some(s)) if !s.branch.is_empty() => format!(
+                "Approving pushes branch {} and opens the pull request. Nothing is pushed until you approve.",
+                s.branch
+            ),
+            (Gate::PushPr(_), _) => {
+                "Approving pushes the branch and opens the pull request. Nothing is pushed until you approve."
+                    .to_owned()
+            }
+            (Gate::Plan, _) => "Approving lets the coders start on the plan.".to_owned(),
+        };
+        let mut head = row![
+            badge("awaiting-approval", WARN),
+            text(title).font(theme::MONO_BOLD).size(13).color(theme::HI),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center);
+        if let Some(r) = run {
+            head = head.push(text(format!("run {}", r.run.id)).size(12).color(ACCENT));
+        }
+        let mut body = column![head, text(what).size(12).color(DIM)].spacing(8);
+        if let Some(s) = subtask {
+            let mut by = String::new();
+            if !s.coder.is_empty() {
+                by.push_str(&format!("by {}", s.coder));
+            }
+            if !s.reviewer.is_empty() {
+                by.push_str(&format!("   reviewed by {}", s.reviewer));
+            }
+            if let Some(note) = s.note.as_deref().filter(|n| !n.is_empty()) {
+                by.push_str(&format!("   {note}"));
+            }
+            if !by.is_empty() {
+                body = body.push(text(by).size(12).color(FG));
+            }
+        }
+        body = body.push(
+            row![
+                self.arm_button(
+                    Armed::ApproveGate(g.task_id, g.gate.clone()),
+                    "Approve and open PR",
+                    "Confirm: approve",
+                ),
+                text_input("Reason for rejecting (optional)", &self.reject_reason)
+                    .on_input(|t| Message::Panel(PanelMsg::RejectReason(t)))
+                    .style(theme::input_style)
+                    .padding([8, 10])
+                    .size(12)
+                    .width(Length::Fill),
+                self.arm_button(
+                    Armed::RejectGate(g.task_id, g.gate.clone()),
+                    "Reject",
+                    "Confirm: reject",
+                ),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
+        );
+        alert(body.into(), WARN)
+    }
+
+    fn overview_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        let d = ctx.data;
+        let running = d
             .runs
             .iter()
             .filter(|r| {
@@ -1973,14 +2019,12 @@ impl Panel {
                 )
             })
             .count();
-        let active_agents = ctx
-            .data
+        let active_agents = d
             .agents
             .iter()
             .filter(|a| matches!(a.state.as_str(), "working" | "starting"))
             .count();
-        let attention_runs = ctx
-            .data
+        let attention_runs = d
             .runs
             .iter()
             .filter(|r| {
@@ -1990,89 +2034,128 @@ impl Panel {
                 )
             })
             .count();
-        let open_tasks = ctx
-            .data
-            .tasks
-            .iter()
-            .filter(|t| !matches!(t.status.state.as_str(), "done" | "completed" | "archived"))
-            .count();
-        let (subtasks_done, subtasks_total) =
-            ctx.data
-                .tasks
-                .iter()
-                .fold((0usize, 0usize), |(done, total), task| {
-                    let task_total = task.status.subtasks.len();
-                    let task_done = task
-                        .status
-                        .subtasks
-                        .iter()
-                        .filter(|subtask| matches!(subtask.state.as_str(), "done" | "completed"))
-                        .count();
-                    (done + task_done, total + task_total)
-                });
-        let progress_label = if subtasks_total == 0 {
-            "No subtasks tracked yet".to_owned()
-        } else {
-            format!("{subtasks_done}/{subtasks_total} subtasks complete")
-        };
-
-        let blocked: Vec<_> = ctx
-            .data
+        let is_done = |s: &str| matches!(s, "done" | "completed" | "archived");
+        let open_tasks = d.tasks.iter().filter(|t| !is_done(&t.status.state)).count();
+        let blocked: Vec<_> = d
             .agents
             .iter()
             .filter(|a| a.state == "blocked" || !a.notice.is_empty())
             .collect();
-        let attention_total = blocked.len() + attention_runs;
+        let idle: Vec<_> = d.agents.iter().filter(|a| a.state == "idle").collect();
+        let needs_total = d.gates.len() + blocked.len() + attention_runs;
         let kpis = container(
             row![
                 kpi_cell(
-                    "RUNS",
+                    "ACTIVE RUN",
                     running.to_string(),
                     ACCENT,
-                    Some("active now".into())
+                    Some(format!("{} finished", d.runs.len() - running))
                 ),
                 kpi_cell(
                     "AGENTS",
-                    ctx.data.agents.len().to_string(),
+                    d.agents.len().to_string(),
                     theme::HI,
                     Some(format!(
-                        "{active_agents} working · {} blocked",
+                        "{active_agents} working, {} idle, {} blocked",
+                        idle.len(),
                         blocked.len()
                     ))
                 ),
-                kpi_cell("TASKS", open_tasks.to_string(), WARN, Some("open".into())),
+                kpi_cell(
+                    "OPEN TASKS",
+                    open_tasks.to_string(),
+                    WARN,
+                    Some(if d.gates.is_empty() {
+                        "nothing waits for you".to_owned()
+                    } else {
+                        format!("{} waits for you", d.gates.len())
+                    })
+                ),
                 kpi_cell(
                     "PATTERNS",
-                    ctx.data.patterns.len().to_string(),
+                    d.patterns.len().to_string(),
                     theme::HI,
-                    Some("available".into())
+                    Some("ready to run".into())
                 ),
             ]
             .spacing(1),
         )
         .style(kpi_strip_style);
 
-        let attention_card = {
-            let right = if attention_total > 0 {
-                badge(format!("{} BLOCKED", blocked.len()), WARN)
+        let pulse = {
+            let hot = needs_total > 0;
+            let message: Element<'a, Message> = if hot {
+                text(format!("{needs_total} need you"))
+                    .size(12)
+                    .color(WARN)
+                    .into()
             } else {
-                badge("ALL CLEAR", OK)
+                text(format!("{active_agents} agents working"))
+                    .size(12)
+                    .color(ACCENT)
+                    .into()
             };
-            let mut body = column![].spacing(6);
+            container(iced::widget::stack![
+                Canvas::new(Prism {
+                    preset: Preset::pulse(hot),
+                    frame: ctx.frame,
+                })
+                .width(Length::Fill)
+                .height(Length::Fill),
+                container(
+                    container(
+                        column![theme::label("HERD PULSE"), message].align_x(iced::Alignment::End)
+                    )
+                    .padding([6, 10])
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(Color::from_rgba8(7, 7, 10, 0.8))),
+                        border: iced::Border {
+                            radius: 4.0.into(),
+                            ..iced::Border::default()
+                        },
+                        ..container::Style::default()
+                    }),
+                )
+                .align_right(Length::Fill)
+                .align_bottom(Length::Fill)
+                .padding([0, 16]),
+            ])
+            .height(90)
+            .width(Length::Fill)
+            .style(|_| container::Style {
+                border: iced::Border {
+                    color: LINE,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..container::Style::default()
+            })
+        };
+
+        // Needs you: gates first, then blocked agents and stalled runs, then idle agents
+        let needs_card = {
+            let right: Element<'a, Message> = text("Nothing is pushed until you approve it")
+                .size(11)
+                .color(DIM)
+                .into();
+            let mut body = column![].spacing(10);
+            for g in &d.gates {
+                body = body.push(self.gate_card(ctx, g));
+            }
             for a in &blocked {
                 body = body.push(
                     row![
                         agent_square(agent_status(&a.state)),
                         text(a.id.clone()).size(13),
                         text(if a.notice.is_empty() {
-                            a.state.clone()
+                            "is blocked".to_owned()
                         } else {
                             a.notice.clone()
                         })
                         .size(11)
-                        .color(DIM),
-                        container(text("")).width(Length::Fill),
-                        btn_link("Open →", PanelMsg::SelectAgent(a.id.clone())),
+                        .color(DIM)
+                        .width(Length::Fill),
+                        btn("Open", PanelMsg::SelectAgent(a.id.clone())),
                     ]
                     .spacing(10)
                     .align_y(iced::Alignment::Center),
@@ -2085,163 +2168,263 @@ impl Panel {
                         .color(WARN),
                 );
             }
-            if attention_total == 0 {
+            if !idle.is_empty() {
                 body = body.push(
-                    text("Nothing blocked. The flock keeps moving on its own.")
+                    row![
+                        text(format!(
+                            "{} agent(s) idle: {}",
+                            idle.len(),
+                            idle.iter()
+                                .map(|a| a.id.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ))
+                        .size(12)
+                        .color(DIM)
+                        .width(Length::Fill),
+                        btn("Resume idle agents", PanelMsg::ResumeAgents),
+                    ]
+                    .spacing(10)
+                    .align_y(iced::Alignment::Center),
+                );
+            }
+            if needs_total == 0 && idle.is_empty() {
+                body = body.push(
+                    text("All clear. The flock keeps moving on its own.")
                         .size(13)
                         .color(DIM),
                 );
             }
-            card("NEEDS ATTENTION", Some(right), body.into())
+            let count: Element<'a, Message> = if needs_total > 0 {
+                row![badge(needs_total, WARN), right].spacing(12).into()
+            } else {
+                badge("ALL CLEAR", OK)
+            };
+            card("NEEDS YOU", Some(count), body.into())
         };
-        let recent_card = {
-            let mut body = column![].spacing(10);
-            for run in ctx.data.runs.iter().take(5) {
-                let (state, color) = state_badge(run.run.state);
+
+        // Tasks: each with a segment per subtask coloured by its state
+        let tasks_card = {
+            let done_n = d.tasks.iter().filter(|t| is_done(&t.status.state)).count();
+            let mut body = column![].spacing(12);
+            for t in d.tasks.iter().take(5) {
+                let subs = &t.status.subtasks;
+                let mut seg = row![].spacing(3);
+                let n = subs.len().max(1);
+                for i in 0..n {
+                    let color = match subs.get(i).map(|s| s.state.as_str()) {
+                        Some("done" | "completed") => OK,
+                        Some("awaiting-approval") => WARN,
+                        Some("in_progress" | "in-progress" | "working" | "review") => ACCENT,
+                        Some(_) => theme::LINE2,
+                        None if is_done(&t.status.state) => OK,
+                        None => theme::LINE2,
+                    };
+                    seg = seg.push(container(text("")).width(Length::Fill).height(4).style(
+                        move |_| container::Style {
+                            background: Some(Background::Color(color)),
+                            ..container::Style::default()
+                        },
+                    ));
+                }
+                let waiting = subs
+                    .iter()
+                    .filter(|s| s.state == "awaiting-approval")
+                    .count();
+                let caption = if subs.is_empty() {
+                    if is_done(&t.status.state) {
+                        "Done".to_owned()
+                    } else {
+                        format!("Not started, {} acceptance criteria", t.criteria.len())
+                    }
+                } else if waiting > 0 {
+                    format!("{} subtasks, {waiting} waits for your approval", subs.len())
+                } else {
+                    format!(
+                        "{} of {} subtasks done",
+                        subs.iter()
+                            .filter(|s| matches!(s.state.as_str(), "done" | "completed"))
+                            .count(),
+                        subs.len()
+                    )
+                };
                 body = body.push(
                     button(
                         column![
                             row![
-                                text(run.run.pattern.clone()).size(13).color(theme::HI),
-                                text(run.run.id.trim_start_matches("run-").to_owned())
-                                    .size(12)
-                                    .color(DIM),
-                                container(text("")).width(Length::Fill),
-                                text(state).size(12).color(color),
-                            ]
-                            .spacing(10),
-                            text(format!(
-                                "created {} · {} agents · topics {}",
-                                run.run.created_at,
-                                run.run.agents.len(),
-                                run.run
-                                    .topics
-                                    .iter()
-                                    .map(|t| format!("#{t}"))
-                                    .collect::<Vec<_>>()
-                                    .join(" ")
-                            ))
-                            .size(11)
-                            .color(DIM),
+                                text(format!("#{} {}", t.status.id, t.status.title))
+                                    .font(theme::MONO_BOLD)
+                                    .size(12.5)
+                                    .color(theme::HI)
+                                    .width(Length::Fill),
+                                text(t.status.state.clone())
+                                    .size(11)
+                                    .color(task_state_color(&t.status.state)),
+                            ],
+                            seg,
+                            text(caption).size(11).color(DIM),
                         ]
-                        .spacing(4),
+                        .spacing(6),
                     )
                     .width(Length::Fill)
-                    .padding([4, 6])
+                    .padding([6, 4])
                     .style(item_style(false))
-                    .on_press(Message::Panel(PanelMsg::SelectRun(run.run.id.clone()))),
+                    .on_press(Message::Panel(PanelMsg::SelectTask(t.status.id))),
                 );
             }
-            if ctx.data.runs.is_empty() {
-                body = body.push(text("No runs yet.").size(13).color(DIM));
+            if d.tasks.is_empty() {
+                body = body.push(
+                    column![
+                        text("No tasks yet").size(13).color(theme::HI),
+                        text("A task says what to build; a run gives it to a team.")
+                            .size(12)
+                            .color(DIM),
+                        btn_primary("+ New task", PanelMsg::TaskNew),
+                    ]
+                    .spacing(8),
+                );
             }
-            card("RECENT RUNS", None, body.into())
+            let right: Element<'a, Message> = row![
+                text(format!("{done_n} of {} done", d.tasks.len()))
+                    .size(11)
+                    .color(DIM),
+                btn_link("Open tasks", PanelMsg::Tab(Tab::Tasks)),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center)
+            .into();
+            card("TASKS", Some(right), body.into())
         };
 
-        let pulse = {
-            let needs_you = !blocked.is_empty() || attention_runs > 0;
-            let message: Element<'a, Message> = if needs_you {
-                text(format!("{} agents need you", blocked.len()))
-                    .size(12)
-                    .color(WARN)
-                    .into()
-            } else {
-                text(format!("{active_agents} agents working"))
-                    .size(12)
-                    .color(ACCENT)
-                    .into()
+        // Active work: task -> run -> agents -> branches -> publish, one line per running run
+        let work_card = {
+            let col_head = |s: &'static str, w: u16| {
+                container(text(s).size(11).color(DIM)).width(Length::FillPortion(w))
             };
-            container(iced::widget::stack![
-                Canvas::new(Prism {
-                    preset: Preset::pulse(needs_you),
-                    frame: ctx.frame,
-                })
-                .width(Length::Fill)
-                .height(Length::Fill),
-                container(
-                    container(
-                        column![theme::label("HERD PULSE"), message].align_x(iced::Alignment::End)
-                    )
-                    .padding([6, 10])
-                    .style(|_| iced::widget::container::Style {
-                        background: Some(Background::Color(Color::from_rgba8(7, 7, 10, 0.8))),
+            let chip = |label: String, color: Color| {
+                container(text(label).size(12).color(FG))
+                    .padding([5, 10])
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(theme::SURFACE)),
                         border: iced::Border {
-                            radius: 4.0.into(),
-                            ..iced::Border::default()
+                            color,
+                            width: 1.0,
+                            radius: 5.0.into(),
                         },
-                        ..iced::widget::container::Style::default()
-                    }),
-                )
-                .align_right(Length::Fill)
-                .align_bottom(Length::Fill)
-                .padding([0, 16]),
-            ])
-            .height(120)
-            .width(Length::Fill)
-            .style(|_| iced::widget::container::Style {
-                border: iced::Border {
-                    color: LINE,
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                ..iced::widget::container::Style::default()
-            })
-        };
-        let segments = subtasks_total.clamp(6, 24);
-        let mut seg = row![].spacing(4);
-        for i in 0..segments {
-            let done = i < subtasks_done;
-            seg = seg.push(
-                container(text(""))
-                    .width(Length::Fill)
-                    .height(10)
-                    .style(move |_| iced::widget::container::Style {
-                        background: Some(Background::Color(if done { OK } else { theme::LINE2 })),
-                        border: iced::Border {
-                            radius: 2.0.into(),
-                            ..iced::Border::default()
-                        },
-                        ..iced::widget::container::Style::default()
-                    }),
-            );
-        }
-        let progress_card = container(
-            column![
-                row![
-                    text("Task progress").size(13).color(theme::HI),
-                    text(progress_label.clone()).size(12).color(DIM),
-                ]
-                .spacing(10),
-                seg
+                        ..container::Style::default()
+                    })
+            };
+            let mut body = column![row![
+                col_head("Task", 3),
+                col_head("Run", 3),
+                col_head("Agents", 3),
+                col_head("Branches", 3),
+                col_head("Publish", 3),
             ]
-            .spacing(10),
-        )
-        .padding([12, 14])
-        .width(Length::Fill)
-        .style(card_style);
+            .spacing(8)]
+            .spacing(10);
+            let mut any = false;
+            for r in d.runs.iter().filter(|r| {
+                matches!(
+                    r.run.state,
+                    PatternRunState::Running
+                        | PatternRunState::Paused
+                        | PatternRunState::Stalled
+                        | PatternRunState::Degraded
+                )
+            }) {
+                any = true;
+                let task_id = task_of_run(&r.run.task);
+                let task_label = task_id
+                    .and_then(|id| d.task(id))
+                    .map(|t| format!("#{} {}", t.status.id, t.status.title))
+                    .unwrap_or_else(|| "no task".to_owned());
+                let agents: Vec<_> = d
+                    .agents
+                    .iter()
+                    .filter(|a| r.run.agents.iter().any(|ra| ra.id == a.id))
+                    .collect();
+                let mut agent_col = column![].spacing(4);
+                let mut branch_col = column![].spacing(4);
+                for a in &agents {
+                    let c = status_color(agent_status(&a.state));
+                    agent_col = agent_col.push(
+                        row![
+                            text(a.id.clone()).size(12).color(FG),
+                            text(a.state.clone()).size(11).color(c),
+                        ]
+                        .spacing(8),
+                    );
+                    branch_col = branch_col.push(
+                        text(if a.branch.is_empty() {
+                            "main".to_owned()
+                        } else {
+                            a.branch.clone()
+                        })
+                        .size(12)
+                        .color(DIM),
+                    );
+                }
+                let publish = match d.gates.iter().find(|g| Some(g.task_id) == task_id) {
+                    Some(_) => chip("awaiting-approval".to_owned(), WARN),
+                    None => chip("no publish step".to_owned(), theme::LINE2),
+                };
+                body = body.push(
+                    row![
+                        container(chip(task_label, theme::LINE2)).width(Length::FillPortion(3)),
+                        container(
+                            button(column![
+                                text(r.run.id.clone()).size(12).color(ACCENT),
+                                text(r.run.kind.clone()).size(11).color(DIM),
+                            ])
+                            .padding([5, 10])
+                            .style(item_style(false))
+                            .on_press(Message::Panel(PanelMsg::SelectRun(r.run.id.clone())))
+                        )
+                        .width(Length::FillPortion(3)),
+                        container(agent_col).width(Length::FillPortion(3)),
+                        container(branch_col).width(Length::FillPortion(3)),
+                        container(publish).width(Length::FillPortion(3)),
+                    ]
+                    .spacing(8)
+                    .align_y(iced::Alignment::Center),
+                );
+            }
+            if !any {
+                body = body.push(
+                    column![
+                        text("No run is working").size(13).color(theme::HI),
+                        text("A run is a team of agents working on one task with a pattern.")
+                            .size(12)
+                            .color(DIM),
+                        btn_primary("Run a pattern", PanelMsg::OpenLauncher(None)),
+                    ]
+                    .spacing(8),
+                );
+            }
+            card(
+                "ACTIVE WORK",
+                Some(
+                    text("How each running task reaches its agents, branches and pull requests")
+                        .size(11)
+                        .color(DIM)
+                        .into(),
+                ),
+                body.into(),
+            )
+        };
 
         column![
             kpis,
             scrollable(
                 column![
-                    row![
-                        text("Overview").size(26).color(theme::HI),
-                        badge("LIVE WORKSPACE", ACCENT),
-                        text(ctx.data.root.display().to_string())
-                            .size(13)
-                            .color(DIM),
-                    ]
-                    .spacing(10)
-                    .align_y(iced::Alignment::Center),
                     pulse,
-                    row![attention_card, recent_card].spacing(16),
-                    progress_card,
                     row![
-                        btn_primary("Run a pattern", PanelMsg::OpenLauncher(None)),
-                        btn("Manage agents", PanelMsg::Tab(Tab::Agents)),
-                        btn_ghost("Open patterns", PanelMsg::Tab(Tab::Patterns)),
+                        container(needs_card).width(Length::FillPortion(3)),
+                        container(tasks_card).width(Length::FillPortion(2))
                     ]
-                    .spacing(10),
+                    .spacing(16),
+                    work_card,
                 ]
                 .spacing(16)
                 .padding([22, 24]),

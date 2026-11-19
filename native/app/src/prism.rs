@@ -110,6 +110,7 @@ impl Preset {
         }
     }
     /// The underline of the selected tab.
+    #[allow(dead_code)]
     pub const TABBAR: Preset = Preset {
         px: 1.0,
         reach: 1.05,

@@ -185,6 +185,7 @@ enum Message {
     SetMode(Mode),
     StateChanged,
     TogglePalette,
+    ToggleMotion,
     PaletteQuery(String),
     PaletteMove(isize),
     PaletteRun,
@@ -308,6 +309,10 @@ struct App {
     mouse_position: iced::Point,
     /// Whether a data load is running, and whether another was asked for meanwhile.
     reloads: shepherd_app_core::reload::Coalesce,
+    /// The prism stands still (reduced motion), by choice in the status bar or `SHEPHERD_REDUCE_MOTION`.
+    still: bool,
+    /// Counts every tick, even while the prism stands still: timers use it, not `frame`.
+    clock: u32,
 }
 
 /// Terminal cells that fit in the window once the sidebar, tab bar and status line are taken out.
@@ -346,6 +351,8 @@ impl App {
             rename: None,
             mouse_position: iced::Point::ORIGIN,
             reloads: shepherd_app_core::reload::Coalesce::running(), // the first load starts below
+            still: std::env::var_os("SHEPHERD_REDUCE_MOTION").is_some(),
+            clock: 0,
             frame: 0,
             film: std::env::var_os("SHEPHERD_NATIVE_FILM").map(|dir| Film {
                 dir: PathBuf::from(dir),
@@ -535,6 +542,14 @@ impl App {
                     if is_b && modifiers.control() {
                         return Task::done(Message::ToggleSidebar);
                     }
+                    // `/` jumps to the filter of the list (a focused input has already taken the key)
+                    if self.mode == Mode::Shepherd
+                        && self.palette.is_none()
+                        && !modifiers.control()
+                        && matches!(key, keyboard::Key::Character(c) if c.as_str() == "/")
+                    {
+                        return iced::widget::operation::focus(ui::FILTER_ID);
+                    }
                     if self.mode == Mode::Shepherd && modifiers.control() {
                         let tab = match key {
                             keyboard::Key::Character(c) => match c.as_str() {
@@ -544,9 +559,9 @@ impl App {
                                 "4" => Some(panel::Tab::Tasks),
                                 "5" => Some(panel::Tab::Patterns),
                                 "6" => Some(panel::Tab::Monitor),
-                                "7" => Some(panel::Tab::Git),
-                                "8" => Some(panel::Tab::Events),
-                                "9" => Some(panel::Tab::Models),
+                                "7" => Some(panel::Tab::Skills),
+                                "8" => Some(panel::Tab::Git),
+                                "9" => Some(panel::Tab::Events),
                                 _ => None,
                             },
                             _ => None,
@@ -597,19 +612,22 @@ impl App {
                 }
             }
             Message::Tick => {
-                self.frame = self.frame.wrapping_add(1);
+                self.clock = self.clock.wrapping_add(1);
+                if !self.still {
+                    self.frame = self.frame.wrapping_add(1);
+                }
                 if let Some(task) = self.film_tick() {
                     return task;
                 }
                 // an unconfirmed `×` goes back to normal after ~5 s
                 if let Some((_, since)) = &self.closing {
-                    if self.frame.wrapping_sub(*since) > 60 {
+                    if self.clock.wrapping_sub(*since) > 60 {
                         self.closing = None;
                         self.session_note = None;
                     }
                 }
                 // sessions start and stop outside the app: look again every ~8 s while the window is open
-                if self.frame.is_multiple_of(100) {
+                if self.clock.is_multiple_of(100) {
                     return refresh_sessions();
                 }
             }
@@ -654,7 +672,7 @@ impl App {
                     let current = session.client_socket() == client_socket();
                     self.session_note =
                         Some((sessions::close_hint(&session, current), theme::WARN));
-                    self.closing = Some((name, self.frame));
+                    self.closing = Some((name, self.clock));
                     return Task::none();
                 }
                 self.closing = None;
@@ -855,6 +873,7 @@ impl App {
                 };
                 return self.panel.update(msg, &ctx);
             }
+            Message::ToggleMotion => self.still = !self.still,
             Message::TogglePalette => {
                 if self.palette.take().is_none() {
                     self.palette = Some(Palette {
@@ -1023,6 +1042,90 @@ impl App {
         } else {
             content
         }
+    }
+
+    /// The box in the top bar that opens the command palette.
+    fn search_box(&self) -> Element<'_, Message> {
+        button(
+            row![
+                text("⌕").size(14).color(DIM),
+                text("Jump to a view, agent or task")
+                    .size(11.5)
+                    .color(DIM)
+                    .wrapping(iced::widget::text::Wrapping::None),
+                container(text("")).width(Length::Fill),
+                container(
+                    text("Ctrl+Shift+P")
+                        .size(10)
+                        .color(DIM)
+                        .wrapping(iced::widget::text::Wrapping::None)
+                )
+                .padding([1, 6])
+                .width(Length::Shrink)
+                .style(theme::kbd_style),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
+        )
+        .width(360)
+        .padding([6, 10])
+        .style(theme::outline_button_style(false))
+        .on_press(Message::TogglePalette)
+        .into()
+    }
+
+    /// What needs the human now: waiting gates and blocked agents. Orange pill; click goes to where it is decided.
+    fn needs_pill(&self) -> Element<'_, Message> {
+        let gates = self.data.gates.len();
+        let blocked = self
+            .data
+            .agents
+            .iter()
+            .filter(|a| a.state == "blocked" || !a.notice.is_empty())
+            .count();
+        let n = gates + blocked;
+        if n == 0 {
+            return container(text("")).width(0).into();
+        }
+        let target = if gates > 0 {
+            panel::Tab::Runs
+        } else {
+            panel::Tab::Agents
+        };
+        button(
+            row![
+                container(
+                    text(n.to_string())
+                        .size(10.5)
+                        .font(theme::MONO_BOLD)
+                        .color(theme::BG)
+                )
+                .padding([0, 6])
+                .style(theme::badge_style(theme::WARN)),
+                text("needs you").size(12).color(theme::WARN),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding([5, 12])
+        .style(|_, status| {
+            let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: Some(Background::Color(Color {
+                    a: if hot { 0.2 } else { 0.1 },
+                    ..theme::WARN
+                })),
+                text_color: theme::WARN,
+                border: Border {
+                    color: theme::WARN,
+                    width: 1.0,
+                    radius: 14.0.into(),
+                },
+                ..button::Style::default()
+            }
+        })
+        .on_press(Message::Panel(panel::PanelMsg::Tab(target)))
+        .into()
     }
 
     /// One button per session (`.sess`): a dot for running or stopped, the current one lifted. Only a running
@@ -1230,6 +1333,8 @@ impl App {
                 self.mode_switch(),
                 self.session_buttons(),
                 container(text("")).width(Length::Fill),
+                self.search_box(),
+                self.needs_pill(),
                 text("●").size(9).color(status_color_val),
                 text(if connected {
                     "connected".to_owned()
@@ -1272,6 +1377,18 @@ impl App {
                 .size(11.5)
                 .color(self.session_note.as_ref().map_or(DIM, |(_, color)| *color)),
                 container(text("")).width(Length::Fill),
+                button(
+                    text(if self.still {
+                        "Motion: off"
+                    } else {
+                        "Motion: on"
+                    })
+                    .size(11.5)
+                    .color(DIM)
+                )
+                .padding(0)
+                .style(theme::link_button_style())
+                .on_press(Message::ToggleMotion),
                 text(if connected {
                     "● connected"
                 } else {
@@ -1702,7 +1819,13 @@ impl App {
                 let agent_body = row![
                     square,
                     text(agent.display_name()).size(12).width(Length::Fill),
-                    text(status_name(status)).size(11).color(color),
+                    text(if status == shepherd_app_core::snapshot::Status::Blocked {
+                        "needs you"
+                    } else {
+                        status_name(status)
+                    })
+                    .size(11)
+                    .color(color),
                 ]
                 .align_y(iced::Alignment::Center)
                 .spacing(10)
@@ -1719,6 +1842,18 @@ impl App {
             }
         }
 
+        // in the Shepherd mode the sidebar also holds the navigation between the views
+        let nav: Element<'_, Message> = if self.mode == Mode::Shepherd {
+            let ctx = panel::Ctx {
+                api: self.api_socket.clone(),
+                data: &self.data,
+                snapshot: &self.snapshot,
+                frame: self.frame,
+            };
+            self.panel.nav(&ctx)
+        } else {
+            container(text("")).height(0).into()
+        };
         // the brand and the switch live in the top bar; here only the toggle that gives the terminal more room
         let brand: Element<'_, Message> = if self.mode == Mode::Shepherd {
             container(text("")).height(0).into()
@@ -1737,7 +1872,7 @@ impl App {
         container(scrollable(
             column![
                 brand,
-                container(column![spaces, agents].spacing(6)).padding([14, 10])
+                container(column![spaces, agents, nav].spacing(6)).padding([14, 10])
             ]
             .spacing(0),
         ))
