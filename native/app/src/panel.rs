@@ -17,7 +17,7 @@ use iced::{Background, Color, Element, Length, Task};
 use shepherd_app_core::actions::{self, RunControl};
 use shepherd_app_core::bus_message::line as feed_line;
 use shepherd_app_core::data::{bus_feed, ensure_task_prefix, task_of_run, task_prompt, Data, Gate};
-use shepherd_app_core::pattern_graph::{self, PatternView};
+use shepherd_app_core::pattern_graph::{self, PatternView, PatternView as PatternGraphView};
 use shepherd_app_core::shepherd_core::bus::Message as BusMessage;
 use shepherd_app_core::shepherd_core::service::patterns_run::PatternRunState;
 use shepherd_app_core::snapshot::{Snapshot, Status};
@@ -57,6 +57,8 @@ pub enum Armed {
     DeleteSnapshot(String),
     /// Deletes an agent's oldest snapshots.
     PruneSnapshots(String),
+    /// Deletes a pattern file.
+    DeletePattern(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,6 +144,12 @@ pub enum PanelMsg {
     DismissToast,
     /// What the agents' panes show now.
     Outputs(Vec<(String, String)>),
+    /// Opens the editor on a blank pattern.
+    NewPattern,
+    /// Snapshots: the agent the header's Capture names, and the two chip filters.
+    SnapAgent(String),
+    SnapFilterAgent(Option<String>),
+    SnapFilterReason(Option<String>),
 }
 
 /// The create / edit form of a task.
@@ -235,6 +243,9 @@ pub struct Panel {
     run_graph: Option<(String, shepherd_app_core::pattern_graph::Graph)>,
     /// The last lines each agent's pane shows, by pane id (asked from the API while Agents is open).
     outputs: std::collections::HashMap<String, String>,
+    snap_capture_agent: Option<String>,
+    snap_agent_filter: Option<String>,
+    snap_reason_filter: Option<String>,
 }
 
 /// What the panel needs from the app to act.
@@ -303,6 +314,9 @@ impl Default for Panel {
             history: Vec::new(),
             run_graph: None,
             outputs: Default::default(),
+            snap_capture_agent: None,
+            snap_agent_filter: None,
+            snap_reason_filter: None,
         }
     }
 }
@@ -824,6 +838,45 @@ impl Panel {
             PanelMsg::Filter(t) => self.filter = t,
             PanelMsg::Chip(i) => self.chip = i,
             PanelMsg::DismissToast => self.toast = None,
+            PanelMsg::SnapAgent(a) => self.snap_capture_agent = Some(a),
+            PanelMsg::SnapFilterAgent(a) => self.snap_agent_filter = a,
+            PanelMsg::SnapFilterReason(r) => self.snap_reason_filter = r,
+            PanelMsg::NewPattern => {
+                use shepherd_app_core::shepherd_core::patterns::{
+                    Pattern, PatternAgent, PatternKind, PatternSource, Topic,
+                };
+                let pattern = Pattern {
+                    name: "my-pattern".into(),
+                    kind: PatternKind::Blackboard,
+                    description: "Describe what this team does".into(),
+                    topics: vec![Topic {
+                        name: "work".into(),
+                        partitions: 1,
+                        key: None,
+                        filter: None,
+                    }],
+                    agents: vec![PatternAgent {
+                        id: "a1".into(),
+                        role: "coder".into(),
+                        publishes: vec!["work".into()],
+                        consumes: vec!["work".into()],
+                        ..PatternAgent::default()
+                    }],
+                };
+                let graph = pattern_graph::layout(&pattern);
+                self.tab = Tab::Patterns;
+                self.pattern_sel = None;
+                let mut editor = PatternEditor::from_view(PatternGraphView {
+                    pattern,
+                    source: PatternSource::Project,
+                    path: None,
+                    problems: vec![],
+                    graph,
+                });
+                editor.mark_new();
+                self.edit = Some(editor);
+                self.notice = "New pattern: name it, add agents and topics, then Save.".into();
+            }
             PanelMsg::Outputs(list) => self.outputs = list.into_iter().collect(),
             PanelMsg::SelectRun(id) => {
                 self.tab = Tab::Runs;
@@ -951,6 +1004,17 @@ impl Panel {
                 match armed {
                     Armed::StopRun(id) => {
                         return self.update(PanelMsg::Control(id, RunControl::Stop), ctx)
+                    }
+                    Armed::DeletePattern(name) => {
+                        self.edit = None;
+                        self.pattern_sel = None;
+                        return Task::perform(
+                            async move {
+                                actions::delete_pattern(&api, &name, &root)
+                                    .map(|src| format!("Deleted pattern {name} ({src})"))
+                            },
+                            |r| Message::Panel(PanelMsg::Done(r)),
+                        );
                     }
                     Armed::DeleteTask(id) => {
                         if self.task == Some(id) {
@@ -1692,19 +1756,55 @@ impl Panel {
                     ],
                 )
             }
-            Tab::Tasks => (
-                "Tasks",
-                format!("{} tasks in {}", d.tasks.len(), d.root.display()),
-                vec![
-                    btn("Import issue", PanelMsg::ImportOpen),
-                    self.arm_button(Armed::ArchiveDone, "Archive done", "Confirm: archive done"),
-                    btn_primary("+ New task", PanelMsg::TaskNew),
-                ],
-            ),
+            Tab::Tasks => {
+                let open = d
+                    .tasks
+                    .iter()
+                    .filter(|t| {
+                        !matches!(
+                            t.status.state.as_str(),
+                            "done" | "completed" | "archived" | "cancelled"
+                        )
+                    })
+                    .count();
+                let done = d
+                    .tasks
+                    .iter()
+                    .filter(|t| {
+                        matches!(t.status.state.as_str(), "done" | "completed" | "archived")
+                    })
+                    .count();
+                let waiting = d
+                    .tasks
+                    .iter()
+                    .flat_map(|t| t.status.subtasks.iter())
+                    .filter(|s| s.state == "awaiting-approval")
+                    .count();
+                let mut s = format!("{} tasks: {open} open, {done} done.", d.tasks.len());
+                if waiting > 0 {
+                    s.push_str(&format!(" {waiting} subtask waits for your approval."));
+                }
+                (
+                    "Tasks",
+                    s,
+                    vec![
+                        text_input("Filter by number or title", &self.filter)
+                            .on_input(|t| Message::Panel(PanelMsg::Filter(t)))
+                            .id(crate::ui::FILTER_ID)
+                            .style(theme::input_style)
+                            .padding([8, 10])
+                            .size(12)
+                            .width(240)
+                            .into(),
+                        btn("Import issue", PanelMsg::ImportOpen),
+                        btn_primary("+ New task", PanelMsg::TaskNew),
+                    ],
+                )
+            }
             Tab::Patterns => (
                 "Patterns",
-                "Teams of agents, written as YAML. Built-in ones are read-only.".to_owned(),
-                vec![],
+                "Teams of agents and the topics they talk on. Stored as YAML.".to_owned(),
+                vec![btn_primary("+ New pattern", PanelMsg::NewPattern)],
             ),
             Tab::Monitor => (
                 "Activity",
@@ -1731,11 +1831,31 @@ impl Panel {
                 "Vendors, models and the role of each agent".to_owned(),
                 vec![],
             ),
-            Tab::Snapshots => (
-                "Snapshots",
-                format!("{} saved copies of agent worktrees", d.snapshots.len()),
-                vec![],
-            ),
+            Tab::Snapshots => {
+                let agents: Vec<String> = d.agents.iter().map(|a| a.id.clone()).collect();
+                let current = self.capture_agent(ctx);
+                let mut actions: Vec<Element<'a, Message>> =
+                    vec![text("Capture").size(12).color(DIM).into()];
+                actions.push(
+                    pick_list(agents, current.clone(), |a| {
+                        Message::Panel(PanelMsg::SnapAgent(a))
+                    })
+                    .text_size(12)
+                    .padding([8, 10])
+                    .into(),
+                );
+                if let Some(agent) = current {
+                    actions.push(btn_primary("Capture now", PanelMsg::SnapCapture(agent)));
+                }
+                (
+                    "Snapshots",
+                    format!(
+                        "{} saved copies of agent worktrees, newest first. Restore one to undo an agent's changes.",
+                        d.snapshots.len()
+                    ),
+                    actions,
+                )
+            }
         };
         crate::ui::page_header(title, sub, actions)
     }
@@ -3472,250 +3592,407 @@ impl Panel {
     }
 
     fn tasks_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        let d = ctx.data;
         let is_done = |state: &str| matches!(state, "done" | "completed" | "archived");
-        let open = ctx
-            .data
-            .tasks
-            .iter()
-            .filter(|t| !is_done(&t.status.state))
-            .count();
-        let in_run = ctx
-            .data
-            .tasks
-            .iter()
-            .filter(|t| {
-                ctx.data
-                    .runs
-                    .iter()
-                    .any(|r| task_of_run(&r.run.task) == Some(t.status.id))
-            })
-            .count();
-        let (sub_done, sub_total) = ctx.data.tasks.iter().fold((0, 0), |(d, n), t| {
-            (
-                d + t
-                    .status
-                    .subtasks
-                    .iter()
-                    .filter(|s| matches!(s.state.as_str(), "done" | "completed"))
-                    .count(),
-                n + t.status.subtasks.len(),
-            )
-        });
-        let summary = container(
-            row![
-                kpi_cell("OPEN", open.to_string(), WARN, None),
-                kpi_cell("IN RUN", in_run.to_string(), ACCENT, None),
-                kpi_cell(
-                    "SUBTASKS DONE",
-                    format!("{sub_done}/{sub_total}"),
-                    theme::HI,
-                    None
-                ),
-                kpi_cell(
-                    "DONE",
-                    ctx.data
-                        .tasks
-                        .iter()
-                        .filter(|t| is_done(&t.status.state))
-                        .count()
-                        .to_string(),
-                    OK,
-                    None
-                ),
-            ]
-            .spacing(1),
-        )
-        .style(kpi_strip_style);
         let selected = self
             .task
-            .and_then(|id| ctx.data.task(id))
-            .or_else(|| ctx.data.tasks.first())
+            .and_then(|id| d.task(id))
+            .or_else(|| d.tasks.first())
             .map(|t| t.status.id);
-        let done_n = ctx
-            .data
+        let met = |t: &shepherd_app_core::data::TaskRow| {
+            t.criteria
+                .iter()
+                .filter(|c| c.trim_start().starts_with("- [x]"))
+                .count()
+        };
+        // one card per task: its subtasks as segments, how many criteria are met, what waits, its run
+        let card_of = |t: &'a shepherd_app_core::data::TaskRow| -> Element<'a, Message> {
+            let subs = &t.status.subtasks;
+            let sel = selected == Some(t.status.id);
+            let mut body = column![row![
+                text(format!("#{}", t.status.id)).size(11).color(DIM),
+                text(t.status.title.clone())
+                    .font(theme::MONO_BOLD)
+                    .size(13)
+                    .color(theme::HI),
+            ]
+            .spacing(8)]
+            .spacing(8);
+            if !subs.is_empty() {
+                let mut seg = row![].spacing(3);
+                for s in subs {
+                    let color = match s.state.as_str() {
+                        "done" | "completed" => OK,
+                        "awaiting-approval" => WARN,
+                        "in_progress" | "in-progress" | "working" | "review" => ACCENT,
+                        _ => theme::LINE2,
+                    };
+                    seg = seg.push(container(text("")).width(Length::Fill).height(3).style(
+                        move |_| container::Style {
+                            background: Some(Background::Color(color)),
+                            ..container::Style::default()
+                        },
+                    ));
+                }
+                body = body.push(seg);
+            }
+            let crit = format!("{} of {} criteria met", met(t), t.criteria.len());
+            body = body.push(
+                text(if subs.is_empty() {
+                    crit
+                } else {
+                    format!("{} subtasks, {crit}", subs.len())
+                })
+                .size(11)
+                .color(DIM),
+            );
+            let waiting = subs
+                .iter()
+                .filter(|s| s.state == "awaiting-approval")
+                .count();
+            if waiting > 0 {
+                body = body.push(
+                    row![
+                        text("■").size(9).color(WARN),
+                        text(format!("{waiting} subtask waits for you"))
+                            .size(11)
+                            .color(WARN)
+                    ]
+                    .spacing(6),
+                );
+            }
+            if let Some(r) = d
+                .runs
+                .iter()
+                .find(|r| task_of_run(&r.run.task) == Some(t.status.id))
+            {
+                body = body.push(text(format!("run {}", r.run.id)).size(11).color(ACCENT));
+            }
+            button(body)
+                .width(Length::Fill)
+                .padding([10, 12])
+                .style(move |_, status| {
+                    let hot = msg_hot(status);
+                    button::Style {
+                        background: Some(Background::Color(if sel || hot {
+                            theme::SELECTED
+                        } else {
+                            theme::SURFACE
+                        })),
+                        text_color: FG,
+                        border: iced::Border {
+                            color: if sel { ACCENT } else { LINE },
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        },
+                        ..button::Style::default()
+                    }
+                })
+                .on_press(Message::Panel(PanelMsg::SelectTask(t.status.id)))
+                .into()
+        };
+        let column_of = |title: &'static str,
+                         color: Color,
+                         tasks: Vec<&'a shepherd_app_core::data::TaskRow>,
+                         extra: Option<Element<'a, Message>>|
+         -> Element<'a, Message> {
+            let mut head = row![
+                text("■").size(10).color(color),
+                text(title)
+                    .font(theme::MONO_BOLD)
+                    .size(12.5)
+                    .color(theme::HI),
+                text(tasks.len().to_string()).size(11).color(DIM),
+                container(text("")).width(Length::Fill),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
+            if let Some(e) = extra {
+                head = head.push(e);
+            }
+            let mut cards = column![].spacing(8);
+            if tasks.is_empty() {
+                cards = cards.push(text("None.").size(12).color(DIM));
+            }
+            for t in tasks {
+                cards = cards.push(card_of(t));
+            }
+            container(column![head, scrollable(cards).height(Length::Fill)].spacing(10))
+                .padding(12)
+                .width(Length::FillPortion(1))
+                .height(Length::Fill)
+                .style(card_style)
+                .into()
+        };
+        let shown = |t: &&shepherd_app_core::data::TaskRow| {
+            self.passes(&format!("#{} {}", t.status.id, t.status.title))
+        };
+        let linked = |t: &&shepherd_app_core::data::TaskRow| {
+            d.runs
+                .iter()
+                .any(|r| task_of_run(&r.run.task) == Some(t.status.id))
+        };
+        let in_run = |t: &&shepherd_app_core::data::TaskRow| {
+            has_run(&t.status.state) || (t.status.state == "new" && linked(t))
+        };
+        let new_tasks: Vec<_> = d
+            .tasks
+            .iter()
+            .filter(|t| t.status.state == "new" && !linked(t))
+            .filter(shown)
+            .collect();
+        let running: Vec<_> = d
+            .tasks
+            .iter()
+            .filter(|t| in_run(t) && t.status.state != "cancelled")
+            .filter(shown)
+            .collect();
+        let done: Vec<_> = d
             .tasks
             .iter()
             .filter(|t| is_done(&t.status.state))
-            .count();
-        let chips = [
-            ("All", ctx.data.tasks.len()),
-            ("Open", open),
-            ("Done", done_n),
-        ];
-        let items = ctx
-            .data
-            .tasks
-            .iter()
-            .filter(|t| {
-                let chip_ok = match self.chip {
-                    1 => !is_done(&t.status.state),
-                    2 => is_done(&t.status.state),
-                    _ => true,
-                };
-                chip_ok && self.passes(&format!("#{} {}", t.status.id, t.status.title))
-            })
-            .map(|t| {
-                let in_run = ctx
-                    .data
-                    .runs
-                    .iter()
-                    .find(|r| task_of_run(&r.run.task) == Some(t.status.id));
-                let body = column![
-                    text(format!("#{} {}", t.status.id, t.status.title))
-                        .size(13)
-                        .color(theme::HI),
-                    text(match in_run {
-                        Some(r) => format!("{} · run {}", t.status.state, r.run.pattern),
-                        None => t.status.state.clone(),
-                    })
-                    .size(11)
-                    .color(task_state_color(&t.status.state)),
-                ]
-                .spacing(1);
-                button(body)
-                    .width(Length::Fill)
-                    .padding([8, 10])
-                    .style(item_style(selected == Some(t.status.id)))
-                    .on_press(Message::Panel(PanelMsg::SelectTask(t.status.id)))
-                    .into()
-            })
+            .filter(shown)
             .collect();
-        let footer: Vec<Element<'a, Message>> = vec![];
-        let detail: Element<'a, Message> = match ctx
-            .data
+        let cancelled: Vec<_> = d
             .tasks
             .iter()
-            .find(|t| Some(t.status.id) == selected)
-        {
-            None => text(format!("No tasks in {}.", ctx.data.root.display()))
-                .color(DIM)
-                .into(),
-            Some(t) => {
-                let runs: Vec<_> = ctx
-                    .data
-                    .runs
-                    .iter()
-                    .filter(|r| task_of_run(&r.run.task) == Some(t.status.id))
-                    .collect();
-                let state_color = task_state_color(&t.status.state);
-                let mut col = column![
-                    row![
-                        text(format!("Task #{} · {}", t.status.id, t.status.title))
-                            .size(18)
-                            .color(theme::HI),
-                        badge(t.status.state.to_uppercase(), state_color),
-                    ]
-                    .spacing(10)
-                    .align_y(iced::Alignment::Center),
+            .filter(|t| t.status.state == "cancelled")
+            .filter(shown)
+            .collect();
+        let board = row![
+            column_of("New", theme::IDLE, new_tasks, None),
+            column_of("In run", ACCENT, running, None),
+            column_of(
+                "Done",
+                OK,
+                done,
+                Some(self.arm_button(Armed::ArchiveDone, "Archive", "Confirm: archive"))
+            ),
+            column_of("Cancelled", BAD, cancelled, None),
+        ]
+        .spacing(12)
+        .height(Length::Fill);
+        let detail: Element<'a, Message> =
+            match d.tasks.iter().find(|t| Some(t.status.id) == selected) {
+                None => column![
+                    text("No task selected").size(13).color(theme::HI),
                     text(format!(
-                        "branch {}",
-                        if t.status.branch.is_empty() {
-                            "none"
-                        } else {
-                            &t.status.branch
-                        }
+                        "Tasks of {} show up on the board.",
+                        d.root.display()
                     ))
                     .size(12)
                     .color(DIM),
+                    btn_primary("+ New task", PanelMsg::TaskNew),
                 ]
-                .spacing(14);
-                if !t.description.is_empty() {
-                    col = col.push(text(t.description.clone()).size(13));
-                }
-                if !t.criteria.is_empty() {
-                    let mut rows = column![].spacing(8);
-                    for c in &t.criteria {
-                        let text_of = c
-                            .trim_start_matches("- [ ] ")
-                            .trim_start_matches("- [x] ")
-                            .trim_start_matches("- ")
-                            .to_owned();
-                        rows = rows.push(
-                            row![
-                                container(text("")).width(18).height(18).style(|_| {
-                                    iced::widget::container::Style {
-                                        border: iced::Border {
-                                            color: theme::LINE2,
-                                            width: 1.0,
-                                            radius: 3.0.into(),
-                                        },
-                                        ..iced::widget::container::Style::default()
-                                    }
-                                }),
-                                text(text_of).size(13).width(Length::Fill),
-                            ]
-                            .spacing(10),
-                        );
+                .spacing(8)
+                .into(),
+                Some(t) => {
+                    let runs: Vec<_> = d
+                        .runs
+                        .iter()
+                        .filter(|r| task_of_run(&r.run.task) == Some(t.status.id))
+                        .collect();
+                    let state_color = task_state_color(&t.status.state);
+                    let mut col = column![row![
+                        text(format!("#{}", t.status.id)).size(13).color(DIM),
+                        text(t.status.title.clone())
+                            .font(theme::MONO_BOLD)
+                            .size(20)
+                            .color(theme::HI),
+                        badge(t.status.state.clone(), state_color),
+                    ]
+                    .spacing(10)
+                    .align_y(iced::Alignment::Center),]
+                    .spacing(14);
+                    let mut actions = row![].spacing(8).align_y(iced::Alignment::Center);
+                    match runs.first() {
+                        Some(r) => {
+                            actions = actions.push(btn_primary(
+                                "Open run",
+                                PanelMsg::SelectRun(r.run.id.clone()),
+                            ))
+                        }
+                        None => {
+                            actions = actions.push(btn_primary(
+                                "Run with an agent",
+                                PanelMsg::RunTaskWithAgent(t.status.id),
+                            ))
+                        }
                     }
-                    col = col.push(card("ACCEPTANCE CRITERIA", None, rows.into()));
-                }
-                if !t.status.subtasks.is_empty() {
-                    let mut rows = column![].spacing(6);
-                    for subtask in &t.status.subtasks {
-                        let state = subtask.state.as_str();
-                        let note = subtask
-                            .note
-                            .as_deref()
-                            .filter(|note| !note.is_empty())
-                            .map(|note| format!(" · {note}"))
-                            .unwrap_or_default();
-                        rows = rows.push(
-                            row![
-                                agent_square(agent_status(state)),
-                                text(subtask.title.clone()).size(13).color(theme::HI),
-                                text(format!("{state}{note}")).size(11).color(DIM),
-                            ]
-                            .spacing(10)
-                            .align_y(iced::Alignment::Center),
-                        );
+                    if !runs.is_empty() {
+                        actions = actions.push(btn(
+                            "Run with an agent",
+                            PanelMsg::RunTaskWithAgent(t.status.id),
+                        ));
                     }
-                    col = col.push(card("SUBTASKS", None, rows.into()));
-                }
-                let mut actions = row![].spacing(10);
-                for r in runs {
-                    actions = actions.push(btn(
-                        format!("Open run {}", r.run.pattern),
-                        PanelMsg::SelectRun(r.run.id.clone()),
-                    ));
-                }
-                actions = actions
-                    .push(btn_primary(
-                        "Run with an agent",
-                        PanelMsg::RunTaskWithAgent(t.status.id),
-                    ))
-                    .push(btn(
-                        "Run with a pattern",
-                        PanelMsg::OpenLauncher(Some(t.status.id)),
-                    ))
-                    .push(btn("Edit", PanelMsg::TaskEditOpen(t.status.id)));
-                if has_run(&t.status.state) {
+                    actions = actions
+                        .push(btn(
+                            "Run with a pattern",
+                            PanelMsg::OpenLauncher(Some(t.status.id)),
+                        ))
+                        .push(btn("Edit", PanelMsg::TaskEditOpen(t.status.id)));
+                    if has_run(&t.status.state) {
+                        actions = actions.push(self.arm_button(
+                            Armed::CancelRun(t.status.id),
+                            "Cancel run",
+                            "Confirm: cancel the run",
+                        ));
+                    }
                     actions = actions.push(self.arm_button(
-                        Armed::CancelRun(t.status.id),
-                        "Cancel run",
-                        "Confirm: cancel the run and close its agents",
+                        Armed::DeleteTask(t.status.id),
+                        "Delete",
+                        "Confirm: delete for good",
                     ));
+                    col = col.push(actions.wrap());
+                    if !t.description.is_empty() {
+                        col = col.push(
+                            column![
+                                theme::label("SPECIFICATION"),
+                                text(t.description.clone()).size(13)
+                            ]
+                            .spacing(8),
+                        );
+                    }
+                    if !t.criteria.is_empty() {
+                        let mut rows = column![row![
+                            theme::label("ACCEPTANCE CRITERIA"),
+                            text(format!("{} of {} met", met(t), t.criteria.len()))
+                                .size(11)
+                                .color(DIM)
+                        ]
+                        .spacing(10)]
+                        .spacing(8);
+                        for c in &t.criteria {
+                            let ok = c.trim_start().starts_with("- [x]");
+                            let text_of = c
+                                .trim_start_matches("- [ ] ")
+                                .trim_start_matches("- [x] ")
+                                .trim_start_matches("- ")
+                                .to_owned();
+                            rows = rows.push(
+                                row![
+                                    container(
+                                        text(if ok { "✓" } else { "" }).size(11).color(theme::BG)
+                                    )
+                                    .width(16)
+                                    .height(16)
+                                    .center_x(16)
+                                    .center_y(16)
+                                    .style(move |_| {
+                                        container::Style {
+                                            background: ok.then_some(Background::Color(OK)),
+                                            border: iced::Border {
+                                                color: if ok { OK } else { theme::LINE2 },
+                                                width: 1.0,
+                                                radius: 3.0.into(),
+                                            },
+                                            ..container::Style::default()
+                                        }
+                                    }),
+                                    text(text_of).size(13).width(Length::Fill),
+                                ]
+                                .spacing(10),
+                            );
+                        }
+                        col = col.push(rows);
+                    }
+                    if !t.status.subtasks.is_empty() {
+                        let mut rows = column![theme::label("SUBTASKS")].spacing(0);
+                        for s in &t.status.subtasks {
+                            let state = s.state.as_str();
+                            let color = match state {
+                                "awaiting-approval" => WARN,
+                                "done" | "completed" => OK,
+                                "in_progress" | "in-progress" | "working" => ACCENT,
+                                _ => DIM,
+                            };
+                            let mut line = row![
+                                text(s.number.to_string()).size(11).color(DIM).width(18),
+                                text(s.title.clone())
+                                    .size(12.5)
+                                    .color(theme::HI)
+                                    .width(Length::Fill),
+                            ]
+                            .spacing(8)
+                            .align_y(iced::Alignment::Center);
+                            if state == "awaiting-approval" {
+                                if let Some(r) = runs.first() {
+                                    line = line.push(btn_link(
+                                        "Review gate",
+                                        PanelMsg::SelectRun(r.run.id.clone()),
+                                    ));
+                                }
+                            }
+                            line = line.push(text(state.to_owned()).size(11).color(color));
+                            rows = rows.push(container(line).padding([8, 12]).width(Length::Fill));
+                        }
+                        col = col.push(
+                            container(rows)
+                                .padding(pad(10.0, 0.0, 4.0, 0.0))
+                                .style(card_style),
+                        );
+                    }
+                    // where the work lives: run, agents, branches, source
+                    let mut lives = column![theme::label("WHERE IT LIVES")].spacing(6);
+                    let kv = |k: &'static str, v: String| {
+                        row![
+                            text(k).size(11.5).color(DIM).width(70),
+                            text(v).size(12).color(FG)
+                        ]
+                        .spacing(8)
+                    };
+                    if let Some(r) = runs.first() {
+                        lives = lives.push(kv(
+                            "run",
+                            format!("{} ({})", r.run.id, state_badge(r.run.state).0),
+                        ));
+                        let ids: Vec<_> = r.run.agents.iter().map(|a| a.id.clone()).collect();
+                        lives = lives.push(kv("agents", ids.join(", ")));
+                        let mut branches: Vec<String> = vec![];
+                        for a in d.agents.iter().filter(|a| ids.contains(&a.id)) {
+                            let b = if a.branch.is_empty() {
+                                "main".to_owned()
+                            } else {
+                                a.branch.clone()
+                            };
+                            if !branches.contains(&b) {
+                                branches.push(b);
+                            }
+                        }
+                        lives = lives.push(kv("branches", branches.join(", ")));
+                    } else if !t.status.branch.is_empty() {
+                        lives = lives.push(kv("branches", t.status.branch.clone()));
+                    } else {
+                        lives = lives.push(
+                            text("Not started: no run, agent or branch yet.")
+                                .size(12)
+                                .color(DIM),
+                        );
+                    }
+                    col = col.push(lives);
+                    col.into()
                 }
-                actions = actions.push(self.arm_button(
-                    Armed::DeleteTask(t.status.id),
-                    "Delete",
-                    "Confirm: delete this task for good",
-                ));
-                col.push(actions).max_width(900).into()
-            }
-        };
+            };
         let detail = match (&self.task_form, &self.importing) {
             (Some(form), _) => self.task_form_view(form),
             (None, Some(issue)) => self.import_view(issue),
             (None, None) => detail,
         };
-        column![
-            summary,
-            row![
-                self.filtered_list("Filter by number or title", &chips, items, footer),
-                self.detail(detail)
-            ]
-            .height(Length::Fill),
+        row![
+            container(board)
+                .padding(16)
+                .width(Length::Fill)
+                .height(Length::Fill),
+            container(text(""))
+                .width(1)
+                .height(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(LINE)),
+                    ..container::Style::default()
+                }),
+            container(self.detail(detail)).width(430),
         ]
+        .height(Length::Fill)
         .into()
     }
 
@@ -3808,41 +4085,40 @@ impl Panel {
     }
 
     fn patterns_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
-        let total_agents: usize = ctx.data.patterns.iter().map(|p| p.agents_count).sum();
-        let total_topics: usize = ctx.data.patterns.iter().map(|p| p.topics_count).sum();
-        let summary = container(
-            row![
-                agent_metric("PATTERNS", ctx.data.patterns.len(), FG),
-                agent_metric("AGENTS", total_agents, ACCENT),
-                agent_metric("TOPICS", total_topics, OK),
+        use shepherd_app_core::shepherd_core::patterns::PatternSource;
+        let entry = |p: &'a shepherd_app_core::shepherd_core::patterns::PatternSummary| -> Element<'a, Message> {
+            let body = column![
+                text(p.name.clone()).font(theme::MONO_BOLD).size(13).color(theme::HI),
+                text(format!("{:?}", p.kind).to_lowercase()).size(11).color(DIM),
+                text(format!("{} agents, {} topics", p.agents_count, p.topics_count)).size(11).color(DIM),
             ]
-            .spacing(1),
-        )
-        .style(kpi_strip_style);
-        let items = ctx
+            .spacing(3);
+            button(body)
+                .width(Length::Fill)
+                .padding([8, 10])
+                .style(item_style(self.pattern_sel.as_deref() == Some(p.name.as_str())))
+                .on_press(Message::Panel(PanelMsg::SelectPattern(p.name.clone())))
+                .into()
+        };
+        let heading = |s: &'static str| {
+            container(text(s).size(11.5).color(DIM)).padding(pad(10.0, 4.0, 4.0, 4.0))
+        };
+        let (mine, builtin): (Vec<_>, Vec<_>) = ctx
             .data
             .patterns
             .iter()
-            .map(|p| {
-                let body = column![
-                    text(p.name.clone()).size(13),
-                    text(format!(
-                        "{:?} · {} agents · {} topics",
-                        p.kind, p.agents_count, p.topics_count
-                    ))
-                    .size(11)
-                    .color(DIM)
-                ];
-                button(body)
-                    .width(Length::Fill)
-                    .padding([4, 8])
-                    .style(item_style(
-                        self.pattern_sel.as_deref() == Some(p.name.as_str()),
-                    ))
-                    .on_press(Message::Panel(PanelMsg::SelectPattern(p.name.clone())))
-                    .into()
-            })
-            .collect();
+            .filter(|p| self.passes(&format!("{} {:?}", p.name, p.kind)))
+            .partition(|p| !matches!(p.source, PatternSource::Builtin));
+        let mut items: Vec<Element<'a, Message>> = vec![];
+        if !mine.is_empty() {
+            items.push(heading("Yours in this project").into());
+            items.extend(mine.into_iter().map(entry));
+        }
+        if !builtin.is_empty() {
+            items.push(heading("Built in").into());
+            items.extend(builtin.into_iter().map(entry));
+        }
+        let top = crate::ui::filter_bar("Filter patterns", &self.filter, &[], 0);
         let detail: Element<'a, Message> = match &self.edit {
             None => {
                 let message = if ctx.data.patterns.is_empty() {
@@ -3868,20 +4144,21 @@ impl Panel {
                 .style(card_style)
                 .into()
             }
-            Some(edit) => column![edit.view(ctx.frame),].spacing(10).into(),
+            Some(edit) => column![edit.view(
+                ctx.frame,
+                self.armed == Some(Armed::DeletePattern(edit.editor.pattern.name.clone()))
+            ),]
+            .spacing(10)
+            .into(),
         };
-        column![
-            summary,
-            row![
-                self.list(items, vec![]),
-                container(detail)
-                    .padding([20, 24])
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-            ]
-            .height(Length::Fill),
+        row![
+            list_box_with(Some(top), items, vec![]),
+            container(detail)
+                .padding([16, 20])
+                .width(Length::Fill)
+                .height(Length::Fill),
         ]
-        .spacing(8)
+        .height(Length::Fill)
         .into()
     }
 
@@ -4358,5 +4635,46 @@ mod tests {
         assert!(!panel.passes("api only 231"));
         assert!(panel.passes("api team 231"));
         assert!(panel.passes("TEAM api"));
+    }
+
+    #[test]
+    fn the_snapshot_filters_pick_an_agent_and_a_reason_and_the_view_builds_with_them() {
+        let data = Data {
+            snapshots: vec![
+                snap("coder-1/2", 200),
+                snap("coder-2/1", 150),
+                snap("coder-1/1", 100),
+            ],
+            ..Data::default()
+        };
+        let snapshot = Snapshot::default();
+        let ctx = ctx_of(&data, &snapshot);
+        let mut panel = Panel::default();
+        panel.tab = Tab::Snapshots;
+        // with no agent alive the Capture box falls back to the shown snapshot's agent
+        assert_eq!(panel.capture_agent(&ctx).as_deref(), Some("coder-1"));
+        let _ = panel.update(PanelMsg::SnapFilterAgent(Some("coder-2".into())), &ctx);
+        let _ = panel.update(PanelMsg::SnapFilterReason(Some("idle".into())), &ctx);
+        assert_eq!(panel.snap_agent_filter.as_deref(), Some("coder-2"));
+        let _ = panel.snapshots_view(&ctx);
+        let _ = panel.header(&ctx);
+        let _ = panel.update(PanelMsg::SnapFilterAgent(None), &ctx);
+        assert!(panel.snap_agent_filter.is_none());
+    }
+
+    #[test]
+    fn a_new_pattern_opens_the_editor_on_something_to_save_and_deleting_needs_two_clicks() {
+        let data = Data::default();
+        let snapshot = Snapshot::default();
+        let ctx = ctx_of(&data, &snapshot);
+        let mut panel = Panel::default();
+        let _ = panel.update(PanelMsg::NewPattern, &ctx);
+        let edit = panel.edit.as_ref().expect("the editor opens");
+        assert_eq!(edit.editor.pattern.name, "my-pattern");
+        assert!(edit.editor.dirty, "a new pattern has something to save");
+        let _ = panel.patterns_view(&ctx);
+        let delete = Armed::DeletePattern("my-pattern".into());
+        let _ = panel.update(PanelMsg::Arm(delete.clone()), &ctx);
+        assert_eq!(panel.armed, Some(delete));
     }
 }

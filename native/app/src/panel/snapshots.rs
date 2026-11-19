@@ -90,71 +90,188 @@ impl Panel {
         )
     }
 
+    /// The agent the Capture box of the header names: the picked one, else the shown snapshot's, else the first.
+    pub(super) fn capture_agent(&self, ctx: &Ctx<'_>) -> Option<String> {
+        self.snap_capture_agent
+            .clone()
+            .filter(|a| ctx.data.agents.iter().any(|x| &x.id == a))
+            .or_else(|| {
+                self.snap_id(ctx)
+                    .and_then(|id| ctx.data.snapshots.iter().find(|s| s.id == id))
+                    .map(|s| s.agent.clone())
+            })
+            .or_else(|| ctx.data.agents.first().map(|a| a.id.clone()))
+    }
+
     pub(super) fn snapshots_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
         let snaps = &ctx.data.snapshots;
         let shown = self.snap_id(ctx);
-        let agents = snaps
-            .iter()
-            .map(|s| s.agent.as_str())
-            .collect::<std::collections::BTreeSet<_>>()
-            .len();
-        let (files, added, removed) = snaps.iter().fold((0u64, 0u64, 0u64), |(f, a, r), s| {
-            (f + s.files as u64, a + s.added, r + s.removed)
-        });
-        let summary = container(
+        let mut agents: Vec<String> = vec![];
+        for s in snaps {
+            if !agents.contains(&s.agent) {
+                agents.push(s.agent.clone());
+            }
+        }
+        let reasons = ["manual", "idle", "done", "pre-restore"];
+        let chip = |label: String, on: bool, msg: PanelMsg| {
+            button(text(label).size(11.5))
+                .padding([3, 10])
+                .style(theme::chip_style(on))
+                .on_press(Message::Panel(msg))
+        };
+        let mut agent_chips = row![chip(
+            "All agents".into(),
+            self.snap_agent_filter.is_none(),
+            PanelMsg::SnapFilterAgent(None)
+        )]
+        .spacing(6);
+        for a in &agents {
+            agent_chips = agent_chips.push(chip(
+                a.clone(),
+                self.snap_agent_filter.as_deref() == Some(a.as_str()),
+                PanelMsg::SnapFilterAgent(Some(a.clone())),
+            ));
+        }
+        let mut reason_chips = row![chip(
+            "Any reason".into(),
+            self.snap_reason_filter.is_none(),
+            PanelMsg::SnapFilterReason(None)
+        )]
+        .spacing(6);
+        for r in reasons {
+            reason_chips = reason_chips.push(chip(
+                r.to_owned(),
+                self.snap_reason_filter.as_deref() == Some(r),
+                PanelMsg::SnapFilterReason(Some(r.to_owned())),
+            ));
+        }
+        let filters = container(
             row![
-                agent_metric("SNAPSHOTS", snaps.len(), FG),
-                agent_metric("AGENTS", agents, ACCENT),
-                agent_metric("FILES CHANGED", files as usize, DIM),
-                agent_metric("LINES +", added as usize, OK),
-                agent_metric(
-                    "LINES -",
-                    removed as usize,
-                    if removed > 0 { WARN } else { DIM }
-                ),
+                text_input("Filter by agent or id", &self.filter)
+                    .on_input(|t| Message::Panel(PanelMsg::Filter(t)))
+                    .id(crate::ui::FILTER_ID)
+                    .style(theme::input_style)
+                    .padding([8, 10])
+                    .size(12)
+                    .width(260),
+                agent_chips.wrap(),
+                container(text(""))
+                    .width(1)
+                    .height(20)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(theme::LINE2)),
+                        ..container::Style::default()
+                    }),
+                reason_chips.wrap(),
             ]
-            .spacing(1),
+            .spacing(14)
+            .align_y(iced::Alignment::Center),
         )
-        .style(kpi_strip_style);
+        .padding([10, 20])
+        .width(Length::Fill)
+        .style(theme::bottom_line_style);
 
-        let items = snaps
-            .iter()
-            .map(|s| {
-                let body = column![
-                    row![
-                        text(s.id.clone()).size(13).color(theme::HI),
-                        badge(s.reason.as_str(), reason_color(s.reason)),
-                    ]
-                    .spacing(8)
-                    .align_y(iced::Alignment::Center),
-                    text(format!("{} file(s) · +{} −{}", s.files, s.added, s.removed))
+        let visible = |s: &&SnapshotInfo| {
+            self.snap_agent_filter
+                .as_deref()
+                .is_none_or(|a| a == s.agent)
+                && self
+                    .snap_reason_filter
+                    .as_deref()
+                    .is_none_or(|r| r == s.reason.as_str())
+                && self.passes(&format!("{} {}", s.id, s.agent))
+        };
+        // grouped by agent (newest first inside), each group with its own prune
+        let mut items: Vec<Element<'a, Message>> = vec![];
+        for agent in &agents {
+            let mine: Vec<&SnapshotInfo> = snaps
+                .iter()
+                .filter(|s| &s.agent == agent)
+                .filter(visible)
+                .collect();
+            if mine.is_empty() {
+                continue;
+            }
+            items.push(
+                row![
+                    text(agent.clone())
+                        .font(theme::MONO_BOLD)
+                        .size(12.5)
+                        .color(theme::HI),
+                    text(format!("{} snapshots", mine.len()))
                         .size(11)
-                        .color(DIM),
-                    text(format_utc(s.created)).size(10).color(DIM)
-                ];
-                button(body)
-                    .width(Length::Fill)
-                    .padding([4, 8])
-                    .style(item_style(shown.as_deref() == Some(s.id.as_str())))
-                    .on_press(Message::Panel(PanelMsg::SnapSelect(s.id.clone())))
-                    .into()
-            })
-            .collect();
-
-        // Capturing needs an agent: the one of the shown snapshot, else the first agent that exists.
-        let capture_agent = shown
-            .as_deref()
-            .and_then(|id| snaps.iter().find(|s| s.id == id))
-            .map(|s| s.agent.clone())
-            .or_else(|| ctx.data.agents.first().map(|a| a.id.clone()));
-        let footer = capture_agent
-            .map(|agent| {
-                vec![btn_link(
-                    format!("+ Capture {agent} now"),
-                    PanelMsg::SnapCapture(agent),
-                )]
-            })
-            .unwrap_or_default();
+                        .color(DIM)
+                        .width(Length::Fill),
+                    self.arm_button(
+                        Armed::PruneSnapshots(agent.clone()),
+                        "Prune older",
+                        "Confirm: prune"
+                    ),
+                ]
+                .spacing(8)
+                .padding(pad(10.0, 4.0, 4.0, 4.0))
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
+            for s in mine {
+                let sel = shown.as_deref() == Some(s.id.as_str());
+                let rc = reason_color(s.reason);
+                let body = row![
+                    text("●").size(12).color(if sel { theme::HI } else { rc }),
+                    column![
+                        row![
+                            text(s.id.clone())
+                                .font(theme::MONO_BOLD)
+                                .size(12.5)
+                                .color(theme::HI),
+                            container(text(s.reason.as_str()).size(10).color(rc))
+                                .padding([0, 6])
+                                .style(move |_| container::Style {
+                                    border: iced::Border {
+                                        color: rc,
+                                        width: 1.0,
+                                        radius: 3.0.into()
+                                    },
+                                    ..container::Style::default()
+                                }),
+                            container(text("")).width(Length::Fill),
+                            text(
+                                format_utc(s.created)
+                                    .chars()
+                                    .skip(11)
+                                    .take(5)
+                                    .collect::<String>()
+                            )
+                            .size(11)
+                            .color(DIM),
+                        ]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
+                        row![
+                            text(format!("{} files", s.files)).size(11).color(DIM),
+                            text(format!("+{}", s.added)).size(11).color(OK),
+                            text(format!("-{}", s.removed)).size(11).color(BAD),
+                        ]
+                        .spacing(8),
+                    ]
+                    .spacing(3)
+                    .width(Length::Fill),
+                ]
+                .spacing(10)
+                .align_y(iced::Alignment::Center);
+                items.push(
+                    button(body)
+                        .width(Length::Fill)
+                        .padding([8, 10])
+                        .style(item_style(sel))
+                        .on_press(Message::Panel(PanelMsg::SnapSelect(s.id.clone())))
+                        .into(),
+                );
+            }
+        }
+        if items.is_empty() && !snaps.is_empty() {
+            items.push(text("No snapshot matches.").size(12).color(DIM).into());
+        }
 
         let detail = match shown.as_deref().and_then(|id| snaps.iter().find(|s| s.id == id)) {
             Some(snap) => self.snapshot_detail(snap),
@@ -171,43 +288,62 @@ impl Panel {
             .into(),
         };
         column![
-            summary,
-            row![self.list(items, footer), self.detail(detail)].height(Length::Fill),
+            filters,
+            row![self.list(items, vec![]), self.detail(detail)].height(Length::Fill),
         ]
-        .spacing(8)
         .into()
     }
 
     fn snapshot_detail<'a>(&'a self, snap: &'a SnapshotInfo) -> Element<'a, Message> {
         let mut page = column![
             row![
-                text(snap.id.clone()).size(18).color(theme::HI),
+                text(snap.id.clone()).font(theme::MONO_BOLD).size(20).color(theme::HI),
                 badge(snap.reason.as_str(), reason_color(snap.reason)),
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center),
             text(format!(
-                "{} · commit {} · worktree {}",
+                "taken {}   worktree {}   previous {}",
                 format_utc(snap.created),
-                snap.commit.chars().take(8).collect::<String>(),
-                snap.worktree
+                snap.worktree,
+                snap.prev.clone().unwrap_or_else(|| "none".into())
             ))
-            .size(11)
+            .size(11.5)
+            .color(DIM),
+            row![
+                btn_primary("Compare with the worktree now", PanelMsg::SnapCompare(snap.id.clone())),
+                self.arm_button(
+                    Armed::RestoreSnapshot(snap.id.clone()),
+                    "Restore worktree",
+                    "Confirm: restore the whole worktree",
+                ),
+                self.arm_button(
+                    Armed::DeleteSnapshot(snap.id.clone()),
+                    "Delete",
+                    "Confirm: delete this snapshot",
+                ),
+            ]
+            .spacing(8),
+            text(
+                "Restore puts the whole worktree back as this snapshot had it. A pre-restore snapshot of what is \
+                 there now is taken first, and files this snapshot does not have are kept.",
+            )
+            .size(11.5)
             .color(DIM),
             text(match &snap.prev {
                 Some(prev) => format!(
-                    "Changes since {prev}: {} file(s), +{} −{}",
+                    "Changes since {prev}   {} files +{} -{}",
                     snap.files, snap.added, snap.removed
                 ),
                 None => format!(
-                    "First snapshot of this agent: {} file(s), +{} −{}",
+                    "First snapshot of this agent   {} files +{} -{}",
                     snap.files, snap.added, snap.removed
                 ),
             })
-            .size(12)
-            .color(FG),
+            .size(12.5)
+            .color(theme::HI),
         ]
-        .spacing(6);
+        .spacing(10);
 
         match self.snap_detail.as_ref().filter(|(id, _)| *id == snap.id) {
             None => page = page.push(text("Loading the changed files…").size(12).color(DIM)),
@@ -260,10 +396,6 @@ impl Panel {
                 .color(WARN),
             );
         }
-        page = page.push(btn_link(
-            "Compare with the worktree now".to_owned(),
-            PanelMsg::SnapCompare(snap.id.clone()),
-        ));
         match self.snap_compare.as_ref().filter(|(id, _)| *id == snap.id) {
             None => {}
             Some((_, Err(e))) => {
@@ -313,35 +445,6 @@ impl Panel {
                 }
             }
         }
-        page.push(
-            text(
-                "Restore puts the whole worktree back as this snapshot had it. A snapshot of what is there now \
-                 is taken first, and files this snapshot does not have are kept.",
-            )
-            .size(11)
-            .color(DIM),
-        )
-        .push(
-            row![
-                self.arm_button(
-                    Armed::RestoreSnapshot(snap.id.clone()),
-                    "Restore worktree",
-                    "Confirm: restore the whole worktree",
-                ),
-                self.arm_button(
-                    Armed::DeleteSnapshot(snap.id.clone()),
-                    "Delete snapshot",
-                    "Confirm: delete this snapshot",
-                ),
-                self.arm_button(
-                    Armed::PruneSnapshots(snap.agent.clone()),
-                    "Prune older ones",
-                    "Confirm: delete this agent's oldest snapshots",
-                ),
-            ]
-            .spacing(8),
-        )
-        .spacing(10)
-        .into()
+        page.into()
     }
 }

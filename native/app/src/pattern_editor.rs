@@ -1,7 +1,7 @@
 //! The pattern editor: the graph with a toolbar and an inspector. The rules (what connects to what, renaming,
 //! saving) live in `shepherd_app_core::pattern_edit`; this file only holds the selection and draws.
 
-use crate::theme::{primary_button_style, surface_style, ACCENT, DIM};
+use crate::theme::{primary_button_style, surface_style, DIM};
 use crate::Message;
 use iced::widget::{
     button, canvas::Canvas, checkbox, column, container, row, scrollable, text, text_input,
@@ -296,7 +296,12 @@ impl PatternEditor {
         .into()
     }
 
-    pub fn view<'a>(&'a self, frame: u32) -> Element<'a, Message> {
+    /// A blank pattern just created: it has no file yet, so there is something to save.
+    pub fn mark_new(&mut self) {
+        self.editor.dirty = true;
+    }
+
+    pub fn view<'a>(&'a self, frame: u32, delete_armed: bool) -> Element<'a, Message> {
         let edit = |m: EditMsg| Message::Panel(crate::panel::PanelMsg::EditPattern(m));
         let tool = |label: &'static str, msg: EditMsg, on: bool| {
             button(container(text(label).size(13)).center_y(Length::Fill))
@@ -319,7 +324,6 @@ impl PatternEditor {
                 EditMsg::DeleteSelected,
                 self.delete_armed,
             ),
-            tool("Duplicate", EditMsg::Duplicate, false)
         ]
         .spacing(6);
         toolbar = toolbar
@@ -330,7 +334,7 @@ impl PatternEditor {
                     .color(DIM),
             )
             .push(tool("+", EditMsg::ZoomIn, false))
-            .push(tool("Reset", EditMsg::ResetZoom, false));
+            .push(tool("Fit", EditMsg::ResetZoom, false));
         let state = if read_only {
             "built-in: read-only, duplicate it to change it"
         } else if self.editor.dirty {
@@ -338,42 +342,96 @@ impl PatternEditor {
         } else {
             "saved"
         };
-        let valid: Element<'a, Message> = if self.problems.is_empty() {
-            text("✓ valid").size(12).color(crate::theme::OK).into()
-        } else {
-            text("").into()
+        let dirty = self.editor.dirty;
+        let name = self.editor.pattern.name.clone();
+        let can_delete = !read_only && self.path.is_some();
+        let hbtn = |label: &'static str, msg: Message, style: u8, on: bool| {
+            let b = button(container(text(label).size(13)).center_y(Length::Fill))
+                .padding([0, 12])
+                .height(34);
+            let b = match style {
+                0 => b.style(primary_button_style()),
+                1 => b.style(crate::theme::destructive_button_style()),
+                2 => b.style(crate::theme::danger_button_style()),
+                _ => b.style(crate::theme::outline_button_style(false)),
+            };
+            if on {
+                b.on_press(msg)
+            } else {
+                b
+            }
         };
-        let mut col = column![
-            row![
-                text(format!("PATTERN {}", self.editor.pattern.name))
-                    .size(18)
-                    .color(crate::theme::HI),
-                valid,
-                container(text("")).width(Length::Fill),
-                button(container(text("▶ Run this pattern").size(13)).center_y(Length::Fill))
-                    .padding([0, 12])
-                    .height(34)
-                    .style(primary_button_style())
-                    .on_press(Message::Panel(crate::panel::PanelMsg::PickAndLaunch(
-                        self.editor.pattern.name.clone()
-                    ))),
+        let mut actions = row![hbtn("Duplicate", edit(EditMsg::Duplicate), 3, true)]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
+        if !read_only {
+            actions = actions.push(hbtn("Save", edit(EditMsg::Save), 3, dirty));
+        }
+        actions = actions.push(hbtn(
+            "▶ Run this pattern",
+            Message::Panel(crate::panel::PanelMsg::PickAndLaunch(name.clone())),
+            0,
+            true,
+        ));
+        if can_delete {
+            actions = actions.push(hbtn(
+                if delete_armed {
+                    "Confirm: delete pattern"
+                } else {
+                    "Delete"
+                },
+                Message::Panel(if delete_armed {
+                    crate::panel::PanelMsg::Confirm
+                } else {
+                    crate::panel::PanelMsg::Arm(crate::panel::Armed::DeletePattern(name.clone()))
+                }),
+                if delete_armed { 2 } else { 1 },
+                true,
+            ));
+        }
+        let valid_badge: Element<'a, Message> = if self.problems.iter().any(|(e, _, _)| *e) {
+            crate::panel::badge("invalid", crate::theme::BAD)
+        } else {
+            crate::panel::badge("valid", crate::theme::OK)
+        };
+        let mut col = column![row![
+            column![
+                row![
+                    text(name.clone())
+                        .font(crate::theme::MONO_BOLD)
+                        .size(20)
+                        .color(crate::theme::HI),
+                    valid_badge,
+                ]
+                .spacing(10)
+                .align_y(iced::Alignment::Center),
+                text(format!("{:?}, {state}", self.editor.pattern.kind))
+                    .size(12)
+                    .color(DIM),
             ]
-            .spacing(10)
-            .align_y(iced::Alignment::Center),
-            text(format!(
-                "{:?} · {:?} · {state}",
-                self.editor.pattern.kind, self.editor.source
-            ))
-            .size(12)
-            .color(DIM),
-            toolbar.align_y(iced::Alignment::Center),
+            .spacing(4)
+            .width(Length::Fill),
+            actions.wrap(),
         ]
+        .spacing(12)
+        .align_y(iced::Alignment::Center),]
         .spacing(10);
         if let Some(path) = &self.path {
             col = col.push(text(path.clone()).size(11).color(DIM));
         }
+        let mut checks = row![].spacing(14).align_y(iced::Alignment::Center);
+        if self.problems.is_empty() {
+            checks = checks
+                .push(text("Valid").size(12).color(crate::theme::OK))
+                .push(
+                    text("■ every topic has a publisher and a reader")
+                        .size(11)
+                        .color(DIM),
+                )
+                .push(text("■ every agent is connected").size(11).color(DIM));
+        }
         for (is_error, place, message) in &self.problems {
-            col = col.push(
+            checks = checks.push(
                 text(format!(
                     "{} {place}: {message}",
                     if *is_error { "✖" } else { "▲" }
@@ -404,15 +462,21 @@ impl PatternEditor {
         )
         .height(Length::Fixed(92.0))
         .style(surface_style);
-        let mut inspector = column![
-            crate::theme::label("INSPECTOR"),
-            text("MAP").size(11).color(DIM),
-            mini_map,
-        ]
-        .spacing(6);
+        let mut inspector = column![].spacing(6);
         match &self.selected {
             Some(Sel::Agent(id)) => {
-                inspector = inspector.push(text(format!("Agent {id}")).size(12).color(ACCENT));
+                inspector = inspector
+                    .push(
+                        text(format!("Agent {id}"))
+                            .font(crate::theme::MONO_BOLD)
+                            .size(14)
+                            .color(crate::theme::HI),
+                    )
+                    .push(
+                        text("Changes are kept until you save the pattern.")
+                            .size(11)
+                            .color(DIM),
+                    );
                 // what the node reads and writes, from its arrows (edit them with Connect)
                 let key = format!("agent:{id}");
                 let index = self.graph.nodes.iter().position(|n| n.key == key);
@@ -458,7 +522,18 @@ impl PatternEditor {
                 );
             }
             Some(Sel::Topic(name)) => {
-                inspector = inspector.push(text(format!("Topic #{name}")).size(12).color(ACCENT));
+                inspector = inspector
+                    .push(
+                        text(format!("Topic #{name}"))
+                            .font(crate::theme::MONO_BOLD)
+                            .size(14)
+                            .color(crate::theme::HI),
+                    )
+                    .push(
+                        text("Changes are kept until you save the pattern.")
+                            .size(11)
+                            .color(DIM),
+                    );
                 inspector = inspector
                     .push(self.labelled("name", Field::TopicName))
                     .push(self.labelled("partitions", Field::Partitions));
@@ -468,6 +543,8 @@ impl PatternEditor {
         inspector = inspector
             .push(self.labelled("pattern", Field::PatternName))
             .push(self.labelled("description", Field::Description))
+            .push(text("MAP").size(11).color(DIM))
+            .push(mini_map)
             .push(
                 text("Click a node to edit it. Drag nodes to arrange them.")
                     .size(11)
@@ -497,28 +574,27 @@ impl PatternEditor {
         .height(Length::Fill)
         .padding(8)
         .style(crate::theme::graph_style);
-        let save = button(
-            container(text("Save").size(13))
-                .center_x(Length::Fill)
-                .center_y(Length::Fill),
-        )
-        .width(Length::Fill)
-        .height(34)
-        .style(primary_button_style())
-        .on_press(edit(EditMsg::Save));
         let inspector = container(
-            column![
-                scrollable(container(inspector).padding(crate::theme::pad(0.0, 14.0, 0.0, 0.0)))
-                    .height(Length::Fill),
-                save
-            ]
-            .spacing(10),
+            scrollable(container(inspector).padding(crate::theme::pad(0.0, 14.0, 0.0, 0.0)))
+                .height(Length::Fill),
         )
         .width(290)
         .height(Length::Fill)
         .padding(12)
         .style(crate::theme::card_style);
-        col = col.push(row![canvas, inspector].spacing(14).height(Length::Fill));
+        let toolbar = container(toolbar.align_y(iced::Alignment::Center)).padding([4, 0]);
+        col = col.push(
+            row![
+                column![toolbar, canvas]
+                    .spacing(8)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+                inspector
+            ]
+            .spacing(14)
+            .height(Length::Fill),
+        );
+        col = col.push(container(checks).padding([6, 0]));
         col.height(Length::Fill).into()
     }
 }

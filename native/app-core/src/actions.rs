@@ -716,5 +716,19 @@ pub fn pane_tail(api: &Path, pane: &str, lines: u32) -> Result<String, String> {
         "pane.read",
         serde_json::json!({ "pane_id": pane, "source": "recent", "lines": lines }),
     )?;
-    Ok(v["read"]["text"].as_str().unwrap_or("").trim_end().to_owned())
+    Ok(v["read"]["text"]
+        .as_str()
+        .unwrap_or("")
+        .trim_end()
+        .to_owned())
+}
+
+/// Deletes a pattern file (project first, else global); the server refuses a built-in one.
+pub fn delete_pattern(api: &Path, name: &str, root: &str) -> Result<String, String> {
+    let v = call(
+        api,
+        "shepherd.call",
+        json!({ "op": "pattern_delete", "args": { "root": root, "name": name } }),
+    )?;
+    Ok(v["deleted_source"].as_str().unwrap_or("project").to_owned())
 }
