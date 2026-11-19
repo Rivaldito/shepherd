@@ -53,7 +53,6 @@ on a server without a screen, install only the first one: `curl -fsSL .../instal
 **run it**
 
 ```bash
-mkdir -p ~/.config/shepherd && printf '[shepherd]\nenabled = true\n' > ~/.config/shepherd/config.toml   # once
 cd ~/your-repo && shepherd      # ctrl+b a opens the shepherd section, ctrl+b q detaches, `shepherd` reattaches
 shepherd-native                 # in a second terminal: the desktop app, on the same running server
 ```
@@ -232,11 +231,9 @@ cd shepherd
 export PATH="$PWD/target/release:$PATH"        # so you can just type `shepherd`
 ```
 
-**3. turn the orchestrator on.**
+**3. check the configuration.** the orchestrator is on by default; there is nothing to enable. (to turn it off, put `[shepherd]` and `enabled = false` in `~/.config/shepherd/config.toml`.)
 
 ```bash
-mkdir -p ~/.config/shepherd
-printf '[shepherd]\nenabled = true\n' > ~/.config/shepherd/config.toml
 shepherd config check                          # prints: config: ok
 ```
 

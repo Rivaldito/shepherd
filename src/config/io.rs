@@ -148,43 +148,45 @@ pub fn herdr_fallback_config_path() -> Option<PathBuf> {
 }
 
 impl Config {
+    /// The configuration of this machine. The Shepherd layer is on unless the file says
+    /// `shepherd.enabled = false`: this is Shepherd, and with the layer off the terminal UI shows none of its
+    /// options and the desktop app can neither create a task nor list a pattern.
     pub fn load() -> LoadedConfig {
+        let (loaded, content) = Self::load_with_source();
+        shepherd_on_unless_set(loaded, content.as_deref())
+    }
+
+    /// What is on disk, and the text it was read from (`None` when there was no usable file).
+    fn load_with_source() -> (LoadedConfig, Option<String>) {
+        let defaults = |diagnostics: Vec<String>| LoadedConfig {
+            config: Self::default(),
+            diagnostics,
+            invalid_sections: Vec::new(),
+        };
         let path = config_path();
         let content = match read_optional_config(&path) {
             Ok(Some(content)) => content,
             Ok(None) => {
-                if let Some(fallback_path) = herdr_fallback_config_path() {
-                    match read_optional_config(&fallback_path) {
-                        Ok(Some(content)) => {
-                            warn!(
-                                "shepherd config not found at {:?}; falling back to herdr config at {:?}",
-                                path, fallback_path
-                            );
-                            content
-                        }
-                        _ => {
-                            return LoadedConfig {
-                                config: Self::default(),
-                                diagnostics: Vec::new(),
-                                invalid_sections: Vec::new(),
-                            };
-                        }
+                let Some(fallback_path) = herdr_fallback_config_path() else {
+                    return (defaults(Vec::new()), None);
+                };
+                match read_optional_config(&fallback_path) {
+                    Ok(Some(content)) => {
+                        warn!(
+                            "shepherd config not found at {:?}; falling back to herdr config at {:?}",
+                            path, fallback_path
+                        );
+                        content
                     }
-                } else {
-                    return LoadedConfig {
-                        config: Self::default(),
-                        diagnostics: Vec::new(),
-                        invalid_sections: Vec::new(),
-                    };
+                    _ => return (defaults(Vec::new()), None),
                 }
             }
             Err(err) => {
                 warn!(err = %err, "config read error, using defaults");
-                return LoadedConfig {
-                    config: Self::default(),
-                    diagnostics: vec![format!("config read error: {err}; using defaults")],
-                    invalid_sections: Vec::new(),
-                };
+                return (
+                    defaults(vec![format!("config read error: {err}; using defaults")]),
+                    None,
+                );
             }
         };
 
@@ -202,21 +204,73 @@ impl Config {
                     None,
                 ));
                 diagnostics.extend(config.collect_diagnostics());
-                LoadedConfig {
-                    config,
-                    diagnostics,
-                    invalid_sections: Vec::new(),
-                }
+                (
+                    LoadedConfig {
+                        config,
+                        diagnostics,
+                        invalid_sections: Vec::new(),
+                    },
+                    Some(content),
+                )
             }
             Err(err) => {
                 warn!(err = %err, "config parse error, using defaults");
-                LoadedConfig {
-                    config: Self::default(),
-                    diagnostics: vec![format!("config parse error: {err}; using defaults")],
-                    invalid_sections: Vec::new(),
-                }
+                (
+                    defaults(vec![format!("config parse error: {err}; using defaults")]),
+                    None,
+                )
             }
         }
+    }
+}
+
+/// Turns the Shepherd layer on for a configuration that does not say anything about it. An explicit
+/// `shepherd.enabled = false` is respected.
+fn shepherd_on_unless_set(mut loaded: LoadedConfig, content: Option<&str>) -> LoadedConfig {
+    let said = content
+        .and_then(|c| c.parse::<toml::Table>().ok())
+        .and_then(|t| t.get("shepherd")?.get("enabled").cloned())
+        .is_some();
+    if !said {
+        loaded.config.shepherd.enabled = true;
+    }
+    loaded
+}
+
+#[cfg(test)]
+mod shepherd_default_tests {
+    use super::*;
+
+    fn loaded_from(content: Option<&str>) -> bool {
+        let config = match content {
+            Some(c) => toml::from_str::<Config>(c).unwrap(),
+            None => Config::default(),
+        };
+        shepherd_on_unless_set(
+            LoadedConfig {
+                config,
+                diagnostics: Vec::new(),
+                invalid_sections: Vec::new(),
+            },
+            content,
+        )
+        .config
+        .shepherd
+        .enabled
+    }
+
+    #[test]
+    fn the_shepherd_layer_is_on_unless_the_config_turns_it_off() {
+        // no file, an empty file, a file about something else, a [shepherd] section without `enabled`
+        assert!(loaded_from(None));
+        assert!(loaded_from(Some("")));
+        assert!(loaded_from(Some("[ui]\nstatus_indicators = \"dots\"\n")));
+        assert!(loaded_from(Some(
+            "[shepherd]\n[shepherd.limits]\nmax_concurrent = 3\n"
+        )));
+        // said so: respected both ways
+        assert!(loaded_from(Some("[shepherd]\nenabled = true\n")));
+        assert!(!loaded_from(Some("[shepherd]\nenabled = false\n")));
     }
 }
 
