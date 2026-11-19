@@ -191,6 +191,10 @@ enum Message {
     ToggleMotion,
     /// The list of notices opened from the status bar.
     ToggleHistory,
+    /// Opens or closes a workspace in the sidebar.
+    ToggleWorkspace(String),
+    /// From the Shepherd panel: back to the terminal, on this workspace.
+    GoToWorkspace(String),
     ClearHistory,
     /// A pane of the terminal: open its agent in the Shepherd panel.
     OpenInShepherd(String),
@@ -320,6 +324,8 @@ struct App {
     /// The prism stands still (reduced motion), by choice in the status bar or `SHEPHERD_REDUCE_MOTION`.
     still: bool,
     history_open: bool,
+    /// Which workspaces are open in the sidebar (the focused one is, until the user says otherwise).
+    expanded: std::collections::HashMap<String, bool>,
     /// Counts every tick, even while the prism stands still: timers use it, not `frame`.
     clock: u32,
 }
@@ -363,6 +369,7 @@ impl App {
             still: std::env::var_os("SHEPHERD_REDUCE_MOTION").is_some(),
             clock: 0,
             history_open: false,
+            expanded: Default::default(),
             frame: 0,
             film: std::env::var_os("SHEPHERD_NATIVE_FILM").map(|dir| Film {
                 dir: PathBuf::from(dir),
@@ -907,6 +914,21 @@ impl App {
             }
             Message::ToggleMotion => self.still = !self.still,
             Message::ToggleHistory => self.history_open = !self.history_open,
+            Message::ToggleWorkspace(id) => {
+                let now = self.expanded.get(&id).copied().unwrap_or_else(|| {
+                    self.snapshot
+                        .workspaces
+                        .iter()
+                        .any(|w| w.workspace_id == id && w.focused)
+                });
+                self.expanded.insert(id, !now);
+            }
+            Message::GoToWorkspace(id) => {
+                return Task::batch([
+                    Task::done(Message::SetMode(Mode::Terminal)),
+                    Task::done(Message::Act(Action::FocusSpace(id))),
+                ]);
+            }
             Message::ClearHistory => {
                 self.panel.clear_history();
                 self.history_open = false;
@@ -1914,51 +1936,98 @@ impl App {
         }
 
         // Rail (`.rail`): pixel-font section labels, square bullets, agents with a state square.
-        let bullet = |selected: bool| {
-            container(text(""))
-                .width(6)
-                .height(6)
-                .style(move |_| container::Style {
-                    background: Some(Background::Color(if selected {
-                        theme::ACCENT
-                    } else {
-                        theme::LINE2
-                    })),
-                    border: Border {
-                        radius: 1.0.into(),
-                        ..Border::default()
-                    },
-                    ..container::Style::default()
-                })
+        // Workspaces (the terminal containers): a row per workspace with the state of its most urgent agent;
+        // opening one expands it in place with its tabs, its agents and New terminal.
+        let in_shepherd = self.mode == Mode::Shepherd;
+        let agent_state = |agent: &shepherd_app_core::snapshot::Agent| {
+            // Shepherd's own record of an agent says more than the terminal's guess, so it wins
+            self.data
+                .agents
+                .iter()
+                .find(|a| a.id == agent.display_name())
+                .map_or(agent.status(), |a| panel::agent_status(&a.state))
         };
-        let heading = |label: &'static str| {
-            container(theme::label(label))
-                .padding(pad(10.0, 8.0, 4.0, 8.0))
-                .width(Length::Fill)
-        };
-
-        let mut spaces = column![heading("WORKSPACES")].spacing(6);
+        let mut spaces = column![row![
+            container(theme::label("WORKSPACES")).width(Length::Fill),
+            button(text("+").size(14).color(theme::ACCENT))
+                .padding([0, 6])
+                .style(mini_button_style())
+                .on_press(Message::Act(Action::NewSpace)),
+        ]
+        .align_y(iced::Alignment::Center)
+        .padding(pad(10.0, 4.0, 4.0, 8.0))]
+        .spacing(6);
         for workspace in &self.snapshot.workspaces {
             let label = workspace.label.clone();
             let workspace_id = workspace.workspace_id.clone();
+            let mine: Vec<&shepherd_app_core::snapshot::Agent> = self
+                .snapshot
+                .agents
+                .iter()
+                .filter(|a| a.workspace_id == workspace.workspace_id)
+                .collect();
+            let blocked = mine
+                .iter()
+                .filter(|a| agent_state(a) == shepherd_app_core::snapshot::Status::Blocked)
+                .count();
+            let working = mine
+                .iter()
+                .filter(|a| agent_state(a) == shepherd_app_core::snapshot::Status::Working)
+                .count();
+            // the most urgent first: needs you, working, idle
+            let rollup = if blocked > 0 {
+                shepherd_app_core::snapshot::Status::Blocked
+            } else if working > 0 {
+                shepherd_app_core::snapshot::Status::Working
+            } else {
+                shepherd_app_core::snapshot::Status::Idle
+            };
+            let rollup_color = if mine.is_empty() {
+                theme::LINE2
+            } else {
+                status_color(rollup)
+            };
+            let open = self
+                .expanded
+                .get(&workspace.workspace_id)
+                .copied()
+                .unwrap_or(workspace.focused);
+            let note: Element<'_, Message> = if blocked > 0 {
+                text(format!("{blocked} needs you"))
+                    .size(11)
+                    .color(theme::WARN)
+                    .into()
+            } else if mine.is_empty() {
+                text("empty").size(11).color(DIM).into()
+            } else {
+                text(format!(
+                    "{} agent{}",
+                    mine.len(),
+                    if mine.len() == 1 { "" } else { "s" }
+                ))
+                .size(11)
+                .color(DIM)
+                .into()
+            };
+            let go = if in_shepherd {
+                // from the Shepherd panel the workspace is a way back to the terminal
+                Message::GoToWorkspace(workspace_id.clone())
+            } else {
+                Message::Act(Action::FocusSpace(workspace_id.clone()))
+            };
             let ws_btn_inner = button(
                 container(
                     row![
-                        bullet(workspace.focused),
+                        button(text(if open { "⌄" } else { "›" }).size(13))
+                            .padding([0, 4])
+                            .style(mini_button_style())
+                            .on_press(Message::ToggleWorkspace(workspace_id.clone())),
+                        text("■").size(9).color(rollup_color),
                         text(label.clone()).size(13).width(Length::Fill),
-                        text(
-                            self.snapshot
-                                .agents
-                                .iter()
-                                .filter(|a| a.workspace_id == workspace.workspace_id)
-                                .count()
-                                .to_string()
-                        )
-                        .size(11)
-                        .color(DIM),
+                        note,
                     ]
                     .align_y(iced::Alignment::Center)
-                    .spacing(10)
+                    .spacing(8)
                     .width(Length::Fill),
                 )
                 .center_y(Length::Fill),
@@ -1967,53 +2036,69 @@ impl App {
             .height(36)
             .padding([0, 8])
             .style(item_style(workspace.focused))
-            .on_press(Message::Act(Action::FocusSpace(workspace_id.clone())));
-
-            // Wrap with mouse_area for right-click context menu
+            .on_press(go);
             let ws_btn = mouse_area(ws_btn_inner).on_right_press(Message::ContextMenuOpened(
                 ContextMenuTarget::Workspace {
-                    workspace_id,
+                    workspace_id: workspace_id.clone(),
                     label,
                 },
             ));
-
-            let close_btn = button(text("✕").size(9))
-                .padding([2, 4])
-                .width(18.0)
-                .height(18.0)
-                .style(mini_button_style())
-                .on_press(self.close_workspace_message(workspace));
-
+            // a workspace with agents cannot be closed until they are
+            let close_btn = if mine.is_empty() {
+                button(text("✕").size(9))
+                    .padding([2, 4])
+                    .width(18.0)
+                    .height(18.0)
+                    .style(mini_button_style())
+                    .on_press(self.close_workspace_message(workspace))
+            } else {
+                button(text("✕").size(9).color(theme::LINE2))
+                    .padding([2, 4])
+                    .width(18.0)
+                    .height(18.0)
+                    .style(mini_button_style())
+            };
             spaces = spaces.push(
                 row![ws_btn, close_btn]
                     .align_y(iced::Alignment::Center)
                     .spacing(2),
             );
-        }
-
-        spaces = spaces.push(
-            button(text("+ New workspace").size(13).color(theme::ACCENT))
-                .width(Length::Fill)
-                .padding([6, 8])
-                .style(mini_button_style())
-                .on_press(Message::Act(Action::NewSpace)),
-        );
-
-        let mut agents =
-            column![container(heading("AGENTS")).padding(pad(10.0, 0.0, 0.0, 0.0))].spacing(2);
-        if self.snapshot.agents.is_empty() {
-            agents = agents
-                .push(container(text("No agents running").size(11).color(DIM)).padding([6, 8]));
-        }
-        for (terminal_status, group) in self.snapshot.agents_by_state() {
-            for agent in group {
-                // Shepherd's own record of the agent says more than the terminal's guess, so it wins
-                let status = self
-                    .data
-                    .agents
+            if !open {
+                continue;
+            }
+            // its tabs, with how many panes each holds
+            let mut tabs = row![text("tabs").size(11).color(DIM)]
+                .spacing(6)
+                .align_y(iced::Alignment::Center);
+            for tab in self.snapshot.tabs_of(&workspace.workspace_id) {
+                let panes = self
+                    .snapshot
+                    .panes
                     .iter()
-                    .find(|a| a.id == agent.display_name())
-                    .map_or(terminal_status, |a| panel::agent_status(&a.state));
+                    .filter(|p| p.tab_id == tab.tab_id)
+                    .count();
+                let on = tab.focused;
+                tabs = tabs.push(
+                    button(
+                        row![
+                            text(if tab.label.chars().count() > 12 {
+                                format!("{}…", tab.label.chars().take(11).collect::<String>())
+                            } else {
+                                tab.label.clone()
+                            })
+                            .size(11.5),
+                            text(panes.to_string()).size(10).color(DIM)
+                        ]
+                        .spacing(5),
+                    )
+                    .padding([2, 7])
+                    .style(theme::chip_style(on))
+                    .on_press(Message::Act(Action::FocusTab(tab.tab_id.clone()))),
+                );
+            }
+            let mut inner = column![tabs.wrap()].spacing(6);
+            for agent in &mine {
+                let status = agent_state(agent);
                 let color = status_color(status);
                 let square = container(
                     text(theme::status_glyph(status))
@@ -2033,31 +2118,61 @@ impl App {
                     },
                     ..container::Style::default()
                 });
-                let agent_body = row![
-                    square,
-                    text(agent.display_name()).size(12).width(Length::Fill),
-                    text(if status == shepherd_app_core::snapshot::Status::Blocked {
-                        "needs you"
-                    } else {
-                        status_name(status)
-                    })
-                    .size(11)
-                    .color(color),
-                ]
-                .align_y(iced::Alignment::Center)
-                .spacing(10)
-                .width(Length::Fill);
-
-                agents = agents.push(
-                    button(container(agent_body).center_y(Length::Fill))
-                        .width(Length::Fill)
-                        .height(34)
-                        .padding([0, 8])
-                        .style(item_style(agent.focused))
-                        .on_press(Message::Act(Action::FocusAgent(agent.pane_id.clone()))),
+                let target = if in_shepherd {
+                    Message::GoToPane(agent.pane_id.clone())
+                } else {
+                    Message::Act(Action::FocusPane(agent.pane_id.clone()))
+                };
+                inner = inner.push(
+                    button(
+                        row![
+                            square,
+                            text(agent.display_name()).size(12).width(Length::Fill),
+                            text(if status == shepherd_app_core::snapshot::Status::Blocked {
+                                "needs you"
+                            } else {
+                                status_name(status)
+                            })
+                            .size(11)
+                            .color(color),
+                        ]
+                        .align_y(iced::Alignment::Center)
+                        .spacing(10)
+                        .width(Length::Fill),
+                    )
+                    .width(Length::Fill)
+                    .height(30)
+                    .padding([0, 8])
+                    .style(item_style(agent.focused))
+                    .on_press(target),
                 );
             }
+            let plain = self
+                .snapshot
+                .panes
+                .iter()
+                .filter(|p| p.workspace_id == workspace.workspace_id)
+                .count()
+                .saturating_sub(mine.len());
+            if plain > 0 {
+                inner = inner.push(
+                    text(format!(
+                        "+ {plain} plain shell{}",
+                        if plain == 1 { "" } else { "s" }
+                    ))
+                    .size(11)
+                    .color(DIM),
+                );
+            }
+            inner = inner.push(
+                button(text(">_ New terminal").size(11.5).color(theme::ACCENT))
+                    .padding([2, 8])
+                    .style(mini_button_style())
+                    .on_press(Message::Act(Action::NewTab(workspace.workspace_id.clone()))),
+            );
+            spaces = spaces.push(container(inner).padding(pad(0.0, 0.0, 6.0, 14.0)));
         }
+        let agents: Element<'_, Message> = container(text("")).height(0).into();
 
         // in the Shepherd mode the sidebar also holds the navigation between the views
         let nav: Element<'_, Message> = if self.mode == Mode::Shepherd {

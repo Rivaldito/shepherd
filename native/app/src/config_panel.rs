@@ -73,6 +73,9 @@ pub enum CfgMsg {
     SelectTopic(String),
     /// Events: show only the messages of this partition.
     MsgPartition(Option<u32>),
+    /// The box at the foot of Events: what is typed, and sending it to the open topic.
+    ComposerText(String),
+    ComposerSend,
     SelectVendor(String),
     SelectRole(String),
     VendorField(VField, String),
@@ -186,6 +189,7 @@ pub struct ConfigPanel {
     topics: Vec<TopicRow>,
     topic: Option<String>,
     msg_partition: Option<u32>,
+    composer: String,
     feed: Vec<BusMessage>,
     models: Models,
     editing: Option<Editing>,
@@ -784,6 +788,27 @@ impl ConfigPanel {
                 ]);
             }
             CfgMsg::MsgPartition(p) => self.msg_partition = p,
+            CfgMsg::ComposerText(t) => self.composer = t,
+            CfgMsg::ComposerSend => {
+                let text = self.composer.trim().to_owned();
+                let Some(topic) = self.topic.clone() else {
+                    self.notice = "error: pick a topic to write to".into();
+                    return Task::none();
+                };
+                if text.is_empty() {
+                    self.notice = "error: a message cannot be empty".into();
+                    return Task::none();
+                }
+                self.composer.clear();
+                let api = self.api.clone();
+                return Task::perform(
+                    async move {
+                        actions::topic_publish(&api, &topic, &text)
+                            .map(|_| format!("Sent to #{topic}"))
+                    },
+                    |r| cfg(CfgMsg::TopicDone(r)),
+                );
+            }
             CfgMsg::SelectTopic(name) => {
                 self.topic = Some(name.clone());
                 self.loading = true;
@@ -1791,9 +1816,31 @@ impl ConfigPanel {
         ];
         let _ = footer;
         let top = crate::ui::filter_bar("Filter topics", filter, &[], 0);
+        // the box to write to the open topic stays at the foot of the detail
+        let composer: Element<'a, Message> = match &self.topic {
+            Some(t) if self.topic_form.is_none() => container(
+                row![
+                    text_input(&format!("Message for #{t}, sent as you"), &self.composer)
+                        .on_input(|v| cfg(CfgMsg::ComposerText(v)))
+                        .on_submit(cfg(CfgMsg::ComposerSend))
+                        .style(crate::theme::input_style)
+                        .padding([9, 12])
+                        .size(12.5)
+                        .width(Length::Fill),
+                    crate::panel::btn_primary("Send", PanelMsg::Cfg(CfgMsg::ComposerSend)),
+                ]
+                .spacing(12)
+                .align_y(iced::Alignment::Center),
+            )
+            .padding([12, 24])
+            .width(Length::Fill)
+            .style(crate::theme::top_line_style)
+            .into(),
+            _ => container(text("")).height(0).into(),
+        };
         row![
             crate::panel::list_box_with(Some(top), items, vec![]),
-            detail_box(detail)
+            column![detail_box(detail), composer].width(Length::Fill)
         ]
         .height(Length::Fill)
         .into()

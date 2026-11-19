@@ -2384,39 +2384,82 @@ impl Panel {
             .collect();
         let idle: Vec<_> = d.agents.iter().filter(|a| a.state == "idle").collect();
         let needs_total = d.gates.len() + blocked.len() + attention_runs;
+        // each number is a link to the view it counts
+        let link = |cell: Element<'a, Message>, tab: Tab| -> Element<'a, Message> {
+            button(cell)
+                .width(Length::FillPortion(1))
+                .padding(0)
+                .style(|_, status| button::Style {
+                    background: msg_hot(status).then_some(Background::Color(theme::SELECTED)),
+                    text_color: FG,
+                    ..button::Style::default()
+                })
+                .on_press(Message::Panel(PanelMsg::Tab(tab)))
+                .into()
+        };
+        // the agents' states as one segment per agent
+        let agent_bar: Element<'a, Message> = {
+            let mut seg = row![].spacing(2);
+            for a in &d.agents {
+                let c = status_color(agent_status(&a.state));
+                seg = seg.push(container(text("")).width(Length::Fill).height(3).style(
+                    move |_| container::Style {
+                        background: Some(Background::Color(c)),
+                        ..container::Style::default()
+                    },
+                ));
+            }
+            container(seg).padding([0, 16]).into()
+        };
         let kpis = container(
             row![
-                kpi_cell(
-                    "ACTIVE RUN",
-                    running.to_string(),
-                    ACCENT,
-                    Some(format!("{} finished", d.runs.len() - running))
+                link(
+                    kpi_cell(
+                        "ACTIVE RUN",
+                        running.to_string(),
+                        ACCENT,
+                        Some(format!("{} finished", d.runs.len() - running))
+                    ),
+                    Tab::Runs
                 ),
-                kpi_cell(
-                    "AGENTS",
-                    d.agents.len().to_string(),
-                    theme::HI,
-                    Some(format!(
-                        "{active_agents} working, {} idle, {} blocked",
-                        idle.len(),
-                        blocked.len()
-                    ))
+                link(
+                    column![
+                        kpi_cell(
+                            "AGENTS",
+                            d.agents.len().to_string(),
+                            theme::HI,
+                            Some(format!(
+                                "{active_agents} working, {} idle, {} blocked",
+                                idle.len(),
+                                blocked.len()
+                            ))
+                        ),
+                        agent_bar
+                    ]
+                    .into(),
+                    Tab::Agents
                 ),
-                kpi_cell(
-                    "OPEN TASKS",
-                    open_tasks.to_string(),
-                    WARN,
-                    Some(if d.gates.is_empty() {
-                        "nothing waits for you".to_owned()
-                    } else {
-                        format!("{} waits for you", d.gates.len())
-                    })
+                link(
+                    kpi_cell(
+                        "OPEN TASKS",
+                        open_tasks.to_string(),
+                        WARN,
+                        Some(if d.gates.is_empty() {
+                            "nothing waits for you".to_owned()
+                        } else {
+                            format!("{} waits for you", d.gates.len())
+                        })
+                    ),
+                    Tab::Tasks
                 ),
-                kpi_cell(
-                    "PATTERNS",
-                    d.patterns.len().to_string(),
-                    theme::HI,
-                    Some("ready to run".into())
+                link(
+                    kpi_cell(
+                        "PATTERNS",
+                        d.patterns.len().to_string(),
+                        theme::HI,
+                        Some("ready to run".into())
+                    ),
+                    Tab::Patterns
                 ),
             ]
             .spacing(1),
