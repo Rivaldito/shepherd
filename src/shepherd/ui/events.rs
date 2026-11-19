@@ -941,7 +941,7 @@ fn render_topics_view(
         .add_modifier(Modifier::BOLD);
     let head_text = format!(
         "{:<6} {:<4} {:<12} {:<10} {:<6} {:<24}",
-        "OFFSET", "PART", "DE", "CLAVE", "TIPO", "CONTENIDO"
+        "OFFSET", "PART", "FROM", "KEY", "TYPE", "CONTENT"
     );
     put_str(
         buffer,
@@ -1063,14 +1063,14 @@ fn render_pattern_runs_view(
     if let Some(ref detail) = state.selected_run_detail {
         let (status_color, status_label) = match detail.state {
             PatternRunState::Running => (palette.green, "✓ RUNNING"),
-            PatternRunState::Paused => (palette.yellow, "⏸ PAUSADA"),
-            PatternRunState::Stopped => (palette.red, "⏹ DETENIDA"),
+            PatternRunState::Paused => (palette.yellow, "⏸ PAUSED"),
+            PatternRunState::Stopped => (palette.red, "⏹ STOPPED"),
             PatternRunState::Failed => (palette.red, "✗ RUN FAILED"),
             PatternRunState::Done if detail.quiesced => {
                 (palette.blue, "✓ COMPLETED (idle; wakes on a new message)")
             }
-            PatternRunState::Done => (palette.blue, "✓ COMPLETADA"),
-            PatternRunState::Degraded => (palette.yellow, "⚠ DEGRADADA"),
+            PatternRunState::Done => (palette.blue, "✓ COMPLETED"),
+            PatternRunState::Degraded => (palette.yellow, "⚠ DEGRADED"),
             PatternRunState::Stalled => (palette.yellow, "⚠ STALLED (wakes on a new message)"),
         };
 
@@ -1113,13 +1113,13 @@ fn render_pattern_runs_view(
 
         if let Some(ref err) = detail.error {
             blocks.push(DetailContentBlock::Notice {
-                text: format!("Fallo: {err}"),
+                text: format!("Failure: {err}"),
                 level: AlertLevel::Warning,
             });
         }
         if let Some(ref why) = detail.stalled_reason {
             blocks.push(DetailContentBlock::Notice {
-                text: format!("Atascada: {why}"),
+                text: format!("Stalled: {why}"),
                 level: AlertLevel::Warning,
             });
         }
@@ -1140,7 +1140,7 @@ fn render_pattern_runs_view(
             ));
         }
         blocks.push(DetailContentBlock::Heading(format!(
-            "AGENTES ({})",
+            "AGENTS ({})",
             detail.agents.len()
         )));
         blocks.push(DetailContentBlock::BulletList(ag_lines));

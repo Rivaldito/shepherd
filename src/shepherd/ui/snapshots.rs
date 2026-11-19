@@ -110,13 +110,13 @@ impl SnapshotButton {
 
     pub fn label(self) -> (&'static str, &'static str) {
         match self {
-            Self::DiffPrevious => ("Ver diff vs anterior", "d"),
-            Self::DiffCurrent => ("Ver diff vs actual", "D"),
+            Self::DiffPrevious => ("Diff vs previous", "d"),
+            Self::DiffCurrent => ("Diff vs current", "D"),
             Self::RestoreFile => ("Restore file…", "f"),
             Self::RestoreAll => ("Restore all", "R"),
             Self::Delete => ("Delete", "x"),
             Self::Prune => ("Prune…", "p"),
-            Self::Back => ("Volver", "Esc"),
+            Self::Back => ("Back", "Esc"),
         }
     }
 }

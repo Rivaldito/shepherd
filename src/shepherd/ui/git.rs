@@ -142,7 +142,7 @@ impl ShepherdGitSectionState {
             "NEW BRANCH (inline form)",
             vec![
                 FormField::new("New branch name", "e.g. feature/parser-flags"),
-                FormField::new("Starting point (base)", "ej. master"),
+                FormField::new("Starting point (base)", "e.g. master"),
             ],
         ));
         self.worktree_form = None;
@@ -511,7 +511,7 @@ pub fn render_git_section_with_agents(
             detail_area,
             form,
             "Create Worktree",
-            "Cancelar",
+            "Cancel",
             true,
             palette,
         ));
@@ -525,7 +525,7 @@ pub fn render_git_section_with_agents(
             detail_area,
             form,
             "Create Branch",
-            "Cancelar",
+            "Cancel",
             true,
             palette,
         ));
@@ -540,7 +540,7 @@ pub fn render_git_section_with_agents(
             detail_area,
             &msg,
             "Publish Branch",
-            "Cancelar",
+            "Cancel",
             false,
             palette,
         ));
@@ -555,7 +555,7 @@ pub fn render_git_section_with_agents(
             detail_area,
             &msg,
             "Delete Worktree",
-            "Cancelar",
+            "Cancel",
             true,
             palette,
         ));
@@ -621,7 +621,7 @@ pub fn render_git_section_with_agents(
         if row.pr_display != "—" {
             blocks.push(DetailContentBlock::Notice {
                 text: format!(
-                    "PULL REQUEST ASOCIADO:\n{} ({})",
+                    "LINKED PULL REQUEST:\n{} ({})",
                     row.pr_display,
                     row.pr_url.as_deref().unwrap_or("no url")
                 ),
@@ -632,7 +632,7 @@ pub fn render_git_section_with_agents(
         if let Some(ref agent_id) = row.agent_id {
             blocks.push(DetailContentBlock::Notice {
                 text: format!(
-                    "AGENTE VINCULADO:\nAgente activo '{agent_id}' asignado a este worktree."
+                    "LINKED AGENT:\nActive agent '{agent_id}' is assigned to this worktree."
                 ),
                 level: AlertLevel::Info,
             });

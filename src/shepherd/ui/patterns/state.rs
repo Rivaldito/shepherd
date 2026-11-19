@@ -88,7 +88,7 @@ impl Default for NewFromTemplateState {
     fn default() -> Self {
         Self {
             kind_index: 0,
-            name: "mi-orquestador".into(),
+            name: "my-orchestrator".into(),
             is_global: false,
             active_field: 1,
         }
@@ -301,7 +301,7 @@ impl ShepherdPatternsSectionState {
         if let Some(sum) = self.selected_summary() {
             self.sub_action = Some(PatternSubAction::Duplicate(DuplicatePatternState {
                 source_name: sum.name.clone(),
-                name: format!("{}-copia", sum.name),
+                name: format!("{}-copy", sum.name),
                 is_global: false,
                 active_field: 0,
             }));
@@ -395,10 +395,10 @@ impl ShepherdPatternsSectionState {
                             0 => {
                                 state.kind_index = (state.kind_index + 1) % 4;
                                 let kind_name = match state.kind_index {
-                                    0 => "mi-orquestador",
-                                    1 => "mi-jerarquico",
-                                    2 => "mi-pizarra",
-                                    _ => "mi-mercado",
+                                    0 => "my-orchestrator",
+                                    1 => "my-hierarchy",
+                                    2 => "my-blackboard",
+                                    _ => "my-market",
                                 };
                                 state.name = kind_name.into();
                             }

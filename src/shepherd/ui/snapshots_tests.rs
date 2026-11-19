@@ -173,7 +173,7 @@ fn list_and_detail_render_in_all_sizes() {
         assert!(sh.list_hits.action_button.is_some(), "{w}x{h}");
         assert_eq!(sh.list_hits.filter_tabs.len(), 2, "{w}x{h}");
         assert!(t.contains("Capture now"), "{w}x{h}");
-        assert!(t.contains("Finalizados"), "{w}x{h}");
+        assert!(t.contains("Finished"), "{w}x{h}");
         // newest first, relative time and reason badge
         assert!(t.contains("#5"), "{w}x{h}");
         assert!(t.contains(" ago"), "{w}x{h}");
@@ -304,7 +304,7 @@ fn diff_is_coloured_and_truncated_with_notice() {
     assert_eq!(d.hidden, 5004 - MAX_DIFF_LINES);
     let (buf, hits) = render(&mut st, 120, 40);
     let t = text(&buf);
-    assert!(t.contains("DIFF vs estado actual"));
+    assert!(t.contains("DIFF vs current state"));
     let p = Palette::catppuccin();
     // find the "-old" and "+new" cells and check colours
     let mut found = (false, false);

@@ -372,7 +372,7 @@ pub fn render_tasks_section(
         })
         .collect();
 
-    let filter_tabs = ["Todas", "Abiertas", "Completadas"];
+    let filter_tabs = ["All", "Open", "Done"];
     let split = split_panes(
         area,
         list_width,
@@ -473,7 +473,7 @@ pub fn render_tasks_section(
                 buffer,
                 detail_area,
                 &inline_form,
-                "Importar Issue (Enter)",
+                "Import issue (Enter)",
                 "Cancel (Esc)",
                 is_valid,
                 palette,
@@ -538,7 +538,7 @@ pub fn render_tasks_section(
             }
 
             if !task.attachments.is_empty() {
-                content.push(DetailContentBlock::Heading("ARCHIVOS ADJUNTOS:".into()));
+                content.push(DetailContentBlock::Heading("ATTACHMENTS:".into()));
                 content.push(DetailContentBlock::BulletList(task.attachments.clone()));
             }
 
@@ -557,7 +557,7 @@ pub fn render_tasks_section(
             let bottom_actions = [
                 ("Start Run", "r", true),
                 ("Archive Task", "a", false),
-                ("Importar GitHub", "i", false),
+                ("Import GitHub", "i", false),
                 ("Delete Task", "D", false),
             ];
 
