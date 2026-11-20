@@ -91,6 +91,15 @@ main() {
             ;;
     esac
 
+    # a server that was already running keeps running the old version: the new binaries do not replace it
+    RUNNING="$("${INSTALL_DIR}/shepherd" status server 2>/dev/null | sed -n 's/^version: *//p' | head -n 1)" || RUNNING=""
+    if [ -n "$RUNNING" ] && [ "$TAG" != "custom" ] && [ "$RUNNING" != "${TAG#v}" ]; then
+        echo ""
+        warn "a shepherd server is still running at ${RUNNING}, not ${TAG#v}. The desktop app and shepherd connect to it, so you keep the old behaviour until it restarts."
+        echo "    shepherd server stop     # closes the terminals and agents of that session; save your work first"
+        echo "    shepherd                 # starts the new server"
+    fi
+
     echo ""
     log "next: start it in a git repository (the orchestrator is on by default)"
     cat <<'HINT'

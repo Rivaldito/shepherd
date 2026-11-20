@@ -1392,39 +1392,61 @@ impl App {
 
     fn view(&self) -> Element<'_, Message> {
         let body: Element<'_, Message> = match self.mode {
-            Mode::Shepherd => iced::widget::responsive(move |size| {
-                let ctx = panel::Ctx {
-                    api: self.api_socket.clone(),
-                    data: &self.data,
-                    snapshot: &self.snapshot,
-                    frame: self.frame,
-                };
-                let body = self.panel.view(&ctx);
-                // fixed sizes, scroll instead of squash: when the fixed panes and a flexible region of at
-                // least 360 px do not fit, the whole main area scrolls (section 1.3 of the spec)
-                let (min_w, min_h) = (self.panel.min_main_width(), MAIN_MIN_H);
-                if size.width >= min_w && size.height >= min_h {
-                    body
-                } else {
-                    theme::scroll(
-                        container(body)
-                            .width(Length::Fixed(size.width.max(min_w)))
-                            .height(Length::Fixed(size.height.max(min_h))),
-                    )
-                    .direction(iced::widget::scrollable::Direction::Both {
-                        vertical: iced::widget::scrollable::Scrollbar::new()
-                            .width(8)
-                            .scroller_width(8),
-                        horizontal: iced::widget::scrollable::Scrollbar::new()
-                            .width(8)
-                            .scroller_width(8),
-                    })
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into()
+            Mode::Shepherd => {
+                let panels = iced::widget::responsive(move |size| {
+                    let ctx = panel::Ctx {
+                        api: self.api_socket.clone(),
+                        data: &self.data,
+                        snapshot: &self.snapshot,
+                        frame: self.frame,
+                    };
+                    let body = self.panel.view(&ctx);
+                    // fixed sizes, scroll instead of squash: when the fixed panes and a flexible region of at
+                    // least 360 px do not fit, the whole main area scrolls (section 1.3 of the spec)
+                    let (min_w, min_h) = (self.panel.min_main_width(), MAIN_MIN_H);
+                    if size.width >= min_w && size.height >= min_h {
+                        body
+                    } else {
+                        theme::scroll(
+                            container(body)
+                                .width(Length::Fixed(size.width.max(min_w)))
+                                .height(Length::Fixed(size.height.max(min_h))),
+                        )
+                        .direction(iced::widget::scrollable::Direction::Both {
+                            vertical: iced::widget::scrollable::Scrollbar::new()
+                                .width(8)
+                                .scroller_width(8),
+                            horizontal: iced::widget::scrollable::Scrollbar::new()
+                                .width(8)
+                                .scroller_width(8),
+                        })
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .into()
+                    }
+                });
+                // the server is not the one this app belongs to, or its orchestration is off: say so, with the way out
+                match shepherd_app_core::data::server_notice(&self.data, env!("CARGO_PKG_VERSION"))
+                {
+                    Some(notice) => column![
+                        container(text(notice).size(12.5).color(theme::WARN))
+                            .padding([10, 16])
+                            .width(Length::Fill)
+                            .style(|_| container::Style {
+                                background: Some(Color::from_rgba8(0xFF, 0x8A, 0x1F, 0.10).into()),
+                                border: iced::Border {
+                                    color: theme::WARN,
+                                    width: 1.0,
+                                    radius: 0.0.into(),
+                                },
+                                ..Default::default()
+                            }),
+                        panels
+                    ]
+                    .into(),
+                    None => panels.into(),
                 }
-            })
-            .into(),
+            }
             Mode::Terminal => self.terminal_pane(),
         };
         let status_color_val = if self.status.starts_with("connected") {
