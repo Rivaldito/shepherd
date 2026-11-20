@@ -5482,8 +5482,10 @@ mod tests {
 
     #[test]
     fn a_new_notice_becomes_a_toast_a_refusal_stays_and_the_filter_needs_every_word() {
-        let mut panel = Panel::default();
-        panel.notice = "Saved task #1".into();
+        let mut panel = Panel {
+            notice: "Saved task #1".into(),
+            ..Panel::default()
+        };
         panel.sync_toast();
         assert!(panel.toasts().last().is_some_and(|(_, t)| !t.error));
         panel.notice = "error: refused: cannot remove".into();
@@ -5518,8 +5520,10 @@ mod tests {
         };
         let snapshot = Snapshot::default();
         let ctx = ctx_of(&data, &snapshot);
-        let mut panel = Panel::default();
-        panel.tab = Tab::Snapshots;
+        let mut panel = Panel {
+            tab: Tab::Snapshots,
+            ..Panel::default()
+        };
         // with no agent alive the Capture box falls back to the shown snapshot's agent
         assert_eq!(panel.capture_agent(&ctx).as_deref(), Some("coder-1"));
         let _ = panel.update(PanelMsg::SnapFilterAgent(Some("coder-2".into())), &ctx);

@@ -466,6 +466,30 @@ pub fn agent_skill(
     call(api, "shepherd.call", json!({ "op": op, "args": args })).map(|_| ())
 }
 
+/// The last `lines` lines of what a pane shows (an agent's live output), asked from the API.
+pub fn pane_tail(api: &Path, pane: &str, lines: u32) -> Result<String, String> {
+    let v = crate::api::call(
+        api,
+        "pane.read",
+        serde_json::json!({ "pane_id": pane, "source": "recent", "lines": lines }),
+    )?;
+    Ok(v["read"]["text"]
+        .as_str()
+        .unwrap_or("")
+        .trim_end()
+        .to_owned())
+}
+
+/// Deletes a pattern file (project first, else global); the server refuses a built-in one.
+pub fn delete_pattern(api: &Path, name: &str, root: &str) -> Result<String, String> {
+    let v = call(
+        api,
+        "shepherd.call",
+        json!({ "op": "pattern_delete", "args": { "root": root, "name": name } }),
+    )?;
+    Ok(v["deleted_source"].as_str().unwrap_or("project").to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -707,28 +731,4 @@ mod tests {
         assert_eq!(seen[0]["method"], "shepherd.pattern.run.stop");
         assert_eq!(seen[0]["params"]["confirm"], true);
     }
-}
-
-/// The last `lines` lines of what a pane shows (an agent's live output), asked from the API.
-pub fn pane_tail(api: &Path, pane: &str, lines: u32) -> Result<String, String> {
-    let v = crate::api::call(
-        api,
-        "pane.read",
-        serde_json::json!({ "pane_id": pane, "source": "recent", "lines": lines }),
-    )?;
-    Ok(v["read"]["text"]
-        .as_str()
-        .unwrap_or("")
-        .trim_end()
-        .to_owned())
-}
-
-/// Deletes a pattern file (project first, else global); the server refuses a built-in one.
-pub fn delete_pattern(api: &Path, name: &str, root: &str) -> Result<String, String> {
-    let v = call(
-        api,
-        "shepherd.call",
-        json!({ "op": "pattern_delete", "args": { "root": root, "name": name } }),
-    )?;
-    Ok(v["deleted_source"].as_str().unwrap_or("project").to_owned())
 }
