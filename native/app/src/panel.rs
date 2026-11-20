@@ -4769,9 +4769,20 @@ impl Panel {
             let mut bar = row![].spacing(0).height(10);
             for (state, dur) in &segs {
                 let c = state_color(state);
+                let portion = Length::FillPortion((*dur).clamp(1, 65_000) as u16);
+                if state == timeline::UNKNOWN {
+                    // before the app was recording: a hatched stretch
+                    bar = bar.push(
+                        container(text("╱".repeat(400)).size(9).color(theme::LINE2))
+                            .width(portion)
+                            .height(10)
+                            .clip(true),
+                    );
+                    continue;
+                }
                 bar = bar.push(
                     container(text(""))
-                        .width(Length::FillPortion((*dur).clamp(1, 65_000) as u16))
+                        .width(portion)
                         .height(10)
                         .style(move |_| container::Style {
                             background: Some(Background::Color(c)),
@@ -4833,14 +4844,37 @@ impl Panel {
                 .on_press(Message::Panel(PanelMsg::SelectAgent(a.id.clone()))),
             );
         }
-        // time axis: five marks from the start of the window to now
+        // time axis: a tick every minute (5 min), 5 minutes (30 min) or 20 minutes (2 h); the end reads "now"
+        let step: u64 = match secs {
+            s if s <= 300 => 60,
+            s if s <= 1800 => 300,
+            _ => 1200,
+        };
         let mut axis = row![container(text("")).width(170)].spacing(16);
         let mut marks = row![].width(Length::Fill);
-        for k in 0..5u64 {
-            let t = from + secs * k / 4;
-            let label = if k == 4 { "now".to_owned() } else { clock(t) };
-            marks = marks.push(text(label).size(10.5).color(DIM).width(Length::Fill));
+        let mut at = from;
+        let mut t = from.div_ceil(step) * step;
+        if t > from {
+            marks = marks
+                .push(container(text("")).width(Length::FillPortion((t - from).max(1) as u16)));
+            at = t;
         }
+        // leave the last tenth to "now"
+        while t < now.saturating_sub(secs / 10) {
+            let next = (t + step).min(now);
+            let width = Length::FillPortion((next - at).max(1) as u16);
+            marks = marks.push(container(text(clock(t)).size(10.5).color(DIM)).width(width));
+            at = next;
+            t += step;
+        }
+        let marks: Element<'a, Message> = iced::widget::stack![
+            marks,
+            container(text("now").size(10.5).color(DIM))
+                .width(Length::Fill)
+                .align_x(iced::alignment::Horizontal::Right)
+        ]
+        .width(Length::Fill)
+        .into();
         axis = axis.push(marks).push(container(text("")).width(250));
         let timelines = card(
             "AGENT TIMELINES",
@@ -4849,7 +4883,12 @@ impl Panel {
                     legend(ACCENT, "working"),
                     legend(theme::LINE2, "idle"),
                     legend(WARN, "blocked"),
-                    legend(OK, "done")
+                    legend(OK, "done"),
+                    row![
+                        text("╱╱").size(10).color(theme::LINE2),
+                        text("before the app opened").size(11).color(DIM)
+                    ]
+                    .spacing(4)
                 ]
                 .spacing(12)
                 .into(),
