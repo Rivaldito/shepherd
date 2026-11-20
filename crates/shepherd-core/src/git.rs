@@ -343,7 +343,12 @@ pub fn parse_git_changes(text: &str) -> Vec<GitChange> {
         .filter(|l| !l.starts_with("## ") && l.len() > 3)
         .map(|l| {
             let code = &l[..2];
-            let path = l[3..].rsplit(" -> ").next().unwrap_or("").trim().trim_matches('"');
+            let path = l[3..]
+                .rsplit(" -> ")
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_matches('"');
             let status = if code == "??" {
                 "untracked"
             } else if code.contains('R') {
@@ -601,12 +606,9 @@ where
                 let st = parse_git_status_porcelain(&text);
                 changes = parse_git_changes(&text);
                 changes.truncate(50);
-                if let Ok(num) = runner(
-                    "git",
-                    &["diff", "HEAD", "--numstat"],
-                    &wt.path,
-                    cmd_timeout,
-                ) {
+                if let Ok(num) =
+                    runner("git", &["diff", "HEAD", "--numstat"], &wt.path, cmd_timeout)
+                {
                     if num.status.success() {
                         add_numstat(&mut changes, &String::from_utf8_lossy(&num.stdout));
                     }
@@ -1141,7 +1143,10 @@ branch refs/heads/shep/1-coder
         let mut c = parse_git_changes(
             "## main...origin/main\n M auth/logout.go\n?? auth/new.go\nA  auth/added.go\n D old.go\nR  a.go -> b.go\n",
         );
-        let status: Vec<_> = c.iter().map(|x| (x.status.as_str(), x.path.as_str())).collect();
+        let status: Vec<_> = c
+            .iter()
+            .map(|x| (x.status.as_str(), x.path.as_str()))
+            .collect();
         assert_eq!(
             status,
             [
@@ -1159,7 +1164,10 @@ branch refs/heads/shep/1-coder
 
     #[test]
     fn numstat_sums_files_and_lines() {
-        assert_eq!(sum_numstat("9\t3\ta.go\n5\t0\tb.go\n-\t-\tlogo.png\n"), (3, 14, 3));
+        assert_eq!(
+            sum_numstat("9\t3\ta.go\n5\t0\tb.go\n-\t-\tlogo.png\n"),
+            (3, 14, 3)
+        );
         assert_eq!(sum_numstat(""), (0, 0, 0));
     }
 }

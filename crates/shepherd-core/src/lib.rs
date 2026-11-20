@@ -438,7 +438,11 @@ fn record_state_changes(registry_path: &Path, new: &AgentRegistryFile) {
     }
     let log = state_log_path(registry_path);
     use std::io::Write;
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&log) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)
+    {
         let _ = file.write_all(lines.as_bytes());
     }
     // keep the file small: past 512 KB only the newest 2000 lines stay
@@ -1207,7 +1211,10 @@ Depends on: 1, 2
         registry.agents[0].state = "idle".into();
         save_agent_registry(&path, &registry).unwrap();
         let log = load_state_log(&path, 0);
-        let seen: Vec<_> = log.iter().map(|c| (c.agent.as_str(), c.state.as_str())).collect();
+        let seen: Vec<_> = log
+            .iter()
+            .map(|c| (c.agent.as_str(), c.state.as_str()))
+            .collect();
         assert_eq!(seen, [("a1", "working"), ("a1", "idle")]);
         assert!(load_state_log(&path, u64::MAX).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
