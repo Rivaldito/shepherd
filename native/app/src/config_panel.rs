@@ -95,6 +95,8 @@ pub enum CfgMsg {
     Save,
     Delete,
     Refresh,
+    RefreshEvents,
+    RefreshSkills,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +176,9 @@ pub struct SkillNew {
 
 #[derive(Default)]
 pub struct ConfigPanel {
+    /// Refresh was pressed on Events / Skills: the next answer says how many it found.
+    announce_topics: bool,
+    announce_skills: bool,
     /// The form as it was when it was opened or last saved; the save bar shows while it differs.
     baseline: String,
     /// Roles changed in the table and not saved yet.
@@ -457,6 +462,10 @@ impl ConfigPanel {
         }
         match msg {
             CfgMsg::Skills(Ok(skills)) => {
+                if std::mem::take(&mut self.announce_skills) {
+                    self.notice =
+                        crate::ui::info(&format!("Reloaded {} skills from disk.", skills.len()));
+                }
                 self.skills = skills;
                 self.loading = false;
                 // picture aid: `SHEPHERD_NATIVE_SKILL=new` | `customize:<name>` | `edit:<name>`, applied once
@@ -484,6 +493,10 @@ impl ConfigPanel {
                 self.loading = false;
             }
             CfgMsg::Topics(Ok(topics)) => {
+                if std::mem::take(&mut self.announce_topics) {
+                    self.notice =
+                        crate::ui::info(&format!("Reread {} topics from the bus.", topics.len()));
+                }
                 self.topics = topics;
                 self.loading = false;
                 // like the other tabs, open the first topic instead of an empty detail
@@ -1150,6 +1163,14 @@ impl ConfigPanel {
                     }
                     Err(e) => self.notice = crate::panel::refusal(self.fail, &e),
                 }
+            }
+            CfgMsg::RefreshEvents => {
+                self.announce_topics = true;
+                return self.update(CfgMsg::Refresh, root);
+            }
+            CfgMsg::RefreshSkills => {
+                self.announce_skills = true;
+                return self.update(CfgMsg::Refresh, root);
             }
             CfgMsg::Refresh => {
                 self.loading = true;
@@ -3200,6 +3221,18 @@ mod tests {
         assert!(!panel.dirty());
         assert_eq!(panel.role_now("coder").vendor, "a");
         assert!(crate::ui::Toast::new(panel.notice.clone()).info);
+    }
+
+    #[test]
+    fn refresh_on_events_says_how_many_topics_it_reread() {
+        let root = Path::new("/nowhere");
+        let mut panel = ConfigPanel::default();
+        let _ = panel.update(CfgMsg::Topics(Ok(vec![])), root);
+        assert!(panel.notice.is_empty(), "a quiet reload says nothing");
+        let _ = panel.update(CfgMsg::RefreshEvents, root);
+        let _ = panel.update(CfgMsg::Topics(Ok(vec![])), root);
+        assert!(crate::ui::Toast::new(panel.notice.clone()).info);
+        assert!(panel.notice.contains("Reread 0 topics from the bus."));
     }
 
     #[test]

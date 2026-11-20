@@ -2137,7 +2137,7 @@ impl Panel {
                 vec![
                     btn_quiet(
                         "Refresh",
-                        PanelMsg::Cfg(crate::config_panel::CfgMsg::Refresh),
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::RefreshSkills),
                     ),
                     btn_primary(
                         "+ New skill",
@@ -2169,7 +2169,7 @@ impl Panel {
                 vec![
                     btn_quiet(
                         "Refresh",
-                        PanelMsg::Cfg(crate::config_panel::CfgMsg::Refresh),
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::RefreshEvents),
                     ),
                     btn(
                         "Send message",
