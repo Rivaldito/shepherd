@@ -26,11 +26,9 @@
 <br />
 
 <p align="center">
-  <a href="https://github.com/Rivaldito/shepherd/releases/download/v0.1.0-beta/shepherd-demo.mp4">
-    <img src="https://github.com/Rivaldito/shepherd/releases/download/v0.1.0-beta/shepherd-demo.gif" alt="Shepherd demo: the desktop app walking through overview, runs, agents, patterns, skills and events" width="900" />
-  </a>
+  <img src="docs/shepherd/media/shepherd-demo.gif" alt="Shepherd demo: the desktop app walking through overview, runs, agents, patterns, skills and events" width="900" />
   <br />
-  <sub>A 35-second tour of the desktop app. <a href="https://github.com/Rivaldito/shepherd/releases/download/v0.1.0-beta/shepherd-demo.mp4">Watch it as MP4</a>.</sub>
+  <sub>A 35-second tour of the desktop app, recorded from the real app against a sample project.</sub>
 </p>
 
 Shepherd adds multi-agent orchestration on top of herdr's terminal runtime. You keep the native terminal of every agent; Shepherd decides **who works on what, in which worktree, and how they talk to each other.** Not sure it is for you? [Why Shepherd](docs/shepherd/why-shepherd.md) also says when it is not.
