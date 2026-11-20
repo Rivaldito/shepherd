@@ -1541,23 +1541,64 @@ impl App {
     /// (open it in the Shepherd panel, focus it). The row is the pane's own top border, which it covers.
     fn pane_headers<'a>(&'a self, surface: &'a PaneSurface) -> Vec<Element<'a, Message>> {
         let mut out = Vec::new();
+        let several = surface.panes.len() > 1;
         for pane in &surface.panes {
-            let Some(agent) = self
+            let agent = self
                 .snapshot
                 .agents
                 .iter()
-                .find(|a| a.pane_id == pane.pane_id)
-            else {
+                .find(|a| a.pane_id == pane.pane_id);
+            // a plain shell has no header: its first row is real content, not a border
+            if agent.is_none() {
                 continue;
+            }
+            let status = agent.map(|a| a.status());
+            let blocked = status == Some(shepherd_app_core::snapshot::Status::Blocked);
+            let color = status.map_or(DIM, status_color);
+            let name = agent.map_or_else(|| "shell".to_owned(), |a| a.display_name());
+            let word = match status {
+                Some(_) if blocked => "needs you",
+                Some(s) => status_name(s),
+                None => "",
             };
-            let status = agent.status();
-            let color = status_color(status);
-            let name = agent.display_name();
-            let word = if status == shepherd_app_core::snapshot::Status::Blocked {
-                "needs you"
+            let place = |x: u16, y: u16| {
+                pad(
+                    f32::from(y) * grid::CELL_H,
+                    0.0,
+                    0.0,
+                    f32::from(x) * grid::CELL_W,
+                )
+            };
+            // an outline: orange when the agent needs the human, cyan on the focused pane of several
+            let outline = if blocked {
+                Some(Color {
+                    a: 0.45,
+                    ..theme::WARN
+                })
+            } else if several && pane.focused {
+                Some(theme::ACCENT)
             } else {
-                status_name(status)
+                None
             };
+            if let Some(color) = outline {
+                out.push(
+                    container(
+                        container(text(""))
+                            .width(f32::from(pane.rect.width) * grid::CELL_W)
+                            .height(f32::from(pane.rect.height) * grid::CELL_H)
+                            .style(move |_| container::Style {
+                                border: Border {
+                                    color,
+                                    width: 1.5,
+                                    radius: 0.0.into(),
+                                },
+                                ..container::Style::default()
+                            }),
+                    )
+                    .padding(place(pane.rect.x, pane.rect.y))
+                    .into(),
+                );
+            }
             let mini = |label: &'static str, msg: Message| {
                 button(text(label).size(10.5))
                     .padding([0, 7])
@@ -1565,39 +1606,36 @@ impl App {
                     .style(theme::link_button_style())
                     .on_press(msg)
             };
-            let strip = container(
-                row![
-                    text("■").size(9).color(color),
-                    text(name.clone())
-                        .font(theme::MONO_BOLD)
-                        .size(11)
-                        .color(theme::HI),
-                    text(agent.agent.clone().unwrap_or_default())
-                        .size(10.5)
-                        .color(DIM),
-                    text(word).size(10.5).color(color),
-                    container(text("")).width(Length::Fill),
-                    mini("Open in Shepherd", Message::OpenInShepherd(name)),
-                    mini(
-                        "Focus",
-                        Message::Act(Action::FocusPane(pane.pane_id.clone()))
-                    ),
-                ]
-                .spacing(8)
-                .align_y(iced::Alignment::Center),
-            )
-            .padding([0, 8])
-            .width(f32::from(pane.rect.width) * grid::CELL_W)
-            .height(CELL_ROW)
-            .style(theme::bar_style);
+            let mut strip = row![
+                text("■").size(9).color(color),
+                text(name.clone())
+                    .font(theme::MONO_BOLD)
+                    .size(11)
+                    .color(theme::HI),
+                text(agent.and_then(|a| a.agent.clone()).unwrap_or_default())
+                    .size(10.5)
+                    .color(DIM),
+                text(word).size(10.5).color(color),
+                text(pane.pane_id.clone()).size(10.5).color(theme::FAINT),
+                container(text("")).width(Length::Fill),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
+            if agent.is_some() {
+                strip = strip.push(mini("Open in Shepherd", Message::OpenInShepherd(name)));
+            }
+            strip = strip.push(mini(
+                "Focus",
+                Message::Act(Action::FocusPane(pane.pane_id.clone())),
+            ));
+            let strip = container(strip)
+                .padding([0, 8])
+                .width(f32::from(pane.rect.width) * grid::CELL_W)
+                .height(CELL_ROW)
+                .style(theme::bar_style);
             out.push(
                 container(strip)
-                    .padding(pad(
-                        f32::from(pane.rect.y) * grid::CELL_H,
-                        0.0,
-                        0.0,
-                        f32::from(pane.rect.x) * grid::CELL_W,
-                    ))
+                    .padding(place(pane.rect.x, pane.rect.y))
                     .into(),
             );
         }
