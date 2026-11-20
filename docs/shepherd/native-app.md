@@ -7,7 +7,7 @@ The window is one view with one sidebar, and the sidebar decides what the main a
 - **A workspace, a tab or an agent** (or *New terminal*): your terminal, rendered with a monospace grid, with the tab bar and the frame of a terminal.
 - **One of the eleven views** (Overview, Runs, Agents, Tasks, Patterns, Activity, Skills, Git, Events, Models, Snapshots): the orchestration panel.
 
-There is no mode switch: click a workspace name, a tab chip or an agent to get a terminal, and a view in the sidebar (or `Ctrl+1`..`Ctrl+9`) to get its panel.
+There is no mode switch: click a workspace name or an agent row to get a terminal (the tabs of a workspace are in the tab bar above it), and a view in the sidebar (or `Ctrl+1`..`Ctrl+9`) to get its panel.
 
 ## 1. Install and run
 
