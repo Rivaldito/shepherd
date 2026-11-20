@@ -86,6 +86,12 @@ pub enum CfgMsg {
     RoleSpawn(bool),
     NewVendor,
     NewRole,
+    SelectRoles,
+    RolesVendor(String, String),
+    RolesModel(String, String),
+    RolesRemove(String),
+    Discard,
+    LookAgain,
     Save,
     Delete,
     Refresh,
@@ -117,6 +123,8 @@ pub enum RField {
 enum Editing {
     Vendor(String),
     Role(String),
+    /// The table of every role: vendor and model of each, edited together and saved once.
+    Roles,
     /// The list of what is installed on this computer.
     Installed,
 }
@@ -166,6 +174,14 @@ pub struct SkillNew {
 
 #[derive(Default)]
 pub struct ConfigPanel {
+    /// The form as it was when it was opened or last saved; the save bar shows while it differs.
+    baseline: String,
+    /// Roles changed in the table and not saved yet.
+    role_pending: std::collections::BTreeMap<String, Role>,
+    /// Roles removed in the table and not saved yet.
+    role_removed: std::collections::BTreeSet<String>,
+    /// `Look again` was pressed: the next detection says how many agent commands it found.
+    looking_again: bool,
     /// What the last action was doing, shown above the server's refusal.
     fail: &'static str,
     installed: Vec<InstalledRow>,
@@ -341,6 +357,51 @@ impl ConfigPanel {
         })
     }
 
+    /// The form's state as text, to tell whether anything changed since it was opened.
+    fn snapshot(&self) -> String {
+        format!(
+            "{:?}{:?}{}{}{}{}",
+            self.vfields,
+            self.rfields,
+            self.vendor.mcp.supported,
+            self.vendor.disabled,
+            self.role.worktree,
+            self.role.can_spawn
+        )
+    }
+
+    /// Are there changes that `Save to config.yaml` would write?
+    fn dirty(&self) -> bool {
+        match &self.editing {
+            Some(Editing::Vendor(_) | Editing::Role(_)) => {
+                self.is_new || self.snapshot() != self.baseline
+            }
+            Some(Editing::Roles) => !self.role_pending.is_empty() || !self.role_removed.is_empty(),
+            _ => false,
+        }
+    }
+
+    /// The role as the table shows it: with the change that is waiting to be saved, if any.
+    fn role_now(&self, name: &str) -> Role {
+        self.role_pending
+            .get(name)
+            .or_else(|| self.models.roles.get(name))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The models a vendor lists (its own list and its default).
+    fn vendor_models(&self, vendor: &str) -> Vec<String> {
+        let found = self.models.vendors.get(vendor);
+        let mut models: Vec<String> = found.map(|v| v.models.clone()).unwrap_or_default();
+        if let Some(v) = found {
+            if !v.default_model.is_empty() && !models.contains(&v.default_model) {
+                models.insert(0, v.default_model.clone());
+            }
+        }
+        models
+    }
+
     fn open_vendor(&mut self, name: &str, new: bool) {
         self.editing = Some(Editing::Vendor(name.to_owned()));
         self.vendor = self.models.vendors.get(name).cloned().unwrap_or_default();
@@ -356,6 +417,7 @@ impl ConfigPanel {
             (VField::ModelFlag, v.model_flag.clone()),
             (VField::ShepherdAgent, v.shepherd_agent.clone()),
         ];
+        self.baseline = self.snapshot();
     }
 
     fn open_role(&mut self, name: &str, new: bool) {
@@ -373,6 +435,7 @@ impl ConfigPanel {
             (RField::Skills, r.skills.join(", ")),
             (RField::Prompt, r.prompt.clone()),
         ];
+        self.baseline = self.snapshot();
     }
 
     pub fn update(&mut self, msg: CfgMsg, root: &Path) -> Task<Message> {
@@ -445,6 +508,10 @@ impl ConfigPanel {
                     if !MODELS_AID_DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
                         if spec == "installed" {
                             self.editing = Some(Editing::Installed);
+                        } else if spec == "roles" {
+                            self.editing = Some(Editing::Roles);
+                        } else if spec == "dirty" {
+                            self.open_vendor("my-vendor", true);
                         } else if let Some(role) = spec.strip_prefix("role:") {
                             self.open_role(role, false);
                         } else if let Some(role) = spec.strip_prefix("picker:") {
@@ -460,6 +527,13 @@ impl ConfigPanel {
                 });
             }
             CfgMsg::Installed(rows) => {
+                if self.looking_again {
+                    self.looking_again = false;
+                    self.notice = crate::ui::info(&format!(
+                        "Looked on PATH again: {} agent commands found.",
+                        rows.iter().filter(|r| r.installed()).count()
+                    ));
+                }
                 // the slow part comes next: some agents take seconds to list their models
                 let asked = rows.clone();
                 self.installed = rows;
@@ -903,6 +977,52 @@ impl ConfigPanel {
             }
             CfgMsg::SelectVendor(name) => self.open_vendor(&name, false),
             CfgMsg::SelectRole(name) => self.open_role(&name, false),
+            CfgMsg::SelectRoles => {
+                self.editing = Some(Editing::Roles);
+                self.armed_delete = false;
+            }
+            CfgMsg::RolesVendor(name, vendor) => {
+                let mut role = self.role_now(&name);
+                role.model = self
+                    .vendor_models(&vendor)
+                    .first()
+                    .cloned()
+                    .unwrap_or_default();
+                role.vendor = vendor;
+                self.role_pending.insert(name, role);
+            }
+            CfgMsg::RolesModel(name, model) => {
+                let mut role = self.role_now(&name);
+                role.model = model;
+                self.role_pending.insert(name, role);
+            }
+            CfgMsg::RolesRemove(name) => {
+                self.role_pending.remove(&name);
+                self.role_removed.insert(name);
+            }
+            CfgMsg::Discard => {
+                self.role_pending.clear();
+                self.role_removed.clear();
+                match self.editing.clone() {
+                    Some(Editing::Vendor(name)) if !self.is_new => self.open_vendor(&name, false),
+                    Some(Editing::Role(name)) if !self.is_new => self.open_role(&name, false),
+                    Some(Editing::Vendor(_) | Editing::Role(_)) => {
+                        self.editing = None;
+                        if let Some(name) = self.models.vendors.keys().next().cloned() {
+                            self.open_vendor(&name, false);
+                        }
+                    }
+                    _ => {}
+                }
+                self.notice = crate::ui::info("Discarded your changes.");
+            }
+            CfgMsg::LookAgain => {
+                self.looking_again = true;
+                let vendors = self.models.vendors.clone();
+                return Task::perform(async move { installed::detect(&vendors) }, |rows| {
+                    cfg(CfgMsg::Installed(rows))
+                });
+            }
             CfgMsg::NewVendor => self.open_vendor("my-vendor", true),
             CfgMsg::NewRole => self.open_role("my-role", true),
             CfgMsg::VendorField(field, value) => {
@@ -960,13 +1080,47 @@ impl ConfigPanel {
                             .unwrap_or_default();
                         config_data::save_role(&name, &self.role).map(|p| (p, Editing::Role(name)))
                     }
+                    Some(Editing::Roles) => {
+                        let mut done = Ok(PathBuf::new());
+                        for (name, role) in &self.role_pending {
+                            if self.role_removed.contains(name) {
+                                continue;
+                            }
+                            if let Err(e) = config_data::save_role(name, role) {
+                                done = Err(e);
+                                break;
+                            }
+                        }
+                        if done.is_ok() {
+                            for name in &self.role_removed {
+                                if let Err(e) = config_data::delete_entry("roles", name) {
+                                    done = Err(e);
+                                    break;
+                                }
+                            }
+                        }
+                        match done {
+                            Ok(path) => {
+                                self.role_pending.clear();
+                                self.role_removed.clear();
+                                self.notice = "Saved config.yaml.".into();
+                                let _ = path;
+                                return Self::load_models(root);
+                            }
+                            Err(e) => {
+                                self.notice = crate::panel::refusal(self.fail, &e);
+                                return Task::none();
+                            }
+                        }
+                    }
                     Some(Editing::Installed) | None => return Task::none(),
                 };
                 match result {
-                    Ok((path, editing)) => {
-                        self.notice = format!("Saved in {}", display(&path));
+                    Ok((_, editing)) => {
+                        self.notice = "Saved config.yaml.".into();
                         self.editing = Some(editing);
                         self.is_new = false;
+                        self.baseline = self.snapshot();
                         return Self::load_models(root);
                     }
                     Err(e) => self.notice = crate::panel::refusal(self.fail, &e),
@@ -978,13 +1132,16 @@ impl ConfigPanel {
                     return Task::none();
                 }
                 self.armed_delete = false;
-                if matches!(self.editing, Some(Editing::Installed) | None) {
+                if matches!(
+                    self.editing,
+                    Some(Editing::Installed | Editing::Roles) | None
+                ) {
                     return Task::none();
                 }
                 let result = match self.editing.take() {
                     Some(Editing::Vendor(name)) => config_data::delete_entry("vendors", &name),
                     Some(Editing::Role(name)) => config_data::delete_entry("roles", &name),
-                    Some(Editing::Installed) | None => return Task::none(),
+                    Some(Editing::Installed | Editing::Roles) | None => return Task::none(),
                 };
                 match result {
                     Ok(path) => {
@@ -2205,6 +2362,19 @@ impl ConfigPanel {
             .style(item_style(matches!(self.editing, Some(Editing::Installed))))
             .on_press(cfg(CfgMsg::SelectInstalled))
             .into(),
+            crate::theme::label("TEAM").into(),
+            button(row![
+                text("Roles").size(13),
+                container(text("")).width(Length::Fill),
+                text(self.models.roles.len().to_string())
+                    .size(11)
+                    .color(DIM),
+            ])
+            .width(Length::Fill)
+            .padding([4, 8])
+            .style(item_style(matches!(self.editing, Some(Editing::Roles))))
+            .on_press(cfg(CfgMsg::SelectRoles))
+            .into(),
             crate::theme::label("VENDORS").into(),
         ];
         for (name, v) in &self.models.vendors {
@@ -2249,6 +2419,7 @@ impl ConfigPanel {
         let detail: Element<'a, Message> = match &self.editing {
             None => text("Pick a vendor or a role.").color(DIM).into(),
             Some(Editing::Installed) => self.installed_view(),
+            Some(Editing::Roles) => self.roles_view(),
             Some(editing) => {
                 let mut form = column![].spacing(6);
                 match editing {
@@ -2338,7 +2509,7 @@ impl ConfigPanel {
                                 .style(card_style),
                         );
                     }
-                    Editing::Installed => {}
+                    Editing::Installed | Editing::Roles => {}
                     Editing::Role(_) => {
                         form = form.push(text("ROLE").size(11).color(DIM));
                         let vendor_names: Vec<String> =
@@ -2372,16 +2543,41 @@ impl ConfigPanel {
                 } else {
                     "Delete"
                 };
-                form.push(row![button(container(text("Save").size(13)).center_y(Length::Fill)).padding([0, 12]).height(32).style(crate::theme::primary_button_style()).on_press(cfg(CfgMsg::Save)), button(container(text(delete_label).size(13)).center_y(Length::Fill)).padding([0, 12]).height(32).style(crate::theme::outline_button_style(!self.armed_delete)).on_press(cfg(CfgMsg::Delete))].spacing(8))
-                    .push(text(target).size(11).color(DIM))
-                    .push(text(if self.is_new { "New entry: pick a name and Save." } else { "Lists are comma or space separated. Saving rewrites config.yaml (comments are lost, a .bak is kept)." }).size(11).color(DIM))
+                form.push(
+                    button(container(text(delete_label).size(13)).center_y(Length::Fill))
+                        .padding([0, 12])
+                        .height(32)
+                        .style(crate::theme::outline_button_style(!self.armed_delete))
+                        .on_press(cfg(CfgMsg::Delete)),
+                )
+                .push(text(target).size(11).color(DIM))
+                .push(
+                    text(if self.is_new {
+                        "New entry: pick a name, then save."
+                    } else {
+                        "Lists are comma or space separated. Saving rewrites config.yaml (comments are lost, a .bak is kept)."
+                    })
+                    .size(11)
+                    .color(DIM),
+                )
                     .into()
             }
         };
         let _ = footer;
+        // the page is as wide as its content needs (720 a vendor, 820 the roles), left aligned
+        let width = if matches!(self.editing, Some(Editing::Roles)) {
+            820.0
+        } else {
+            720.0
+        };
+        let detail = container(detail).max_width(width);
+        let mut page = column![detail_box(detail.into())].height(Length::Fill);
+        if self.dirty() {
+            page = page.push(self.save_bar());
+        }
         let base: Element<'a, Message> = row![
             crate::panel::list_box_sized(230.0, None, items, vec![]),
-            detail_box(detail)
+            page.width(Length::Fill)
         ]
         .height(Length::Fill)
         .into();
@@ -2389,6 +2585,119 @@ impl ConfigPanel {
             Some(picker) => iced::widget::stack![base, self.skill_picker_view(picker)].into(),
             None => base,
         }
+    }
+
+    /// The bar pinned under the settings while there are changes to write: orange line on top.
+    fn save_bar<'a>(&'a self) -> Element<'a, Message> {
+        container(
+            row![
+                text("■").size(8).color(crate::theme::WARN),
+                text("Unsaved changes to config.yaml.").size(12),
+                container(text("")).width(Length::Fill),
+                cfg_btn("Discard", CfgMsg::Discard, false),
+                crate::panel::btn_primary("Save to config.yaml", PanelMsg::Cfg(CfgMsg::Save)),
+            ]
+            .spacing(12)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding([0, 24])
+        .height(52)
+        .width(Length::Fill)
+        .align_y(iced::alignment::Vertical::Center)
+        .style(|_| container::Style {
+            background: Some(Background::Color(Color::from_rgb8(0x0E, 0x0B, 0x09))),
+            border: iced::Border {
+                color: crate::theme::WARN,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+    }
+
+    /// Every role as a row: its name, the vendor and the model as segmented controls, and Remove.
+    fn roles_view<'a>(&'a self) -> Element<'a, Message> {
+        let segments =
+            |options: Vec<String>, current: String, on: Box<dyn Fn(String) -> CfgMsg>| {
+                let mut r = row![].spacing(4).width(Length::Fill);
+                for option in options {
+                    let active = option == current;
+                    let message = cfg(on(option.clone()));
+                    r = r.push(
+                        button(text(option).size(11.5))
+                            .padding([4, 10])
+                            .style(crate::theme::chip_style(active))
+                            .on_press(message),
+                    );
+                }
+                r.wrap()
+            };
+        let mut table = column![row![
+            container(text("Role").size(11).color(DIM)).width(180),
+            container(text("Vendor").size(11).color(DIM)).width(Length::FillPortion(2)),
+            container(text("Model").size(11).color(DIM)).width(Length::FillPortion(3)),
+            container(text("")).width(70),
+        ]
+        .spacing(12)]
+        .spacing(12);
+        for name in self.models.roles.keys() {
+            if self.role_removed.contains(name) {
+                continue;
+            }
+            let role = self.role_now(name);
+            let changed = self.role_pending.contains_key(name);
+            let vendors: Vec<String> = self.models.vendors.keys().cloned().collect();
+            let mut models = self.vendor_models(&role.vendor);
+            if !role.model.is_empty() && !models.contains(&role.model) {
+                models.push(role.model.clone());
+            }
+            let owner = name.clone();
+            let owner2 = name.clone();
+            table = table.push(
+                row![
+                    button(text(name.clone()).size(13).color(if changed {
+                        crate::theme::WARN
+                    } else {
+                        crate::theme::HI
+                    }))
+                    .width(180)
+                    .padding([4, 8])
+                    .style(crate::theme::link_button_style())
+                    .on_press(cfg(CfgMsg::SelectRole(name.clone()))),
+                    container(segments(
+                        vendors,
+                        role.vendor.clone(),
+                        Box::new(move |v| CfgMsg::RolesVendor(owner.clone(), v)),
+                    ))
+                    .width(Length::FillPortion(2)),
+                    container(segments(
+                        models,
+                        role.model.clone(),
+                        Box::new(move |m| CfgMsg::RolesModel(owner2.clone(), m)),
+                    ))
+                    .width(Length::FillPortion(3)),
+                    container(
+                        button(text("Remove").size(11.5).color(DIM))
+                            .padding([4, 8])
+                            .style(crate::theme::link_button_style())
+                            .on_press(cfg(CfgMsg::RolesRemove(name.clone())))
+                    )
+                    .width(70),
+                ]
+                .spacing(12)
+                .align_y(iced::Alignment::Center),
+            );
+        }
+        column![
+            text("Roles").font(crate::theme::MONO_BOLD).size(18).color(crate::theme::HI),
+            text("The vendor and model an agent of each role starts with. A pattern or the New agent form can still override them.")
+                .size(12)
+                .color(DIM),
+            table,
+        ]
+        .spacing(14)
+        .into()
     }
 
     /// What is installed on this computer: each agent CLI with its vendor and its models.
@@ -2459,9 +2768,10 @@ impl ConfigPanel {
             text("Installed on this computer")
                 .size(18)
                 .color(crate::theme::HI),
-            text("Agent CLIs found by your login shell, the vendors Shepherd has for them and the models each offers.")
+            text("Agent commands found on your PATH. A vendor whose command is missing cannot start agents.")
                 .size(12)
                 .color(DIM),
+            cfg_btn("Look again", CfgMsg::LookAgain, false),
             crate::panel::card(
                 "AGENTS · VENDORS · MODELS",
                 Some(
@@ -2853,6 +3163,43 @@ mod tests {
             panel.notice,
             "Not done.\nthe main checkout cannot be removed"
         );
+    }
+
+    #[test]
+    fn the_roles_table_keeps_changes_until_saved_and_discard_drops_them() {
+        let root = Path::new("/nowhere");
+        let mut panel = ConfigPanel::default();
+        let vendor = |models: &[&str]| Vendor {
+            command: "x".into(),
+            models: models.iter().map(|m| (*m).to_owned()).collect(),
+            ..Vendor::default()
+        };
+        panel
+            .models
+            .vendors
+            .insert("a".into(), vendor(&["a1", "a2"]));
+        panel.models.vendors.insert("b".into(), vendor(&["b1"]));
+        panel.models.roles.insert(
+            "coder".into(),
+            Role {
+                vendor: "a".into(),
+                model: "a2".into(),
+                ..Role::default()
+            },
+        );
+        let _ = panel.update(CfgMsg::SelectRoles, root);
+        assert!(!panel.dirty());
+        // another vendor picks that vendor's first model
+        let _ = panel.update(CfgMsg::RolesVendor("coder".into(), "b".into()), root);
+        assert!(panel.dirty());
+        let now = panel.role_now("coder");
+        assert_eq!((now.vendor.as_str(), now.model.as_str()), ("b", "b1"));
+        // what is on disk is untouched until Save
+        assert_eq!(panel.models.roles["coder"].vendor, "a");
+        let _ = panel.update(CfgMsg::Discard, root);
+        assert!(!panel.dirty());
+        assert_eq!(panel.role_now("coder").vendor, "a");
+        assert!(crate::ui::Toast::new(panel.notice.clone()).info);
     }
 
     #[test]
