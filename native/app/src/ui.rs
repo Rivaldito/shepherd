@@ -112,15 +112,19 @@ pub const FILTER_ID: &str = "list-filter";
 pub struct Toast {
     pub text: String,
     pub error: bool,
+    /// Neither success nor refusal: something the user asked for that changed nothing.
+    pub info: bool,
     pub at: Instant,
 }
 
 impl Toast {
     pub fn new(text: String) -> Self {
         let error = is_error(&text);
+        let info = !error && text.starts_with(INFO);
         Self {
-            text,
+            text: text.trim_start_matches(INFO).to_owned(),
             error,
+            info,
             at: Instant::now(),
         }
     }
@@ -129,6 +133,14 @@ impl Toast {
     pub fn expired(&self) -> bool {
         !self.error && self.at.elapsed() > Duration::from_millis(TOAST_MS)
     }
+}
+
+/// Marks a notice as information (cyan square): it starts with this character, which is never shown.
+pub const INFO: char = '\u{1}';
+
+/// An information notice.
+pub fn info(message: &str) -> String {
+    format!("{INFO}{message}")
 }
 
 /// A form that cannot be sent yet: a notice that is a refusal of the app itself (no server involved).
@@ -152,7 +164,13 @@ pub fn is_error(notice: &str) -> bool {
 pub fn toasts_view<'a>(toasts: Vec<(usize, &'a Toast)>) -> Element<'a, Message> {
     let mut stack = column![].spacing(8).width(400);
     for (index, toast) in toasts {
-        let color = if toast.error { BAD } else { OK };
+        let color = if toast.error {
+            BAD
+        } else if toast.info {
+            theme::ACCENT
+        } else {
+            OK
+        };
         let mut body = column![].spacing(6).width(Length::Fill);
         if toast.error {
             // the summary is the first line; what follows is the server's answer, as sent
@@ -275,5 +293,13 @@ mod tests {
         nav_reset();
         nav(false, Message::Panel(PanelMsg::SelectRun("x".into())));
         assert_eq!(id(nav_step(1)), "x", "nothing selected: the first row");
+    }
+
+    #[test]
+    fn an_info_notice_is_neither_a_success_nor_a_refusal_and_hides_its_marker() {
+        let toast = Toast::new(info("No idle agents to resume."));
+        assert!(toast.info && !toast.error);
+        assert_eq!(toast.text, "No idle agents to resume.");
+        assert!(Toast::new(invalid("A task needs a title.")).error);
     }
 }

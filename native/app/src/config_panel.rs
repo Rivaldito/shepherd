@@ -572,14 +572,18 @@ impl ConfigPanel {
                     form.error = Some("A skill needs a name.".into());
                     return Task::none();
                 }
-                match config_data::create_skill(root, &name, form.repo)
+                let repo = form.repo;
+                match config_data::create_skill(root, &name, repo)
                     .and_then(|file| SkillEdit::open(&name, file))
                 {
                     Ok(edit) => {
                         self.skill_new = None;
                         self.skill = Some(name.clone());
                         self.skill_edit = Some(edit);
-                        self.notice = format!("Created skill {name}");
+                        self.notice = format!(
+                            "Created skill {name} in {}.",
+                            if repo { "this project" } else { "your skills" }
+                        );
                         return Self::load_skills(root);
                     }
                     Err(why) => form.error = Some(why),
@@ -591,7 +595,7 @@ impl ConfigPanel {
                 {
                     Ok(edit) => {
                         self.skill_edit = Some(edit);
-                        self.notice = format!("{name} copied to your skills: it is yours to edit");
+                        self.notice = format!("Copied {name} to your skills. Edit it here.");
                         return Self::load_skills(root);
                     }
                     Err(why) => self.notice = crate::panel::refusal(self.fail, &why),
@@ -620,9 +624,13 @@ impl ConfigPanel {
                     Ok(problems) => {
                         edit.saved = text;
                         self.notice = if problems.is_empty() {
-                            format!("Saved {}", edit.name)
+                            format!("Saved {}/SKILL.md.", edit.name)
                         } else {
-                            format!("Saved {}, with {} problem(s)", edit.name, problems.len())
+                            format!(
+                                "Saved {}/SKILL.md, with {} problem(s).",
+                                edit.name,
+                                problems.len()
+                            )
                         };
                         edit.problems = problems;
                         return Self::load_skills(root);
@@ -640,7 +648,7 @@ impl ConfigPanel {
                     Ok(()) => {
                         self.skill_edit = None;
                         self.skill = None;
-                        self.notice = format!("Deleted skill {name}");
+                        self.notice = format!("Deleted skill {name}.");
                         return Self::load_skills(root);
                     }
                     Err(why) => self.notice = crate::panel::refusal(self.fail, &why),
@@ -649,9 +657,9 @@ impl ConfigPanel {
             CfgMsg::SkillGlobal(name, on) => match config_data::set_global_skill(root, &name, on) {
                 Ok(()) => {
                     self.notice = if on {
-                        format!("{name} is now global: every agent gets it")
+                        format!("{name} is now global. Every agent gets it at its next start.")
                     } else {
-                        format!("{name} is no longer global")
+                        format!("{name} is no longer global.")
                     };
                     return Self::load_skills(root);
                 }

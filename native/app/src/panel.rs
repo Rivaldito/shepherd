@@ -820,7 +820,12 @@ impl Panel {
         if current != self.seen_notice {
             self.seen_notice = current.clone();
             if !current.is_empty() {
-                self.history.push((clock_now(), current.replace('\n', " ")));
+                self.history.push((
+                    clock_now(),
+                    current
+                        .trim_start_matches(crate::ui::INFO)
+                        .replace('\n', " "),
+                ));
                 let extra = self.history.len().saturating_sub(crate::ui::HISTORY);
                 self.history.drain(..extra);
                 self.toasts.push(crate::ui::Toast::new(current));
@@ -1381,7 +1386,14 @@ impl Panel {
                 return Task::perform(
                     async move {
                         actions::agent_skill(&api, &agent, &skill, enable, &root).map(|_| {
-                            format!("Saved {skill} for {agent}; it applies the next time the agent starts")
+                            format!(
+                                "Saved: {skill} {} for {agent}. It applies the next time the agent starts.",
+                                match enable {
+                                    Some(true) => "on",
+                                    Some(false) => "off",
+                                    None => "reset",
+                                }
+                            )
                         })
                     },
                     |r| Message::Panel(PanelMsg::Done(r)),
@@ -1400,6 +1412,10 @@ impl Panel {
                 );
             }
             PanelMsg::SnapCompared(id, diff) => {
+                if diff.is_ok() {
+                    self.notice =
+                        crate::ui::info(&format!("Compared {id} with the worktree as it is now."));
+                }
                 if self.snap_id(ctx).as_deref() == Some(id.as_str()) {
                     self.snap_compare = Some((id, diff));
                 }
@@ -1490,7 +1506,12 @@ impl Panel {
                             task_id,
                         )
                         .map(|agent| {
-                            format!("Agent {} started", agent["id"].as_str().unwrap_or("?"))
+                            format!(
+                                "Launched {} in pane {} of {}.",
+                                agent["id"].as_str().unwrap_or("?"),
+                                agent["pane"].as_str().unwrap_or("?"),
+                                agent["workspace"].as_str().unwrap_or("?")
+                            )
                         })
                     },
                     |r| Message::Panel(PanelMsg::Done(r)),
@@ -1612,14 +1633,34 @@ impl Panel {
                 return Task::perform(
                     async move {
                         actions::kill_and_clean_agent(&api, &id)
-                            .map(|_| format!("Agent {} cleaned", id))
+                            .map(|_| format!("Closed {id}. Its worktree and snapshots stay."))
                     },
                     |r| Message::Panel(PanelMsg::Done(r)),
                 );
             }
             PanelMsg::ResumeAgents => {
+                let idle: Vec<String> = ctx
+                    .data
+                    .agents
+                    .iter()
+                    .filter(|a| a.state == "idle")
+                    .map(|a| a.id.clone())
+                    .collect();
+                if idle.is_empty() {
+                    self.notice = crate::ui::info("No idle agents to resume.");
+                    return Task::none();
+                }
                 return Task::perform(
-                    async move { actions::resume_agents(&api).map(|_| "Resumed idle agents".into()) },
+                    async move {
+                        actions::resume_agents(&api).map(|_| {
+                            format!(
+                                "Resumed {} idle agent{}: {}.",
+                                idle.len(),
+                                if idle.len() == 1 { "" } else { "s" },
+                                idle.join(", ")
+                            )
+                        })
+                    },
                     |r| Message::Panel(PanelMsg::Done(r)),
                 );
             }
@@ -1627,8 +1668,12 @@ impl Panel {
                 let root = ctx.data.root.display().to_string();
                 return Task::perform(
                     async move {
-                        actions::assign_agent_task(&api, &agent_id, task_id, &root)
-                            .map(|_| format!("Agent {} task updated", agent_id))
+                        actions::assign_agent_task(&api, &agent_id, task_id, &root).map(|_| {
+                            match task_id {
+                                Some(t) => format!("Moved {agent_id} to task #{t}."),
+                                None => format!("Moved {agent_id} to no task."),
+                            }
+                        })
                     },
                     |r| Message::Panel(PanelMsg::Done(r)),
                 );
@@ -2194,7 +2239,9 @@ impl Panel {
         } else {
             self.cfg.notice.clone()
         };
-        let notice_text = notice_text.replace('\n', " ");
+        let notice_text = notice_text
+            .trim_start_matches(crate::ui::INFO)
+            .replace('\n', " ");
         let notice_color = if crate::ui::is_error(&notice_text) || notice_text.contains("✖") {
             BAD
         } else if notice_text.contains("Starting")
