@@ -42,15 +42,16 @@ native-stop:
 # A desktop entry and an icon, so the menu and the dock show Shepherd with its logo. Under Wayland a window cannot set
 # its own icon: the dock finds it through the entry (the app's id is shepherd-native). Only files under ~/.local/share.
 DESKTOP_DIR ?= $(HOME)/.local/share/applications
-ICON_DIR    ?= $(HOME)/.local/share/icons/hicolor/512x512/apps
+ICON_DIR    ?= $(HOME)/.local/share/icons/hicolor
 
 native-desktop: native-build
-	mkdir -p $(DESKTOP_DIR) $(ICON_DIR)
-	cp assets/logo.png $(ICON_DIR)/shepherd-native.png
+	mkdir -p $(DESKTOP_DIR) $(ICON_DIR)/512x512/apps $(ICON_DIR)/256x256/apps
+	cp assets/shepherd-icon-512.png $(ICON_DIR)/512x512/apps/shepherd-native.png
+	cp assets/shepherd-icon-256.png $(ICON_DIR)/256x256/apps/shepherd-native.png
 	printf '[Desktop Entry]\nType=Application\nName=Shepherd\nComment=Teams of coding agents\nExec=$(APP)\nIcon=shepherd-native\nTerminal=false\nCategories=Development;\nStartupWMClass=shepherd-native\n' > $(DESKTOP_DIR)/shepherd-native.desktop
 	-update-desktop-database $(DESKTOP_DIR) 2>/dev/null
-	-gtk-update-icon-cache -q -t $(HOME)/.local/share/icons/hicolor 2>/dev/null
+	-gtk-update-icon-cache -q -t $(ICON_DIR) 2>/dev/null
 	@echo "added $(DESKTOP_DIR)/shepherd-native.desktop"
 
 native-desktop-remove:
-	rm -f $(DESKTOP_DIR)/shepherd-native.desktop $(ICON_DIR)/shepherd-native.png
+	rm -f $(DESKTOP_DIR)/shepherd-native.desktop $(ICON_DIR)/512x512/apps/shepherd-native.png $(ICON_DIR)/256x256/apps/shepherd-native.png

@@ -63,7 +63,7 @@ fn start_size() -> Size {
         .unwrap_or(START)
 }
 
-/// The window's icon: the project logo (`assets/logo.png`) as 256 x 256 RGBA pixels.
+/// The window's icon: the app icon (`assets/shepherd-icon.svg`, a flock of pixels) as 256 x 256 RGBA pixels.
 fn window_icon() -> Option<iced::window::Icon> {
     iced::window::icon::from_rgba(include_bytes!("../assets/icon-256.rgba").to_vec(), 256, 256).ok()
 }
