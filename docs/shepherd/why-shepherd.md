@@ -6,7 +6,7 @@ This page explains what you gain. The other guides show how to use each piece:
 
 | Guide | What it covers |
 |---|---|
-| [getting-started.md](getting-started.md) | Build, enable and run your first agents |
+| [getting-started.md](getting-started.md) | Build and run your first agents |
 | [agents-roles-skills.md](agents-roles-skills.md) | Agent lifecycle, roles, vendors, skills and the MCP tools |
 | [patterns.md](patterns.md) | Multi-agent teams as YAML: the four topologies, validation and runs |
 | [topics-and-events.md](topics-and-events.md) | The event bus: topics, partitions, consumer groups, replay |

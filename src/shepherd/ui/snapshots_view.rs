@@ -303,7 +303,7 @@ fn detail_blocks(state: &ShepherdSnapshotsState, snap: &SnapshotInfo) -> Vec<Det
                 .take(MAX_LISTED_FILES)
                 .map(|f| {
                     if f.binary {
-                        format!("{}  {} (binario)", status_letter(&f.status), f.path)
+                        format!("{}  {} (binary)", status_letter(&f.status), f.path)
                     } else {
                         format!(
                             "{}  {}  +{} −{}",
@@ -325,7 +325,7 @@ fn detail_blocks(state: &ShepherdSnapshotsState, snap: &SnapshotInfo) -> Vec<Det
     }
     if !snap.omitted.is_empty() {
         blocks.push(DetailContentBlock::Heading(
-            "ARCHIVOS OMITIDOS (demasiado grandes):".into(),
+            "OMITTED FILES (too large):".into(),
         ));
         blocks.push(DetailContentBlock::BulletList(
             snap.omitted
@@ -345,7 +345,7 @@ fn detail_blocks(state: &ShepherdSnapshotsState, snap: &SnapshotInfo) -> Vec<Det
         Some(d) => {
             let what = match d.mode {
                 DiffMode::Previous => "anterior",
-                DiffMode::Current => "estado actual",
+                DiffMode::Current => "current state",
             };
             blocks.push(DetailContentBlock::Heading(format!(
                 "DIFF vs {what}: {} file(s), +{} −{}",
@@ -394,7 +394,7 @@ pub fn render_snapshots_section(
         } else {
             format!("From {}", state.agent_id)
         },
-        "Finalizados".to_string(),
+        "Finished".to_string(),
     ];
     let tab_refs: Vec<&str> = tab_labels.iter().map(String::as_str).collect();
     let active_tab = match state.source {
@@ -435,7 +435,7 @@ pub fn render_snapshots_section(
                 detail_area,
                 form,
                 "Prune",
-                "Cancelar",
+                "Cancel",
                 true,
                 palette,
             ));
@@ -462,7 +462,7 @@ pub fn render_snapshots_section(
                 detail_area,
                 &msg,
                 "Confirm Restore",
-                "Cancelar",
+                "Cancel",
                 true,
                 palette,
             ));
@@ -477,7 +477,7 @@ pub fn render_snapshots_section(
                 detail_area,
                 &msg,
                 "Confirm Restore All",
-                "Cancelar",
+                "Cancel",
                 true,
                 palette,
             ));
@@ -492,7 +492,7 @@ pub fn render_snapshots_section(
                 detail_area,
                 &msg,
                 "Confirm Delete",
-                "Cancelar",
+                "Cancel",
                 true,
                 palette,
             ));

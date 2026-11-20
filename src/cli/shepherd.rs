@@ -17,6 +17,12 @@ pub(crate) fn run_shepherd_command(args: &[String]) -> std::io::Result<i32> {
         args
     };
 
+    // `--help` of one command (or of a group of commands) is an answer, not an error: stdout, exit code 0
+    if let Some(help) = super::shepherd_help::help_text(raw_args) {
+        println!("{help}");
+        return Ok(0);
+    }
+
     let is_json = raw_args.iter().any(|a| a == "--json");
     let no_server = raw_args.iter().any(|a| a == "--no-server");
 

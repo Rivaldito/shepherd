@@ -92,7 +92,7 @@ fn spawn_server(
     register_runtime_dir(runtime_dir);
     fs::write(
         config_home.join("shepherd/config.toml"),
-        "onboarding = false\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n",
     )
     .unwrap();
 
@@ -137,7 +137,7 @@ fn spawn_shepherd_auto(
     register_runtime_dir(runtime_dir);
     fs::write(
         config_home.join("shepherd/config.toml"),
-        "onboarding = false\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n",
     )
     .unwrap();
 
@@ -588,7 +588,7 @@ fn auto_detect_default_socket_path_from_config_dir() {
     register_runtime_dir(&runtime_dir);
     fs::write(
         config_home.join(app_dir_name).join("config.toml"),
-        "onboarding = false\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n",
     )
     .unwrap();
 

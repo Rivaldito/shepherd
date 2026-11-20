@@ -287,7 +287,7 @@ pub fn render_shepherd_section(
                 .iter()
                 .filter(|t| t.state.to_lowercase() == "open" || t.state.to_lowercase() == "active")
                 .count();
-            let sum = format!("{total} tareas ({open_count} abiertas)");
+            let sum = format!("{total} tasks ({open_count} open)");
             let help =
                 "↑/↓: list | n: new | i: import | a: archive | D: delete | e: edit | Esc: quit";
             (sum, help)
@@ -336,7 +336,7 @@ pub fn render_shepherd_section(
             let sum = match state.events.active_subtab {
                 events::ShepherdEventsSubTab::Topics => {
                     let paused_str = if state.events.view_paused {
-                        " (PAUSADO)"
+                        " (PAUSED)"
                     } else {
                         ""
                     };
