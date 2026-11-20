@@ -2,89 +2,89 @@
 //! Anything destructive only *arms* its button in the panel, so the second click stays where it always is.
 
 use crate::panel::{Armed, PanelMsg, Tab};
+use crate::theme;
 use crate::{Action, Message, Mode};
+use shepherd_app_core::data::{task_of_run, Data, Gate};
 use shepherd_app_core::snapshot::Snapshot;
 
+/// One row of the palette: its group, its label, a hint on the right (a shortcut or a state), the colour of its
+/// square and what it runs.
 #[derive(Debug, Clone)]
 pub struct Command {
+    pub group: &'static str,
     pub label: String,
+    pub hint: String,
+    pub dot: iced::Color,
     pub run: Vec<Message>,
 }
 
-fn cmd(label: impl Into<String>, run: Vec<Message>) -> Command {
+fn cmd(
+    group: &'static str,
+    label: impl Into<String>,
+    hint: impl Into<String>,
+    dot: iced::Color,
+    run: Vec<Message>,
+) -> Command {
     Command {
+        group,
         label: label.into(),
+        hint: hint.into(),
+        dot,
         run,
     }
 }
 
-pub fn build(snapshot: &Snapshot) -> Vec<Command> {
-    let panel = |tab: Tab| {
+/// Every row, in the order of the groups of the spec: Go to, Needs you, Agents, Tasks, Run a pattern, Commands.
+pub fn build(snapshot: &Snapshot, data: &Data) -> Vec<Command> {
+    let neutral = theme::LINE2;
+    let go = |tab: Tab| {
         vec![
             Message::SetMode(Mode::Shepherd),
             Message::Panel(PanelMsg::Tab(tab)),
         ]
     };
-    let mut all = vec![
-        cmd("Show the terminal", vec![Message::SetMode(Mode::Terminal)]),
-        cmd(
-            "Show the Shepherd panel",
-            vec![Message::SetMode(Mode::Shepherd)],
-        ),
-        cmd("Runs", panel(Tab::Runs)),
-        cmd("Agents", panel(Tab::Agents)),
-        cmd("Tasks", panel(Tab::Tasks)),
-        cmd("Patterns: see them as a graph", panel(Tab::Patterns)),
-        cmd(
-            "Monitor: what the agents say to each other",
-            panel(Tab::Monitor),
-        ),
-        cmd("Skills", panel(Tab::Skills)),
-        cmd("Git: worktrees and pull requests", panel(Tab::Git)),
-        cmd("Events: topics and messages", panel(Tab::Events)),
-        cmd("Models: vendors and roles", panel(Tab::Models)),
-        cmd(
-            "Run a pattern",
-            vec![
-                Message::SetMode(Mode::Shepherd),
-                Message::Panel(PanelMsg::OpenLauncher(None)),
-            ],
-        ),
-        cmd(
-            "Clean finished runs and gone agents",
-            vec![
-                Message::SetMode(Mode::Shepherd),
-                Message::Panel(PanelMsg::Tab(Tab::Runs)),
-                Message::Panel(PanelMsg::Arm(Armed::CleanRuns)),
-            ],
-        ),
-        cmd(
-            "Clean the communication",
-            vec![
-                Message::SetMode(Mode::Shepherd),
-                Message::Panel(PanelMsg::Tab(Tab::Monitor)),
-                Message::Panel(PanelMsg::Arm(Armed::CleanBus)),
-            ],
-        ),
-        cmd(
-            "Archive done tasks",
-            vec![
-                Message::SetMode(Mode::Shepherd),
-                Message::Panel(PanelMsg::Tab(Tab::Tasks)),
-                Message::Panel(PanelMsg::Arm(Armed::ArchiveDone)),
-            ],
-        ),
-        cmd("Reload the panels", vec![Message::Reload]),
-        cmd("New space", vec![Message::Act(Action::NewSpace)]),
-    ];
-    if let Some(workspace) = snapshot.focused_workspace_id.clone() {
+    let mut all = Vec::new();
+    for (label, tab, key) in [
+        ("Overview", Tab::Overview, "Ctrl+1"),
+        ("Runs", Tab::Runs, "Ctrl+2"),
+        ("Agents", Tab::Agents, "Ctrl+3"),
+        ("Tasks", Tab::Tasks, "Ctrl+4"),
+        ("Patterns", Tab::Patterns, "Ctrl+5"),
+        ("Activity", Tab::Monitor, "Ctrl+6"),
+        ("Skills", Tab::Skills, "Ctrl+7"),
+        ("Git", Tab::Git, "Ctrl+8"),
+        ("Events", Tab::Events, "Ctrl+9"),
+        ("Models", Tab::Models, ""),
+        ("Snapshots", Tab::Snapshots, ""),
+    ] {
+        all.push(cmd("Go to", label, key, neutral, go(tab)));
+    }
+    all.push(cmd(
+        "Go to",
+        "Terminal mode",
+        "Ctrl+Shift+S",
+        neutral,
+        vec![Message::SetMode(Mode::Terminal)],
+    ));
+    for workspace in &snapshot.workspaces {
         all.push(cmd(
-            "New tab",
-            vec![Message::Act(Action::NewTab(workspace.clone()))],
+            "Go to",
+            format!("Workspace: {}", workspace.label),
+            "terminal",
+            neutral,
+            vec![
+                Message::SetMode(Mode::Terminal),
+                Message::Act(Action::FocusSpace(workspace.workspace_id.clone())),
+            ],
         ));
+    }
+    if let Some(workspace) = snapshot.focused_workspace_id.clone() {
         for tab in snapshot.tabs_of(&workspace) {
             all.push(cmd(
+                "Go to",
                 format!("Tab: {}", tab.label),
+                "terminal",
+                neutral,
                 vec![
                     Message::SetMode(Mode::Terminal),
                     Message::Act(Action::FocusTab(tab.tab_id.clone())),
@@ -92,21 +92,94 @@ pub fn build(snapshot: &Snapshot) -> Vec<Command> {
             ));
         }
     }
-    for workspace in &snapshot.workspaces {
+    // what waits for the human
+    for g in &data.gates {
+        let run = data
+            .runs
+            .iter()
+            .find(|r| task_of_run(&r.run.task) == Some(g.task_id));
+        let mut run_msgs = go(Tab::Runs);
+        if let Some(r) = run {
+            run_msgs.push(Message::Panel(PanelMsg::SelectRun(r.run.id.clone())));
+        }
         all.push(cmd(
-            format!("Space: {}", workspace.label),
-            vec![
-                Message::SetMode(Mode::Terminal),
-                Message::Act(Action::FocusSpace(workspace.workspace_id.clone())),
-            ],
+            "Needs you",
+            match &g.gate {
+                Gate::PushPr(n) => format!("Publish subtask {n} of task #{}", g.task_id),
+                Gate::Plan => format!("Approve the plan of task #{}", g.task_id),
+            },
+            "awaiting-approval",
+            theme::WARN,
+            run_msgs,
         ));
     }
     for agent in &snapshot.agents {
+        let status = agent.status();
         all.push(cmd(
-            format!("Agent: {}", agent.display_name()),
+            "Agents",
+            agent.display_name(),
+            theme::status_name(status),
+            theme::status_color(status),
             vec![Message::GoToPane(agent.pane_id.clone())],
         ));
     }
+    for t in &data.tasks {
+        let mut msgs = go(Tab::Tasks);
+        msgs.push(Message::Panel(PanelMsg::SelectTask(t.status.id)));
+        all.push(cmd(
+            "Tasks",
+            format!("#{} {}", t.status.id, t.status.title),
+            t.status.state.clone(),
+            crate::panel::task_state_color(&t.status.state),
+            msgs,
+        ));
+    }
+    for p in &data.patterns {
+        all.push(cmd(
+            "Run a pattern",
+            format!("Run {}", p.name),
+            "pattern",
+            theme::VIOLET,
+            vec![
+                Message::SetMode(Mode::Shepherd),
+                Message::Panel(PanelMsg::PickAndLaunch(p.name.clone())),
+            ],
+        ));
+    }
+    all.push(cmd(
+        "Commands",
+        "Clean finished runs",
+        "asks twice",
+        neutral,
+        vec![
+            Message::SetMode(Mode::Shepherd),
+            Message::Panel(PanelMsg::Tab(Tab::Runs)),
+            Message::Panel(PanelMsg::Arm(Armed::CleanRuns)),
+        ],
+    ));
+    all.push(cmd(
+        "Commands",
+        "New workspace",
+        "",
+        neutral,
+        vec![Message::Act(Action::NewSpace)],
+    ));
+    if let Some(workspace) = snapshot.focused_workspace_id.clone() {
+        all.push(cmd(
+            "Commands",
+            "New tab",
+            "",
+            neutral,
+            vec![Message::Act(Action::NewTab(workspace))],
+        ));
+    }
+    all.push(cmd(
+        "Commands",
+        "Reload the panels",
+        "",
+        neutral,
+        vec![Message::Reload],
+    ));
     all
 }
 
@@ -116,8 +189,8 @@ pub fn filter<'a>(commands: &'a [Command], query: &str) -> Vec<&'a Command> {
     commands
         .iter()
         .filter(|c| {
-            let label = c.label.to_lowercase();
-            words.iter().all(|w| label.contains(w))
+            let hay = format!("{} {} {}", c.label, c.hint, c.group).to_lowercase();
+            words.iter().all(|w| hay.contains(w))
         })
         .collect()
 }
@@ -136,15 +209,17 @@ mod tests {
     }
 
     #[test]
-    fn the_palette_lists_spaces_tabs_of_the_focused_space_and_agents() {
-        let all = build(&snapshot());
+    fn the_palette_lists_the_groups_of_the_spec() {
+        let all = build(&snapshot(), &Data::default());
         let labels: Vec<&str> = all.iter().map(|c| c.label.as_str()).collect();
         for expected in [
-            "Space: alpha",
-            "Space: beta",
+            "Overview",
+            "Terminal mode",
+            "Workspace: alpha",
+            "Workspace: beta",
             "Tab: logs",
-            "Agent: coder-1",
-            "Run a pattern",
+            "coder-1",
+            "Clean finished runs",
             "New tab",
         ] {
             assert!(
@@ -154,28 +229,33 @@ mod tests {
         }
         assert!(
             !labels.contains(&"Tab: other"),
-            "tabs of other spaces are not listed"
+            "tabs of other workspaces are not listed"
+        );
+        let groups: Vec<&str> = all.iter().map(|c| c.group).collect();
+        let first_of = |g: &str| groups.iter().position(|x| *x == g).unwrap();
+        assert!(
+            first_of("Go to") < first_of("Agents") && first_of("Agents") < first_of("Commands")
         );
     }
 
     #[test]
     fn a_query_needs_every_word_in_any_order_and_case() {
-        let all = build(&snapshot());
+        let all = build(&snapshot(), &Data::default());
         let hits = |q: &str| {
             filter(&all, q)
                 .into_iter()
                 .map(|c| c.label.clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(hits("space BETA"), ["Space: beta"]);
-        assert_eq!(hits("coder agent"), ["Agent: coder-1"]);
+        assert_eq!(hits("workspace BETA"), ["Workspace: beta"]);
+        assert_eq!(hits("coder agents"), ["coder-1"]);
         assert!(hits("zzz").is_empty());
         assert_eq!(hits("").len(), all.len());
     }
 
     #[test]
     fn destructive_commands_only_arm_the_button() {
-        let all = build(&snapshot());
+        let all = build(&snapshot(), &Data::default());
         let clean = all
             .iter()
             .find(|c| c.label.starts_with("Clean finished"))

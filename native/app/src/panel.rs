@@ -57,6 +57,7 @@ pub enum Armed {
     StopRun(String),
     DeleteRun(String),
     CleanRuns,
+    #[allow(dead_code)]
     CleanBus,
     CleanBusForce,
     ArchiveDone,
@@ -495,7 +496,7 @@ fn has_run(state: &str) -> bool {
     )
 }
 
-fn task_state_color(state: &str) -> Color {
+pub(crate) fn task_state_color(state: &str) -> Color {
     match state {
         "done" | "completed" | "archived" => OK,
         "blocked" | "waiting" => WARN,
@@ -916,7 +917,7 @@ impl Panel {
                 return Task::perform(
                     async move {
                         actions::topic_publish(&api, &topic, &text)
-                            .map(|_| format!("Sent to #{topic}"))
+                            .map(|_| format!("Sent to #{topic}."))
                     },
                     |r| Message::Panel(PanelMsg::Done(r)),
                 );
@@ -1083,8 +1084,14 @@ impl Panel {
                 self.armed = None;
                 return Task::perform(
                     async move {
-                        actions::control_run(&api, &id, control, Some(&root))
-                            .map(|_| format!("{control:?}: ok"))
+                        actions::control_run(&api, &id, control, Some(&root)).map(|_| match control
+                        {
+                            RunControl::Pause => format!(
+                                "Paused {id}. Its agents finish their current step, then wait."
+                            ),
+                            RunControl::Resume => format!("Resumed {id}."),
+                            RunControl::Stop => format!("Stopped {id} and closed its agents."),
+                        })
                     },
                     |r| Message::Panel(PanelMsg::Done(r)),
                 );
@@ -1107,7 +1114,7 @@ impl Panel {
                         return Task::perform(
                             async move {
                                 actions::delete_pattern(&api, &name, &root)
-                                    .map(|src| format!("Deleted pattern {name} ({src})"))
+                                    .map(|_| format!("Deleted pattern {name}."))
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
                         );
@@ -1119,7 +1126,7 @@ impl Panel {
                         return Task::perform(
                             async move {
                                 actions::delete_task(&api, id, &root)
-                                    .map(|_| format!("Deleted task #{id}"))
+                                    .map(|_| format!("Deleted task #{id}."))
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
                         );
@@ -1199,7 +1206,7 @@ impl Panel {
                         return Task::perform(
                             async move {
                                 actions::snapshot_delete(&api, &id, &root)
-                                    .map(|_| format!("Deleted snapshot {id}"))
+                                    .map(|_| format!("Deleted snapshot {id}."))
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
                         );
@@ -1228,7 +1235,12 @@ impl Panel {
                         return Task::perform(
                             async move {
                                 actions::approve_gate(&api, id, &gate.target(), &root)
-                                    .map(|_| format!("Approved {} of task #{id}", gate.label()))
+                                    .map(|_| match &gate {
+                                        Gate::Plan => format!("Approved the plan of task #{id}."),
+                                        Gate::PushPr(n) => format!(
+                                            "Approved subtask {n}. Pushed its branch and opened its pull request."
+                                        ),
+                                    })
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
                         );
@@ -1244,7 +1256,20 @@ impl Panel {
                                     reason.as_deref(),
                                     &root,
                                 )
-                                .map(|_| format!("Rejected {} of task #{id}", gate.label()))
+                                .map(|_| {
+                                    let why = reason
+                                        .as_deref()
+                                        .map(|r| format!(" ({r})"))
+                                        .unwrap_or_default();
+                                    match &gate {
+                                        Gate::Plan => {
+                                            format!("Rejected the plan of task #{id}{why}. Nothing was started.")
+                                        }
+                                        Gate::PushPr(n) => {
+                                            format!("Rejected subtask {n}{why}. Nothing was pushed.")
+                                        }
+                                    }
+                                })
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
                         );
@@ -1270,7 +1295,10 @@ impl Panel {
                                         actions::archive_task(&api, **id, Some(&root)).is_ok()
                                     })
                                     .count();
-                                Ok(format!("Archived {archived} task(s)"))
+                                Ok(format!(
+                                    "Archived {archived} done task{}.",
+                                    if archived == 1 { "" } else { "s" }
+                                ))
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
                         );
@@ -1443,8 +1471,12 @@ impl Panel {
                 self.importing = None;
                 return Task::perform(
                     async move {
-                        actions::import_issue(&api, &issue, &root)
-                            .map(|id| format!("Imported {} as task #{id}", issue.trim()))
+                        actions::import_issue(&api, &issue, &root).map(|id| {
+                            format!(
+                                "Imported issue {} as task #{id}.",
+                                issue.trim().trim_start_matches('#')
+                            )
+                        })
                     },
                     |r| Message::Panel(PanelMsg::Done(r)),
                 );
@@ -1495,7 +1527,7 @@ impl Panel {
                         match editing {
                             None => {
                                 actions::create_task(&api, &root, &title, &description, &criteria)
-                                    .map(|id| format!("Created task #{id}"))
+                                    .map(|id| format!("Created task #{id}."))
                             }
                             Some(id) => actions::update_task(
                                 &api,
@@ -4519,6 +4551,11 @@ impl Panel {
         self.history.clear();
     }
 
+    /// Esc: clears the filter box of the current list.
+    pub fn clear_filter(&mut self) {
+        self.filter.clear();
+    }
+
     /// Esc: an armed button goes back to normal.
     pub fn disarm(&mut self) {
         self.armed = None;
@@ -5040,7 +5077,7 @@ impl Panel {
         .padding([0, 28])
         .width(Length::Fill)
         .height(64)
-        .center_y(Length::Fill)
+        .align_y(iced::alignment::Vertical::Center)
         .style(theme::top_line_style);
         column![
             header,

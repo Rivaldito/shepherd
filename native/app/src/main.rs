@@ -540,6 +540,7 @@ impl App {
                 if let keyboard::Event::KeyPressed { key, modifiers, .. } = &event {
                     if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
                         self.panel.disarm();
+                        self.panel.clear_filter();
                     }
                     let is_p =
                         matches!(key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("p"));
@@ -948,7 +949,10 @@ impl App {
                 let hits = self
                     .palette
                     .as_ref()
-                    .map(|p| commands::filter(&commands::build(&self.snapshot), &p.query).len())
+                    .map(|p| {
+                        commands::filter(&commands::build(&self.snapshot, &self.data), &p.query)
+                            .len()
+                    })
                     .unwrap_or(0);
                 if let (Some(palette), true) = (self.palette.as_mut(), hits > 0) {
                     palette.selected =
@@ -959,7 +963,7 @@ impl App {
                 let Some(palette) = self.palette.take() else {
                     return Task::none();
                 };
-                let all = commands::build(&self.snapshot);
+                let all = commands::build(&self.snapshot, &self.data);
                 let run = commands::filter(&all, &palette.query)
                     .get(palette.selected)
                     .map(|c| c.run.clone());
@@ -1726,62 +1730,99 @@ impl App {
     }
 
     /// The command palette, drawn over the window (not a separate window): a box to type in and the matches.
+    /// The command palette: a 640 wide panel 72 px from the top over a dimmed window; rows in groups, 34 high.
     fn palette_view<'a>(&'a self, palette: &'a Palette) -> Element<'a, Message> {
-        let all = commands::build(&self.snapshot);
+        let all = commands::build(&self.snapshot, &self.data);
         let hits = commands::filter(&all, &palette.query);
-        let mut list = column![].spacing(1);
-        for (index, hit) in hits.iter().take(12).enumerate() {
+        let mut list = column![].spacing(0);
+        let mut group = "";
+        for (index, hit) in hits.iter().take(60).enumerate() {
+            if hit.group != group {
+                group = hit.group;
+                list = list.push(
+                    container(text(group).size(11).color(DIM)).padding(pad(10.0, 14.0, 4.0, 14.0)),
+                );
+            }
+            let dot = hit.dot;
             list = list.push(
-                container(text(hit.label.clone()).size(12))
-                    .width(Length::Fill)
-                    .padding([4, 8])
-                    .style(move |_| container::Style {
-                        background: (index == palette.selected).then_some(Background::Color(
-                            iced::Color {
-                                a: 0.2,
-                                ..theme::ACCENT
-                            },
-                        )),
-                        ..container::Style::default()
-                    }),
+                container(
+                    row![
+                        text("■").size(8).color(dot),
+                        text(hit.label.clone()).size(13).width(Length::Fill),
+                        text(hit.hint.clone()).size(11).color(theme::FAINT),
+                    ]
+                    .spacing(10)
+                    .align_y(iced::Alignment::Center),
+                )
+                .width(Length::Fill)
+                .height(34)
+                .padding([0, 14])
+                .align_y(iced::alignment::Vertical::Center)
+                .style(move |_| container::Style {
+                    background: (index == palette.selected)
+                        .then_some(Background::Color(theme::SELECTED)),
+                    ..container::Style::default()
+                }),
             );
         }
         if hits.is_empty() {
             list = list
-                .push(container(text("No command matches.").size(12).color(DIM)).padding([4, 8]));
+                .push(container(text("No command matches.").size(12).color(DIM)).padding([10, 14]));
         }
-        let input = text_input("Type a command…", &palette.query)
-            .id(PALETTE_INPUT)
-            .on_input(Message::PaletteQuery)
-            .on_submit(Message::PaletteRun)
-            .padding(6)
-            .size(13);
-        let shortcuts = row![
-            text("↑↓ navigate").size(10).color(DIM),
-            text("Enter run").size(10).color(DIM),
-            text("Esc close").size(10).color(DIM),
-        ]
-        .spacing(10);
-        let view_shortcuts = text("Ctrl+1–5 workspace · Ctrl+6–9 inspect")
-            .size(10)
-            .color(DIM);
-        let boxed = container(column![input, list, shortcuts, view_shortcuts].spacing(4))
-            .width(480)
-            .padding(6)
-            .style(|_| container::Style {
-                background: Some(Background::Color(PANEL)),
-                border: Border {
-                    color: LINE,
-                    width: 0.5,
-                    radius: 0.0.into(),
-                },
-                ..container::Style::default()
-            });
+        let header = container(
+            row![
+                text("⌕").size(15).color(DIM),
+                text_input("Type a view, agent, task or command", &palette.query)
+                    .id(PALETTE_INPUT)
+                    .on_input(Message::PaletteQuery)
+                    .on_submit(Message::PaletteRun)
+                    .padding(6)
+                    .size(14),
+                text("Esc").size(10).color(theme::FAINT),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center),
+        )
+        .height(50)
+        .padding([0, 14])
+        .align_y(iced::alignment::Vertical::Center)
+        .style(theme::bottom_line_style);
+        let footer = container(
+            text("Enter to open · Up and down to move · Ctrl+Shift+P to open from anywhere")
+                .size(10.5)
+                .color(DIM),
+        )
+        .padding([8, 14])
+        .width(Length::Fill)
+        .style(theme::top_line_style);
+        let boxed = container(column![
+            header,
+            theme::scroll(list).height(Length::Shrink),
+            footer
+        ])
+        .width(640)
+        .max_height(560)
+        .style(|_| container::Style {
+            background: Some(Background::Color(PANEL)),
+            border: Border {
+                color: theme::LINE2,
+                width: 1.0,
+                radius: 10.0.into(),
+            },
+            ..container::Style::default()
+        });
+        // the backdrop dims the whole window
         container(boxed)
             .center_x(Length::Fill)
+            .width(Length::Fill)
+            .height(Length::Fill)
             .padding(iced::Padding {
-                top: 70.0,
+                top: 72.0,
                 ..iced::Padding::ZERO
+            })
+            .style(|_| container::Style {
+                background: Some(Background::Color(Color::from_rgba8(3, 3, 6, 0.72))),
+                ..container::Style::default()
             })
             .into()
     }

@@ -678,11 +678,22 @@ impl ConfigPanel {
                 return Task::perform(
                     async move {
                         if form.worktree {
-                            actions::git_worktree_add(&api, &form.first, &form.second, &root)
-                                .map(|dir| format!("Worktree created at {dir}"))
+                            actions::git_worktree_add(&api, &form.first, &form.second, &root).map(
+                                |dir| format!("Created worktree {dir} on {}.", form.second.trim()),
+                            )
                         } else {
-                            actions::git_branch(&api, &form.first, &form.second, &root)
-                                .map(|_| format!("Branch {} created", form.first.trim()))
+                            actions::git_branch(&api, &form.first, &form.second, &root).map(|_| {
+                                let base = form.second.trim();
+                                format!(
+                                    "Created branch {} from {}.",
+                                    form.first.trim(),
+                                    if base.is_empty() {
+                                        "the current commit"
+                                    } else {
+                                        base
+                                    }
+                                )
+                            })
                         }
                     },
                     |r| cfg(CfgMsg::GitDone(r)),
@@ -698,7 +709,7 @@ impl ConfigPanel {
                 return Task::perform(
                     async move {
                         actions::git_worktree_remove(&api, &path, &root)
-                            .map(|_| format!("Removed worktree {path}"))
+                            .map(|_| format!("Removed worktree {path}. The branch is kept."))
                     },
                     |r| cfg(CfgMsg::GitDone(r)),
                 );
@@ -739,7 +750,7 @@ impl ConfigPanel {
                     return Task::perform(
                         async move {
                             actions::topic_publish(&api, &topic, &form.first)
-                                .map(|_| format!("Sent to #{topic}"))
+                                .map(|_| format!("Sent to #{topic}."))
                         },
                         |r| cfg(CfgMsg::TopicDone(r)),
                     );
@@ -759,8 +770,12 @@ impl ConfigPanel {
                 self.topic_form = None;
                 return Task::perform(
                     async move {
-                        actions::topic_create(&api, &name, partitions)
-                            .map(|_| format!("Topic #{name} created"))
+                        actions::topic_create(&api, &name, partitions).map(|_| {
+                            format!(
+                                "Created topic #{name} with {partitions} partition{}.",
+                                if partitions == 1 { "" } else { "s" }
+                            )
+                        })
                     },
                     |r| cfg(CfgMsg::TopicDone(r)),
                 );
@@ -802,7 +817,7 @@ impl ConfigPanel {
                 return Task::perform(
                     async move {
                         actions::topic_publish(&api, &topic, &text)
-                            .map(|_| format!("Sent to #{topic}"))
+                            .map(|_| format!("Sent to #{topic}."))
                     },
                     |r| cfg(CfgMsg::TopicDone(r)),
                 );
@@ -1864,7 +1879,7 @@ impl ConfigPanel {
             .padding([0, 28])
             .width(Length::Fill)
             .height(64)
-            .center_y(Length::Fill)
+            .align_y(iced::alignment::Vertical::Center)
             .style(crate::theme::top_line_style)
             .into(),
             _ => container(text("")).height(0).into(),
