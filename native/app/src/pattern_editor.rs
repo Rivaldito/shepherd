@@ -44,6 +44,8 @@ pub struct PatternEditor {
     pub graph: Graph,
     pub selected: Option<Sel>,
     connecting: Option<Sel>,
+    /// Connect is on but no sender was picked yet: the next click is the sender.
+    connect_armed: bool,
     cfg: Option<Config>,
     pub problems: Vec<(bool, String, String)>,
     /// What the inspector's boxes show while typing (a half-typed number is not a valid value yet).
@@ -63,6 +65,7 @@ impl PatternEditor {
                 .ok()
                 .and_then(|k| Sel::from_key(&k)),
             connecting: None,
+            connect_armed: false,
             cfg: None,
             problems: view.problems,
             fields: Vec::new(),
@@ -149,16 +152,62 @@ impl PatternEditor {
         if !matches!(msg, EditMsg::DeleteSelected) {
             self.delete_armed = false;
         }
+        // a built-in can be looked at, not changed
+        if self.editor.read_only()
+            && matches!(
+                msg,
+                EditMsg::AddAgent
+                    | EditMsg::AddTopic
+                    | EditMsg::DeleteSelected
+                    | EditMsg::Start(_)
+                    | EditMsg::Field(..)
+            )
+        {
+            return Some(crate::ui::info(&format!(
+                "{} is built in and read-only. Duplicate it to change it.",
+                self.editor.pattern.name
+            )));
+        }
         match msg {
             EditMsg::Press(key) => {
                 let target = Sel::from_key(&key);
+                if self.connect_armed {
+                    self.connect_armed = false;
+                    self.connecting = target.clone();
+                    self.selected = target;
+                    self.refresh_fields();
+                    return None;
+                }
                 if let (Some(from), Some(to)) = (self.connecting.take(), target.clone()) {
+                    if self.editor.read_only() {
+                        return Some(crate::ui::info(&format!(
+                            "{} is built in and read-only. Duplicate it to change it.",
+                            self.editor.pattern.name
+                        )));
+                    }
                     return match self.editor.connect(&from, &to) {
                         Ok(()) => {
                             self.changed(root);
                             Some(format!("Connected {} → {}", from.key(), to.key()))
                         }
-                        Err(e) => Some(e),
+                        Err(e) => {
+                            let kind = match (&from, &to) {
+                                (Sel::Agent(_), Sel::Agent(_)) => Some("agent"),
+                                (Sel::Topic(_), Sel::Topic(_)) => Some("topic"),
+                                _ => None,
+                            };
+                            Some(match kind {
+                                Some(kind) => crate::panel::refusal(
+                                    "Connect an agent to a topic, or a topic to an agent.",
+                                    &format!(
+                                        "error: edge {} -> {} joins two {kind}s",
+                                        from.key().split_once(':').map_or("", |(_, n)| n),
+                                        to.key().split_once(':').map_or("", |(_, n)| n)
+                                    ),
+                                ),
+                                None => e,
+                            })
+                        }
                     };
                 }
                 self.selected = target;
@@ -186,15 +235,14 @@ impl PatternEditor {
                 self.refresh_fields();
             }
             EditMsg::ToggleConnect => {
-                self.connecting = match (self.connecting.take(), self.selected.clone()) {
-                    (None, Some(from)) => Some(from),
-                    _ => None,
-                };
-                return Some(if self.connecting.is_some() {
-                    "Click the node to connect to (agent → topic publishes, topic → agent consumes).".into()
+                if self.connecting.is_some() || self.connect_armed {
+                    self.connecting = None;
+                    self.connect_armed = false;
+                } else if let Some(from) = self.selected.clone() {
+                    self.connecting = Some(from);
                 } else {
-                    "Select a node first, then Connect.".into()
-                });
+                    self.connect_armed = true;
+                }
             }
             EditMsg::DeleteSelected => {
                 if self.selected.is_none() {
@@ -212,24 +260,31 @@ impl PatternEditor {
                 self.delete_armed = false;
             }
             EditMsg::Duplicate => {
-                let name = format!("{}-copy", self.editor.pattern.name);
+                let from = self.editor.pattern.name.clone();
+                let name = format!("{from}-copy");
                 self.editor = self.editor.duplicate(&name);
                 self.path = None;
                 self.refresh_fields();
-                return Some(format!(
-                    "Duplicated as {name}: rename it if you like, then Save."
-                ));
+                return Some(format!("Duplicated {from} as {name}. Edit it and save."));
             }
-            EditMsg::ZoomIn => self.zoom = (self.zoom + 0.1).min(2.0),
-            EditMsg::ZoomOut => self.zoom = (self.zoom - 0.1).max(0.5),
-            EditMsg::ResetZoom => self.zoom = 1.0,
+            EditMsg::ZoomIn => self.zoom = ((self.zoom * 10.0).round() / 10.0 + 0.1).min(1.4),
+            EditMsg::ZoomOut => self.zoom = ((self.zoom * 10.0).round() / 10.0 - 0.1).max(0.4),
+            // fit the whole graph in a viewport of about 700 x 380
+            EditMsg::ResetZoom => {
+                self.zoom = (700.0 / self.graph.width.max(1.0))
+                    .min(380.0 / self.graph.height.max(1.0))
+                    .clamp(0.4, 1.4)
+            }
             EditMsg::Save => {
+                let name = self.editor.pattern.name.clone();
                 return Some(match self.editor.save(root) {
                     Ok(path) => {
                         self.path = Some(path.display().to_string());
-                        format!("Saved {}", path.display())
+                        format!("Saved {name} to .shepherd/patterns/{name}.yaml.")
                     }
-                    Err(e) => e,
+                    Err(e) => {
+                        crate::panel::refusal(&format!("Not saved: {name} is not valid."), &e)
+                    }
                 });
             }
             EditMsg::Start(on) => {
@@ -312,9 +367,9 @@ impl PatternEditor {
     pub fn view<'a>(&'a self, frame: u32, delete_armed: bool) -> Element<'a, Message> {
         let edit = |m: EditMsg| Message::Panel(crate::panel::PanelMsg::EditPattern(m));
         let tool = |label: &'static str, msg: EditMsg, on: bool| {
-            button(container(text(label).size(13)).center_y(Length::Fill))
-                .padding([0, 12])
-                .height(32)
+            button(container(text(label).size(12.5)).center_y(Length::Fill))
+                .padding([0, 7])
+                .height(28)
                 .style(crate::theme::outline_button_style(!on))
                 .on_press(edit(msg))
         };
@@ -322,7 +377,11 @@ impl PatternEditor {
         let mut toolbar = row![
             tool("+ Agent", EditMsg::AddAgent, false),
             tool("+ Topic", EditMsg::AddTopic, false),
-            tool("Connect", EditMsg::ToggleConnect, self.connecting.is_some()),
+            tool(
+                "Connect",
+                EditMsg::ToggleConnect,
+                self.connecting.is_some() || self.connect_armed
+            ),
             tool(
                 if self.delete_armed {
                     "Confirm delete"
@@ -333,8 +392,15 @@ impl PatternEditor {
                 self.delete_armed,
             ),
         ]
-        .spacing(6);
+        .spacing(3)
+        .width(Length::Fill);
         toolbar = toolbar
+            .push(container(text("")).width(1).height(20).style(|_| {
+                iced::widget::container::Style {
+                    background: Some(iced::Background::Color(crate::theme::LINE2)),
+                    ..iced::widget::container::Style::default()
+                }
+            }))
             .push(tool("−", EditMsg::ZoomOut, false))
             .push(
                 text(format!("{:.0}%", self.zoom * 100.0))
@@ -487,9 +553,9 @@ impl PatternEditor {
             );
         }
         // inspector
-        let mini_zoom = (280.0 / self.graph.width.max(1.0))
-            .min(92.0 / self.graph.height.max(1.0))
-            .clamp(0.08, 0.32);
+        let mini_zoom = (170.0 / self.graph.width.max(1.0))
+            .min(86.0 / self.graph.height.max(1.0))
+            .clamp(0.05, 0.32);
         let mini_map = container(
             Canvas::new(crate::graph_view::GraphView {
                 graph: &self.graph,
@@ -499,10 +565,11 @@ impl PatternEditor {
                 frame,
                 mini: true,
             })
-            .width(Length::Fill)
-            .height(Length::Fixed(92.0)),
+            .width(170)
+            .height(Length::Fixed(86.0)),
         )
-        .height(Length::Fixed(92.0))
+        .width(170)
+        .height(Length::Fixed(86.0))
         .style(surface_style);
         let mut inspector = column![].spacing(6);
         match &self.selected {
@@ -537,8 +604,8 @@ impl PatternEditor {
                     .push(self.labelled("node", Field::Agent(AgentField::Id)))
                     .push(self.labelled("role", Field::Agent(AgentField::Role)))
                     .push(self.labelled("replicas", Field::Agent(AgentField::Count)))
-                    .push(readonly("subscribe", topics(true)))
-                    .push(readonly("publish", topics(false)));
+                    .push(readonly("reads from", topics(true)))
+                    .push(readonly("publishes to", topics(false)));
                 for (label, f) in [
                     ("vendor", AgentField::Vendor),
                     ("model", AgentField::Model),
@@ -585,15 +652,15 @@ impl PatternEditor {
         inspector = inspector
             .push(self.labelled("pattern", Field::PatternName))
             .push(self.labelled("description", Field::Description))
-            .push(text("MAP").size(11).color(DIM))
-            .push(mini_map)
             .push(
                 text("Click a node to edit it. Drag nodes to arrange them.")
                     .size(11)
                     .color(DIM),
             );
         let canvas = container(
-            crate::theme::scroll(
+            crate::theme::scroll(column![
+                // room under the floating toolbar, so the first nodes are not hidden by it
+                container(text("")).height(44),
                 Canvas::new(crate::graph_view::GraphView {
                     graph: &self.graph,
                     selected: self.selected.as_ref().map(Sel::key),
@@ -602,9 +669,9 @@ impl PatternEditor {
                     frame,
                     mini: false,
                 })
-                .width(Length::Fixed(self.graph.width.max(560.0) * self.zoom))
-                .height(Length::Fixed(self.graph.height.max(360.0) * self.zoom)),
-            )
+                .width(Length::Fixed(self.graph.width.max(960.0) * self.zoom))
+                .height(Length::Fixed(self.graph.height.max(440.0) * self.zoom)),
+            ])
             .direction(scrollable::Direction::Both {
                 vertical: scrollable::Scrollbar::default(),
                 horizontal: scrollable::Scrollbar::default(),
@@ -626,18 +693,40 @@ impl PatternEditor {
         .height(Length::Fill)
         .padding(12)
         .style(crate::theme::inspector_style);
-        let toolbar = container(toolbar.align_y(iced::Alignment::Center)).padding([4, 0]);
-        col = col.push(
-            row![
-                column![toolbar, canvas]
-                    .spacing(8)
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-                inspector
-            ]
-            .spacing(14)
-            .height(Length::Fill),
-        );
+        // the toolbar floats over the top left of the graph and the minimap over the bottom right
+        let hint = if self.connect_armed {
+            "Click the node that sends, then the one that receives."
+        } else if self.connecting.is_some() {
+            "Now click the target. Press Connect again to stop."
+        } else {
+            ""
+        };
+        let mut floating = column![container(
+            toolbar
+                .width(Length::Fill)
+                .align_y(iced::Alignment::Center)
+                .wrap()
+        )
+        .padding([4, 4])
+        .width(Length::Fill)
+        .style(crate::theme::toast_style(crate::theme::LINE2))]
+        .spacing(6);
+        if !hint.is_empty() {
+            floating = floating.push(text(hint).size(11.5).color(crate::theme::ACCENT));
+        }
+        let viewport = iced::widget::stack![
+            canvas,
+            container(floating).padding(10),
+            container(mini_map)
+                .padding(14)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(iced::alignment::Horizontal::Right)
+                .align_y(iced::alignment::Vertical::Bottom),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill);
+        col = col.push(row![viewport, inspector].spacing(14).height(Length::Fill));
         col = col.push(container(checks).padding([6, 0]));
         col.height(Length::Fill).into()
     }
@@ -662,4 +751,53 @@ fn readonly<'a>(label: &'static str, value: String) -> Element<'a, Message> {
     .spacing(8)
     .align_y(iced::Alignment::Center)
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn builtin() -> PatternEditor {
+        let view = shepherd_app_core::pattern_graph::load(Path::new("/nowhere"), "blackboard")
+            .expect("the built-in patterns ship with the app");
+        PatternEditor::from_view(view)
+    }
+
+    #[test]
+    fn zoom_stays_between_40_and_140_percent_in_steps_of_ten() {
+        let root = Path::new("/nowhere");
+        let mut e = builtin();
+        for _ in 0..20 {
+            let _ = e.update(EditMsg::ZoomIn, root);
+        }
+        assert!((e.zoom - 1.4).abs() < 0.001);
+        for _ in 0..20 {
+            let _ = e.update(EditMsg::ZoomOut, root);
+        }
+        assert!((e.zoom - 0.4).abs() < 0.001);
+        let _ = e.update(EditMsg::ResetZoom, root);
+        assert!((0.4..=1.4).contains(&e.zoom));
+    }
+
+    #[test]
+    fn a_built_in_refuses_edits_with_an_info_and_two_agents_cannot_be_connected() {
+        let root = Path::new("/nowhere");
+        let mut e = builtin();
+        let said = e.update(EditMsg::AddAgent, root).unwrap();
+        assert!(said.contains("is built in and read-only"), "{said}");
+        assert!(crate::ui::Toast::new(said).info);
+        // Connect with nothing selected waits for the sender, then the target
+        let agents: Vec<String> = e
+            .graph
+            .nodes
+            .iter()
+            .filter(|n| n.key.starts_with("agent:"))
+            .map(|n| n.key.clone())
+            .collect();
+        assert!(agents.len() >= 2);
+        let _ = e.update(EditMsg::ToggleConnect, root);
+        assert!(e.connect_armed);
+        let _ = e.update(EditMsg::Press(agents[0].clone()), root);
+        assert!(e.connecting.is_some() && !e.connect_armed);
+    }
 }
