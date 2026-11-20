@@ -67,7 +67,7 @@ Shepherd takes automatic copies of every agent's worktree (when it goes idle, wh
 ### Two ways in, one set of data
 
 - **The terminal.** A Shepherd section inside the multiplexer (`Ctrl+b a`), with seven views driven by keyboard or mouse.
-- **The native app.** A desktop window built with iced that shows the same data with graphs, an event feed and editors. A switch (`Ctrl+Shift+S`) moves between the terminal and the Shepherd panel.
+- **The native app.** A desktop window built with iced that shows the same data with graphs, an event feed and editors. One sidebar shows either your terminals or the Shepherd views.
 - **The CLI.** Every action is a command, and most commands accept `--json`.
 
 All three talk to the same server, so what you create in one appears in the others.

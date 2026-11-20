@@ -313,16 +313,6 @@ enum Mode {
     Shepherd,
 }
 
-impl Mode {
-    /// The other one: what `Ctrl+Shift+S` switches to.
-    fn other(self) -> Mode {
-        match self {
-            Mode::Terminal => Mode::Shepherd,
-            Mode::Shepherd => Mode::Terminal,
-        }
-    }
-}
-
 /// Target of a context menu (for rename).
 #[derive(Debug, Clone)]
 enum ContextMenuTarget {
@@ -664,11 +654,6 @@ impl App {
                         matches!(key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("p"));
                     if is_p && modifiers.control() && modifiers.shift() {
                         return Task::done(Message::TogglePalette);
-                    }
-                    let is_s =
-                        matches!(key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("s"));
-                    if is_s && modifiers.control() && modifiers.shift() {
-                        return Task::done(Message::SetMode(self.mode.other()));
                     }
                     // Ctrl+B hides or shows the sidebar, from anywhere (before the terminal gets the key)
                     if modifiers.control()
@@ -1186,7 +1171,8 @@ impl App {
                 self.expanded.insert(id, !now);
             }
             Message::SelectWorkspace(id) => {
-                // it becomes current and open; the mode and the view stay as they are
+                // it becomes current and open, and its terminal is what the main area shows
+                self.mode = Mode::Terminal;
                 self.expanded.insert(id.clone(), true);
                 return Task::done(Message::Act(Action::FocusSpace(id)));
             }
@@ -1779,46 +1765,6 @@ impl App {
             .into()
     }
 
-    /// The two buttons that switch between the terminal and the Shepherd panel: the same place in both modes, the
-    /// active one lifted. `Ctrl+Shift+S` does the same from the keyboard.
-    fn mode_switch(&self) -> Element<'_, Message> {
-        let segment = |glyph: &'static str, label: &'static str, mode: Mode| {
-            tooltip(
-                button(
-                    container(
-                        row![text(glyph).size(12), text(label).size(12.5)]
-                            .spacing(7)
-                            .align_y(iced::Alignment::Center),
-                    )
-                    .center_y(Length::Fill),
-                )
-                .padding([0, 12])
-                .height(26)
-                .style(item_style(self.mode == mode))
-                .on_press(Message::SetMode(mode)),
-                text("Switch mode: Ctrl+Shift+S").size(11),
-                tooltip::Position::Bottom,
-            )
-        };
-        container(
-            row![
-                segment(">_", "Terminal", Mode::Terminal),
-                segment("◆", "Shepherd", Mode::Shepherd),
-            ]
-            .spacing(2),
-        )
-        .padding(2)
-        .style(|_| container::Style {
-            border: Border {
-                color: theme::LINE2,
-                width: 1.0,
-                radius: 7.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
-    }
-
     /// The terminal: the tabs of the workspace, and the screen in a thin frame with some margin.
     fn terminal_pane(&self) -> Element<'_, Message> {
         let screen: Element<'_, Message> = match &self.surface {
@@ -2032,7 +1978,6 @@ impl App {
                 .padding(0)
                 .style(theme::link_button_style())
                 .on_press(Message::GoTo(panel::Tab::Overview)),
-                self.mode_switch(),
                 self.session_buttons(),
                 // the search box gives way before anything else is cut off (up to 360 px)
                 container(container(self.search_box()).max_width(360))
@@ -2543,7 +2488,7 @@ impl App {
             container(text("")).width(Length::Fill),
             text(if self.window.width >= 1500.0 {
                 format!(
-                    "{panes} pane{} in tab {focused_tab}. Mouse and scrollback work as in your terminal. Ctrl+Shift+S goes to Shepherd.",
+                    "{panes} pane{} in tab {focused_tab}. Mouse and scrollback work as in your terminal.",
                     if panes == 1 { "" } else { "s" }
                 )
             } else {
@@ -3400,13 +3345,6 @@ fn connection() -> impl iced::futures::Stream<Item = Message> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn the_shortcut_toggles_between_the_two_modes() {
-        assert_eq!(Mode::Terminal.other(), Mode::Shepherd);
-        assert_eq!(Mode::Shepherd.other(), Mode::Terminal);
-        assert_eq!(Mode::Terminal.other().other(), Mode::Terminal);
-    }
-
     use super::*;
 
     #[test]

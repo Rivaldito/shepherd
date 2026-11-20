@@ -59,13 +59,6 @@ pub fn build(snapshot: &Snapshot, data: &Data) -> Vec<Command> {
     ] {
         all.push(cmd("Go to", label, key, neutral, go(tab)));
     }
-    all.push(cmd(
-        "Go to",
-        "Terminal mode",
-        "Ctrl+Shift+S",
-        neutral,
-        vec![Message::SetMode(Mode::Terminal)],
-    ));
     for workspace in &snapshot.workspaces {
         all.push(cmd(
             "Go to",
@@ -221,7 +214,6 @@ mod tests {
         let labels: Vec<&str> = all.iter().map(|c| c.label.as_str()).collect();
         for expected in [
             "Overview",
-            "Terminal mode",
             "Workspace: alpha",
             "Workspace: beta",
             "Tab: logs",

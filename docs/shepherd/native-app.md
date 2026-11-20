@@ -2,12 +2,12 @@
 
 Shepherd also ships a desktop window, built with [iced](https://iced.rs) in `native/`. It is a client of the same server the terminal UI and the CLI use, so it shows the same agents, tasks, runs and patterns. Nothing you do there is stored separately.
 
-The window has two modes, and a switch at the top moves between them:
+The window is one view with one sidebar, and the sidebar decides what the main area shows:
 
-- **Terminal:** your workspaces, tabs and panes, rendered with a monospace grid, with the tab bar, status bar and frame of a terminal.
-- **Shepherd:** the orchestration panel with eleven views.
+- **A workspace, a tab or an agent** (or *New terminal*): your terminal, rendered with a monospace grid, with the tab bar and the frame of a terminal.
+- **One of the eleven views** (Overview, Runs, Agents, Tasks, Patterns, Activity, Skills, Git, Events, Models, Snapshots): the orchestration panel.
 
-Press `Ctrl+Shift+S` to switch between the two, or click the `Terminal | Shepherd` switch in the top bar.
+There is no mode switch: click a workspace name, a tab chip or an agent to get a terminal, and a view in the sidebar (or `Ctrl+1`..`Ctrl+9`) to get its panel.
 
 ## 1. Install and run
 
@@ -56,7 +56,7 @@ Useful variables for `demo.sh`: `MODE=shepherd` starts on the Shepherd panel, `T
 
 ### Top bar and sessions
 
-The top bar holds the `Terminal | Shepherd` switch. A row of **sessions** lists the servers known to the `shepherd` binary. From it you can:
+The top bar holds the logo, a row of **sessions** (the servers known to the `shepherd` binary), the search box and the connection state. From the sessions row you can:
 
 - switch to another session,
 - create a new one with `+` (it starts a named server),
@@ -74,7 +74,6 @@ The same from a terminal: `shepherd server restart` (stops the server if it is r
 
 | Keys | Action |
 |---|---|
-| `Ctrl+Shift+S` | Switch between Terminal and Shepherd |
 | `Ctrl+Shift+P` | Open the command palette |
 | `Ctrl+B` | Show or hide the sidebar |
 | `Ctrl+1`..`Ctrl+5` | Workspace views: Overview, Runs, Agents, Tasks, Patterns |
