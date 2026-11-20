@@ -4217,7 +4217,8 @@ impl Panel {
                 text(t.status.title.clone())
                     .font(theme::MONO_BOLD)
                     .size(13)
-                    .color(theme::HI),
+                    .color(theme::HI)
+                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
             ]
             .spacing(8)]
             .spacing(8);
@@ -4269,7 +4270,12 @@ impl Panel {
                 .iter()
                 .find(|r| task_of_run(&r.run.task) == Some(t.status.id))
             {
-                body = body.push(text(format!("run {}", r.run.id)).size(11).color(ACCENT));
+                body = body.push(
+                    text(format!("run {}", r.run.id))
+                        .size(11)
+                        .color(ACCENT)
+                        .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
+                );
             }
             button(body)
                 .width(Length::Fill)
@@ -4470,7 +4476,8 @@ impl Panel {
                                 text(t.status.title.clone())
                                     .font(theme::MONO_BOLD)
                                     .size(18)
-                                    .color(theme::HI),
+                                    .color(theme::HI)
+                                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
                                 badge(t.status.state.clone(), state_color),
                             ]
                             .spacing(10)
@@ -4494,7 +4501,9 @@ impl Panel {
                         col = col.push(
                             column![
                                 theme::label("SPECIFICATION"),
-                                text(t.description.clone()).size(13)
+                                text(t.description.clone())
+                                    .size(13)
+                                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
                             ]
                             .spacing(8),
                         );
@@ -4535,7 +4544,10 @@ impl Panel {
                                             ..container::Style::default()
                                         }
                                     }),
-                                    text(text_of).size(13).width(Length::Fill),
+                                    text(text_of)
+                                        .size(13)
+                                        .width(Length::Fill)
+                                        .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
                                 ]
                                 .spacing(10),
                             );
@@ -4557,7 +4569,8 @@ impl Panel {
                                 text(s.title.clone())
                                     .size(12.5)
                                     .color(theme::HI)
-                                    .width(Length::Fill),
+                                    .width(Length::Fill)
+                                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
                             ]
                             .spacing(8)
                             .align_y(iced::Alignment::Center);
@@ -4583,7 +4596,10 @@ impl Panel {
                     let kv = |k: &'static str, v: String| {
                         row![
                             text(k).size(11.5).color(DIM).width(70),
-                            text(v).size(12).color(FG)
+                            text(v)
+                                .size(12)
+                                .color(FG)
+                                .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
                         ]
                         .spacing(8)
                     };
@@ -4945,7 +4961,7 @@ impl Panel {
                         row![
                             row![
                                 text("■").size(10).color(status_color(status)),
-                                text(a.id.clone())
+                                text(crate::sidebar::ellipsize(&a.id, 11))
                                     .font(theme::MONO_BOLD)
                                     .size(12.5)
                                     .color(theme::HI),
@@ -4969,7 +4985,7 @@ impl Panel {
                                 text(if a.task_text.is_empty() {
                                     String::new()
                                 } else {
-                                    a.task_text.chars().take(32).collect()
+                                    crate::sidebar::ellipsize(&a.task_text, 32)
                                 })
                                 .size(11.5)
                                 .color(DIM)
@@ -5074,17 +5090,19 @@ impl Panel {
                 lag_rows = lag_rows.push(
                     button(
                         row![
-                            text(format!("#{}", t.name))
+                            text(crate::sidebar::ellipsize(&format!("#{}", t.name), 15))
                                 .size(12.5)
                                 .color(theme::VIOLET)
                                 .width(120),
                             container(
                                 row![
-                                    text(g.group.clone())
+                                    text(crate::sidebar::ellipsize(&g.group, 14))
                                         .font(theme::MONO_BOLD)
                                         .size(12.5)
                                         .color(theme::HI),
-                                    text(g.members.join(", ")).size(11).color(DIM),
+                                    text(crate::sidebar::ellipsize(&g.members.join(", "), 16))
+                                        .size(11)
+                                        .color(DIM),
                                 ]
                                 .spacing(8)
                             )
@@ -5107,7 +5125,9 @@ impl Panel {
                                             FG
                                         })
                                     },
-                                    text(detail).size(11).color(theme::FAINT),
+                                    text(crate::sidebar::ellipsize(&detail, 12))
+                                        .size(11)
+                                        .color(theme::FAINT),
                                 ]
                                 .spacing(8)
                             )
