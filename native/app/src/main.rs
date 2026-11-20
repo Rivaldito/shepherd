@@ -211,7 +211,6 @@ enum Message {
     NewSpaceCancel,
     SelectWorkspace(String),
     CloseWorkspace(String),
-    PickTab(String, String),
     NewTerminal(String),
     ToggleSidebar,
     /// Folds or unfolds a group of the views nav: 0 Orchestrate, 1 Inspect.
@@ -311,16 +310,6 @@ const FILM_SHOTS: u32 = {
 enum Mode {
     Terminal,
     Shepherd,
-}
-
-impl Mode {
-    /// The other one: what `Ctrl+Shift+S` switches to.
-    fn other(self) -> Mode {
-        match self {
-            Mode::Terminal => Mode::Shepherd,
-            Mode::Shepherd => Mode::Terminal,
-        }
-    }
 }
 
 /// Target of a context menu (for rename).
@@ -665,11 +654,6 @@ impl App {
                     if is_p && modifiers.control() && modifiers.shift() {
                         return Task::done(Message::TogglePalette);
                     }
-                    let is_s =
-                        matches!(key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("s"));
-                    if is_s && modifiers.control() && modifiers.shift() {
-                        return Task::done(Message::SetMode(self.mode.other()));
-                    }
                     // Ctrl+B hides or shows the sidebar, from anywhere (before the terminal gets the key)
                     if modifiers.control()
                         && !modifiers.shift()
@@ -696,7 +680,7 @@ impl App {
                     {
                         return iced::widget::operation::focus(ui::FILTER_ID);
                     }
-                    if self.mode == Mode::Shepherd && modifiers.control() {
+                    if modifiers.control() {
                         let tab = match key {
                             keyboard::Key::Character(c) => match c.as_str() {
                                 "1" => Some(panel::Tab::Overview),
@@ -713,7 +697,7 @@ impl App {
                             _ => None,
                         };
                         if let Some(tab) = tab {
-                            return Task::done(Message::Panel(panel::PanelMsg::Tab(tab)));
+                            return Task::done(Message::GoTo(tab));
                         }
                     }
                     if self.mode == Mode::Shepherd
@@ -1171,10 +1155,15 @@ impl App {
             Message::ToggleMotion => self.still = !self.still,
             Message::ToggleHistory => self.history_open = !self.history_open,
             Message::GoTo(tab) => {
-                return Task::batch([
-                    Task::done(Message::SetMode(Mode::Shepherd)),
-                    Task::done(Message::Panel(panel::PanelMsg::Tab(tab))),
-                ]);
+                // a view of the sidebar: the main area shows it, whatever it showed before (a terminal included)
+                self.mode = Mode::Shepherd;
+                let ctx = panel::Ctx {
+                    api: self.api_socket.clone(),
+                    data: &self.data,
+                    snapshot: &self.snapshot,
+                    frame: self.frame,
+                };
+                return self.panel.update(panel::PanelMsg::Tab(tab), &ctx);
             }
             Message::ToggleWorkspace(id) => {
                 let now = self.expanded.get(&id).copied().unwrap_or_else(|| {
@@ -1186,14 +1175,10 @@ impl App {
                 self.expanded.insert(id, !now);
             }
             Message::SelectWorkspace(id) => {
-                // it becomes current and open; the mode and the view stay as they are
+                // it becomes current and open, and its terminal is what the main area shows
+                self.mode = Mode::Terminal;
                 self.expanded.insert(id.clone(), true);
                 return Task::done(Message::Act(Action::FocusSpace(id)));
-            }
-            Message::PickTab(ws, tab) => {
-                self.mode = Mode::Terminal;
-                self.expanded.insert(ws, true);
-                return Task::done(Message::Act(Action::FocusTab(tab)));
             }
             Message::NewTerminal(id) => {
                 let name = self
@@ -1779,46 +1764,6 @@ impl App {
             .into()
     }
 
-    /// The two buttons that switch between the terminal and the Shepherd panel: the same place in both modes, the
-    /// active one lifted. `Ctrl+Shift+S` does the same from the keyboard.
-    fn mode_switch(&self) -> Element<'_, Message> {
-        let segment = |glyph: &'static str, label: &'static str, mode: Mode| {
-            tooltip(
-                button(
-                    container(
-                        row![text(glyph).size(12), text(label).size(12.5)]
-                            .spacing(7)
-                            .align_y(iced::Alignment::Center),
-                    )
-                    .center_y(Length::Fill),
-                )
-                .padding([0, 12])
-                .height(26)
-                .style(item_style(self.mode == mode))
-                .on_press(Message::SetMode(mode)),
-                text("Switch mode: Ctrl+Shift+S").size(11),
-                tooltip::Position::Bottom,
-            )
-        };
-        container(
-            row![
-                segment(">_", "Terminal", Mode::Terminal),
-                segment("◆", "Shepherd", Mode::Shepherd),
-            ]
-            .spacing(2),
-        )
-        .padding(2)
-        .style(|_| container::Style {
-            border: Border {
-                color: theme::LINE2,
-                width: 1.0,
-                radius: 7.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
-    }
-
     /// The terminal: the tabs of the workspace, and the screen in a thin frame with some margin.
     fn terminal_pane(&self) -> Element<'_, Message> {
         let screen: Element<'_, Message> = match &self.surface {
@@ -2032,7 +1977,6 @@ impl App {
                 .padding(0)
                 .style(theme::link_button_style())
                 .on_press(Message::GoTo(panel::Tab::Overview)),
-                self.mode_switch(),
                 self.session_buttons(),
                 // the search box gives way before anything else is cut off (up to 360 px)
                 container(container(self.search_box()).max_width(360))
@@ -2543,7 +2487,7 @@ impl App {
             container(text("")).width(Length::Fill),
             text(if self.window.width >= 1500.0 {
                 format!(
-                    "{panes} pane{} in tab {focused_tab}. Mouse and scrollback work as in your terminal. Ctrl+Shift+S goes to Shepherd.",
+                    "{panes} pane{} in tab {focused_tab}. Mouse and scrollback work as in your terminal.",
                     if panes == 1 { "" } else { "s" }
                 )
             } else {
@@ -2745,62 +2689,10 @@ impl App {
                 });
             let mut block = column![ws_row].width(Length::Fill);
             if open {
-                // the tabs row: the only row of the sidebar that wraps
-                let mut chips = row![text("tabs").size(10.5).color(theme::FAINT)]
-                    .spacing(4)
-                    .align_y(iced::Alignment::Center)
-                    .width(Length::Fill);
+                // the terminals of this workspace are its agent rows (with their icon) and the plain-shell line;
+                // the tabs themselves are in the tab bar of the terminal
                 let tabs: Vec<_> = self.snapshot.tabs_of(&id).collect();
-                if tabs.is_empty() {
-                    chips = chips.push(text("none yet").size(11).color(theme::FAINT));
-                }
-                for tab in &tabs {
-                    let shown = !in_shepherd && current && tab.focused;
-                    let count = self
-                        .snapshot
-                        .panes
-                        .iter()
-                        .filter(|p| p.tab_id == tab.tab_id)
-                        .count();
-                    chips = chips.push(
-                        button(
-                            container(
-                                row![
-                                    text(sidebar::ellipsize(&tab.label, 14))
-                                        .size(11)
-                                        .color(if shown { theme::HI } else { theme::TEXT2 }),
-                                    text(count.to_string()).size(11).color(theme::FAINT),
-                                ]
-                                .spacing(4),
-                            )
-                            .center_y(Length::Fill),
-                        )
-                        .padding([0, 7])
-                        .height(22)
-                        .style(move |_, status| {
-                            let hot =
-                                matches!(status, button::Status::Hovered | button::Status::Pressed);
-                            button::Style {
-                                background: if shown {
-                                    Some(Background::Color(theme::SELECTED))
-                                } else {
-                                    hot.then_some(Background::Color(theme::HOVER))
-                                },
-                                text_color: theme::TEXT2,
-                                border: Border {
-                                    color: if shown { theme::LINE3 } else { theme::LINE2 },
-                                    width: 1.0,
-                                    radius: 4.0.into(),
-                                },
-                                ..button::Style::default()
-                            }
-                        })
-                        .on_press(Message::PickTab(id.clone(), tab.tab_id.clone())),
-                    );
-                }
-                let mut inner = column![container(chips.wrap()).padding(pad(0.0, 0.0, 6.0, 0.0))]
-                    .spacing(0)
-                    .width(Length::Fill);
+                let mut inner = column![].spacing(0).width(Length::Fill);
                 // one row per pane that runs an agent, in tab order and then pane order
                 let mut agent_rows = 0;
                 for tab in &tabs {
@@ -3400,14 +3292,21 @@ fn connection() -> impl iced::futures::Stream<Item = Message> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn the_shortcut_toggles_between_the_two_modes() {
-        assert_eq!(Mode::Terminal.other(), Mode::Shepherd);
-        assert_eq!(Mode::Shepherd.other(), Mode::Terminal);
-        assert_eq!(Mode::Terminal.other().other(), Mode::Terminal);
-    }
-
     use super::*;
+
+    /// The window opens on a terminal. A view of the sidebar (Orchestrate, Inspect) must open on the first click,
+    /// not only select a tab of a panel that is not on screen.
+    #[test]
+    fn a_view_of_the_sidebar_opens_from_the_terminal_on_the_first_click() {
+        let (mut app, _) = App::boot();
+        assert_eq!(app.mode, Mode::Terminal);
+        for tab in [panel::Tab::Runs, panel::Tab::Skills, panel::Tab::Snapshots] {
+            app.mode = Mode::Terminal;
+            let _ = app.update(Message::GoTo(tab));
+            assert_eq!(app.mode, Mode::Shepherd, "{tab:?} did not show");
+            assert_eq!(app.panel.tab, tab);
+        }
+    }
 
     #[test]
     fn the_terminal_area_is_what_the_window_leaves() {
