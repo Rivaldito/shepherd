@@ -9395,6 +9395,35 @@
           ],
           "type": "string"
         },
+        "GitChange": {
+          "description": "One file with uncommitted changes in a worktree.",
+          "properties": {
+            "added": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "path": {
+              "type": "string"
+            },
+            "removed": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "status": {
+              "description": "`modified`, `added`, `deleted`, `renamed` or `untracked`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "path",
+            "added",
+            "removed"
+          ],
+          "type": "object"
+        },
         "GitPrSummary": {
           "description": "Summary of a Pull Request associated with a branch.",
           "properties": {
@@ -9481,6 +9510,14 @@
             },
             "branch": {
               "type": "string"
+            },
+            "changes": {
+              "default": [],
+              "description": "The files with uncommitted changes (at most 50).",
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/GitChange"
+              },
+              "type": "array"
             },
             "dirty_count": {
               "format": "uint",
