@@ -164,6 +164,8 @@ pub struct SkillNew {
 
 #[derive(Default)]
 pub struct ConfigPanel {
+    /// What the last action was doing, shown above the server's refusal.
+    fail: &'static str,
     installed: Vec<InstalledRow>,
     /// The window that assigns skills to the role being edited, while it is open.
     skill_picker: Option<SkillPicker>,
@@ -351,6 +353,19 @@ impl ConfigPanel {
     }
 
     pub fn update(&mut self, msg: CfgMsg, root: &Path) -> Task<Message> {
+        self.fail = match &msg {
+            CfgMsg::SkillNewSubmit | CfgMsg::GitFormSubmit | CfgMsg::TopicFormSubmit => {
+                "Not created."
+            }
+            CfgMsg::SkillCustomize(_) | CfgMsg::SkillGlobal(..) | CfgMsg::SkillEditOpen(_) => {
+                "Not changed."
+            }
+            CfgMsg::SkillSave | CfgMsg::Save => "Not saved.",
+            CfgMsg::SkillDelete(_) | CfgMsg::Delete => "Not deleted.",
+            CfgMsg::WorktreeRemove(_) => "Not removed.",
+            CfgMsg::ComposerSend => "Not sent.",
+            _ => self.fail,
+        };
         if !matches!(msg, CfgMsg::Delete) {
             self.armed_delete = false;
         }
@@ -553,6 +568,10 @@ impl ConfigPanel {
                     return Task::none();
                 };
                 let name = form.name.trim().to_owned();
+                if name.is_empty() {
+                    form.error = Some("A skill needs a name.".into());
+                    return Task::none();
+                }
                 match config_data::create_skill(root, &name, form.repo)
                     .and_then(|file| SkillEdit::open(&name, file))
                 {
@@ -575,7 +594,7 @@ impl ConfigPanel {
                         self.notice = format!("{name} copied to your skills: it is yours to edit");
                         return Self::load_skills(root);
                     }
-                    Err(why) => self.notice = why,
+                    Err(why) => self.notice = crate::panel::refusal(self.fail, &why),
                 }
             }
             CfgMsg::SkillEditOpen(name) => {
@@ -583,7 +602,7 @@ impl ConfigPanel {
                     .and_then(|file| SkillEdit::open(&name, file))
                 {
                     Ok(edit) => self.skill_edit = Some(edit),
-                    Err(why) => self.notice = why,
+                    Err(why) => self.notice = crate::panel::refusal(self.fail, &why),
                 }
             }
             CfgMsg::SkillEdit(action) => {
@@ -608,7 +627,7 @@ impl ConfigPanel {
                         edit.problems = problems;
                         return Self::load_skills(root);
                     }
-                    Err(why) => self.notice = why,
+                    Err(why) => self.notice = crate::panel::refusal(self.fail, &why),
                 }
             }
             CfgMsg::SkillDelete(name) => {
@@ -624,7 +643,7 @@ impl ConfigPanel {
                         self.notice = format!("Deleted skill {name}");
                         return Self::load_skills(root);
                     }
-                    Err(why) => self.notice = why,
+                    Err(why) => self.notice = crate::panel::refusal(self.fail, &why),
                 }
             }
             CfgMsg::SkillGlobal(name, on) => match config_data::set_global_skill(root, &name, on) {
@@ -636,7 +655,7 @@ impl ConfigPanel {
                     };
                     return Self::load_skills(root);
                 }
-                Err(why) => self.notice = why,
+                Err(why) => self.notice = crate::panel::refusal(self.fail, &why),
             },
             CfgMsg::SelectWorktree(path) => {
                 self.armed_worktree = None;
@@ -665,12 +684,11 @@ impl ConfigPanel {
                 };
                 if form.first.trim().is_empty() || (form.worktree && form.second.trim().is_empty())
                 {
-                    self.notice = if form.worktree {
-                        "A worktree needs a folder and a branch"
+                    self.notice = crate::ui::invalid(if form.worktree {
+                        "A worktree needs a folder and a branch."
                     } else {
-                        "A branch needs a name"
-                    }
-                    .into();
+                        "A branch needs a name."
+                    });
                     return Task::none();
                 }
                 self.git_form = None;
@@ -743,7 +761,7 @@ impl ConfigPanel {
                 if form.publish {
                     let (Some(topic), false) = (self.topic.clone(), form.first.trim().is_empty())
                     else {
-                        self.notice = "A message cannot be empty".into();
+                        self.notice = crate::ui::invalid("A message cannot be empty.");
                         return Task::none();
                     };
                     self.topic_form = None;
@@ -760,11 +778,11 @@ impl ConfigPanel {
                     n => n.parse::<u32>().ok().filter(|n| *n > 0),
                 };
                 let (name, Some(partitions)) = (form.first.trim().to_owned(), partitions) else {
-                    self.notice = "Partitions is a number, 1 or more".into();
+                    self.notice = crate::ui::invalid("Not created: partitions must be 1 or more.");
                     return Task::none();
                 };
                 if name.is_empty() {
-                    self.notice = "A topic needs a name".into();
+                    self.notice = crate::ui::invalid("A topic needs a name.");
                     return Task::none();
                 }
                 self.topic_form = None;
@@ -783,14 +801,14 @@ impl ConfigPanel {
             CfgMsg::TopicDone(result) => {
                 self.notice = match result {
                     Ok(done) => done,
-                    Err(why) => why,
+                    Err(why) => crate::panel::refusal(self.fail, &why),
                 };
                 return self.reload_events();
             }
             CfgMsg::GitDone(result) => {
                 self.notice = match result {
                     Ok(done) => done,
-                    Err(why) => why,
+                    Err(why) => crate::panel::refusal(self.fail, &why),
                 };
                 return Self::load_git(root);
             }
@@ -805,11 +823,11 @@ impl ConfigPanel {
             CfgMsg::ComposerSend => {
                 let text = self.composer.trim().to_owned();
                 let Some(topic) = self.topic.clone() else {
-                    self.notice = "error: pick a topic to write to".into();
+                    self.notice = crate::ui::invalid("Pick a topic to write to.");
                     return Task::none();
                 };
                 if text.is_empty() {
-                    self.notice = "error: a message cannot be empty".into();
+                    self.notice = crate::ui::invalid("A message cannot be empty.");
                     return Task::none();
                 }
                 self.composer.clear();
@@ -899,7 +917,7 @@ impl ConfigPanel {
                         self.is_new = false;
                         return Self::load_models(root);
                     }
-                    Err(e) => self.notice = e,
+                    Err(e) => self.notice = crate::panel::refusal(self.fail, &e),
                 }
             }
             CfgMsg::Delete => {
@@ -921,7 +939,7 @@ impl ConfigPanel {
                         self.notice = format!("Deleted from {}", display(&path));
                         return Self::load_models(root);
                     }
-                    Err(e) => self.notice = e,
+                    Err(e) => self.notice = crate::panel::refusal(self.fail, &e),
                 }
             }
             CfgMsg::Refresh => {
@@ -2607,7 +2625,7 @@ mod tests {
         let _ = panel.update(CfgMsg::GitFormOpen(false), root);
         let _ = panel.update(CfgMsg::GitFormSecond("main".into()), root);
         let _ = panel.update(CfgMsg::GitFormSubmit, root);
-        assert_eq!(panel.notice, "A branch needs a name");
+        assert_eq!(panel.notice, crate::ui::invalid("A branch needs a name."));
         assert!(panel.git_form.is_some());
         // a name is enough (the base may be empty) and closes the form
         let _ = panel.update(CfgMsg::GitFormFirst("feat/x".into()), root);
@@ -2618,7 +2636,10 @@ mod tests {
         let _ = panel.update(CfgMsg::GitFormOpen(true), root);
         let _ = panel.update(CfgMsg::GitFormFirst("../wt".into()), root);
         let _ = panel.update(CfgMsg::GitFormSubmit, root);
-        assert_eq!(panel.notice, "A worktree needs a folder and a branch");
+        assert_eq!(
+            panel.notice,
+            crate::ui::invalid("A worktree needs a folder and a branch.")
+        );
         assert!(panel.git_form.is_some());
         let _ = panel.update(CfgMsg::GitFormCancel, root);
         assert_eq!(panel.git_form, None);
@@ -2652,7 +2673,8 @@ mod tests {
             CfgMsg::GitDone(Err("the main checkout cannot be removed".into())),
             root,
         );
-        assert_eq!(panel.notice, "the main checkout cannot be removed");
+        // the summary first, then the server's words as sent
+        assert_eq!(panel.notice, "Not done.\nthe main checkout cannot be removed");
     }
 
     #[test]

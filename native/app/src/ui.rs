@@ -99,9 +99,15 @@ impl Toast {
     }
 }
 
+/// A form that cannot be sent yet: a notice that is a refusal of the app itself (no server involved).
+pub fn invalid(message: &str) -> String {
+    format!("{message}\n")
+}
+
 /// The wording the panel uses for failures and server refusals.
 pub fn is_error(notice: &str) -> bool {
-    notice.contains("error")
+    notice.contains('\n')
+        || notice.contains("error")
         || notice.contains("failed")
         || notice.contains("✖")
         || notice.contains("refused")
@@ -117,26 +123,33 @@ pub fn toasts_view<'a>(toasts: Vec<(usize, &'a Toast)>) -> Element<'a, Message> 
         let color = if toast.error { BAD } else { OK };
         let mut body = column![].spacing(6).width(Length::Fill);
         if toast.error {
-            body = body
-                .push(
-                    text("The server refused this. Its answer, as sent:")
-                        .size(11)
-                        .color(BAD),
-                )
-                .push(
-                    container(text(toast.text.clone()).size(11).color(theme::TEXT2))
-                        .padding([6, 8])
-                        .width(Length::Fill)
-                        .style(|_| container::Style {
-                            background: Some(Background::Color(theme::INPUT)),
-                            border: iced::Border {
-                                color: LINE,
-                                width: 1.0,
-                                radius: 4.0.into(),
-                            },
-                            ..container::Style::default()
-                        }),
-                );
+            // the summary is the first line; what follows is the server's answer, as sent
+            let (summary, answer) = toast.text.split_once('\n').unwrap_or(("", &toast.text));
+            if !summary.is_empty() {
+                body = body.push(text(summary.to_owned()).size(12).color(theme::HI));
+            }
+            if !answer.is_empty() {
+                body = body
+                    .push(
+                        text("The server refused this. Its answer, as sent:")
+                            .size(11)
+                            .color(BAD),
+                    )
+                    .push(
+                        container(text(answer.to_owned()).size(11).color(theme::TEXT2))
+                            .padding([6, 8])
+                            .width(Length::Fill)
+                            .style(|_| container::Style {
+                                background: Some(Background::Color(theme::INPUT)),
+                                border: iced::Border {
+                                    color: LINE,
+                                    width: 1.0,
+                                    radius: 4.0.into(),
+                                },
+                                ..container::Style::default()
+                            }),
+                    );
+            }
         } else {
             body = body.push(text(toast.text.clone()).size(12).color(theme::FG));
         }

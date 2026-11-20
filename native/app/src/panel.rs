@@ -73,6 +73,49 @@ pub enum Armed {
     DeletePattern(String),
 }
 
+/// The one-line summary (copy deck, section 7) of what an action was doing; the server's refusal follows it.
+fn failure_summary(message: &PanelMsg, armed: Option<&Armed>) -> Option<&'static str> {
+    Some(match message {
+        PanelMsg::CommSend => "Not sent.",
+        PanelMsg::Launch => "Cannot run this pattern yet.",
+        PanelMsg::Control(_, RunControl::Stop) => "Not stopped.",
+        PanelMsg::Control(_, RunControl::Pause) => "Not paused.",
+        PanelMsg::Control(_, RunControl::Resume) => "Not resumed.",
+        PanelMsg::AgentSkill(..) => "Not changed.",
+        PanelMsg::SpawnAgent => "The agent was not started.",
+        PanelMsg::ImportSubmit => "Not imported.",
+        PanelMsg::TaskSave => "Not saved.",
+        PanelMsg::KillAgent(_) => "Not closed.",
+        PanelMsg::ResumeAgents => "Not resumed.",
+        PanelMsg::AssignAgentTask(..) => "Not moved.",
+        PanelMsg::Confirm => match armed? {
+            Armed::StopRun(_) => "Not stopped.",
+            Armed::DeleteRun(_)
+            | Armed::DeleteTask(_)
+            | Armed::DeleteSnapshot(_)
+            | Armed::DeletePattern(_) => "Not deleted.",
+            Armed::CleanRuns | Armed::CleanBus | Armed::CleanBusForce => "Not cleaned.",
+            Armed::ArchiveDone => "Not archived.",
+            Armed::CancelRun(_) => "Not cancelled.",
+            Armed::ApproveGate(..) => "Not approved.",
+            Armed::RejectGate(..) => "Not rejected.",
+            Armed::RestoreSnapshot(_) => "Not restored.",
+            Armed::PruneSnapshots(_) => "Not pruned.",
+        },
+        _ => return None,
+    })
+}
+
+/// A refusal as a notice: the summary, a line break, the server's words as sent.
+pub(crate) fn refusal(summary: &str, server: &str) -> String {
+    let summary = if summary.is_empty() {
+        "Not done."
+    } else {
+        summary
+    };
+    format!("{summary}\n{}", server.trim())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Choice {
     pub name: String,
@@ -208,6 +251,8 @@ impl TaskForm {
 }
 
 pub struct Panel {
+    /// One line saying what was being done, shown above the server's refusal (set before every action).
+    fail_summary: &'static str,
     pub tab: Tab,
     run: Option<String>,
     agent: Option<String>,
@@ -343,6 +388,7 @@ impl Default for Panel {
             chip: 0,
             toasts: Vec::new(),
             seen_notice: String::new(),
+            fail_summary: "",
             history: Vec::new(),
             run_graph: None,
             outputs: Default::default(),
@@ -751,6 +797,9 @@ pub(crate) fn alert<'a>(content: Element<'a, Message>, color: Color) -> Element<
 
 impl Panel {
     pub fn update(&mut self, message: PanelMsg, ctx: &Ctx<'_>) -> Task<Message> {
+        if let Some(summary) = failure_summary(&message, self.armed.as_ref()) {
+            self.fail_summary = summary;
+        }
         let task = self.update_inner(message, ctx);
         self.sync_toast();
         self.refresh_run_graph(ctx);
@@ -769,7 +818,7 @@ impl Panel {
         if current != self.seen_notice {
             self.seen_notice = current.clone();
             if !current.is_empty() {
-                self.history.push((clock_now(), current.clone()));
+                self.history.push((clock_now(), current.replace('\n', " ")));
                 let extra = self.history.len().saturating_sub(crate::ui::HISTORY);
                 self.history.drain(..extra);
                 self.toasts.push(crate::ui::Toast::new(current));
@@ -906,11 +955,11 @@ impl Panel {
                         .and_then(|r| r.run.topics.first().cloned())
                 });
                 let Some(topic) = topic else {
-                    self.notice = "error: this run has no topic to write to".into();
+                    self.notice = crate::ui::invalid("This run has no topic to write to.");
                     return Task::none();
                 };
                 if text.is_empty() {
-                    self.notice = "error: write something to send".into();
+                    self.notice = crate::ui::invalid("Write something to send.");
                     return Task::none();
                 }
                 self.comm_text.clear();
@@ -1041,7 +1090,7 @@ impl Panel {
                     label: p.name.clone(),
                 });
                 let Some(pattern) = self.pattern.clone().or(first) else {
-                    self.notice = "Pick a pattern first.".into();
+                    self.notice = crate::ui::invalid("Pick a pattern first.");
                     return Task::none();
                 };
                 let text = self.objective.text();
@@ -1311,7 +1360,7 @@ impl Panel {
                 self.task_form = None;
                 return Task::done(Message::Reload);
             }
-            PanelMsg::Done(Err(e)) => self.notice = e,
+            PanelMsg::Done(Err(e)) => self.notice = refusal(self.fail_summary, &e),
             PanelMsg::SnapSelect(id) => {
                 self.snap = Some(id);
                 self.snap_detail = None;
@@ -1514,7 +1563,7 @@ impl Panel {
                 };
                 let title = form.title.trim().to_owned();
                 if title.is_empty() {
-                    self.notice = "A task needs a title.".into();
+                    self.notice = crate::ui::invalid("A task needs a title.");
                     return Task::none();
                 }
                 let description = form.description.text().trim().to_owned();
@@ -2141,10 +2190,8 @@ impl Panel {
         } else {
             self.cfg.notice.clone()
         };
-        let notice_color = if notice_text.contains("error")
-            || notice_text.contains("failed")
-            || notice_text.contains("✖")
-        {
+        let notice_text = notice_text.replace('\n', " ");
+        let notice_color = if crate::ui::is_error(&notice_text) || notice_text.contains("✖") {
             BAD
         } else if notice_text.contains("Starting")
             || notice_text.contains("Loading")
@@ -5574,12 +5621,25 @@ mod tests {
         let _ = panel.view(&ctx);
         // no topic and no text: nothing is sent, the reason is a notice
         let _ = panel.update(PanelMsg::CommSend, &ctx);
-        assert!(panel.notice.starts_with("error"), "{}", panel.notice);
+        assert!(crate::ui::is_error(&panel.notice), "{}", panel.notice);
         // any view closes the screen again
         let _ = panel.update(PanelMsg::Tab(Tab::Agents), &ctx);
         assert!(!panel.comm_open());
         let _ = panel.update(PanelMsg::Tab(Tab::Monitor), &ctx);
         let _ = panel.view(&ctx);
+    }
+
+    #[test]
+    fn a_refusal_carries_what_was_being_done_above_the_servers_words() {
+        let data = Data::default();
+        let snapshot = Snapshot::default();
+        let ctx = ctx_of(&data, &snapshot);
+        let mut panel = Panel::default();
+        let _ = panel.update(PanelMsg::Arm(Armed::DeleteTask(4)), &ctx);
+        let _ = panel.update(PanelMsg::Confirm, &ctx);
+        let _ = panel.update(PanelMsg::Done(Err("task 4 is in a run".into())), &ctx);
+        assert_eq!(panel.notice, "Not deleted.\ntask 4 is in a run");
+        assert!(crate::ui::is_error(&panel.notice));
     }
 
     #[test]
