@@ -615,7 +615,7 @@ pub fn render_pattern_editor(
                     if editor.is_global {
                         "Global (~/.config)"
                     } else {
-                        "Proyecto (.shepherd)"
+                        "Project (.shepherd)"
                     },
                 ),
                 ("Description:", editor.description.as_str()),
@@ -760,7 +760,7 @@ pub fn render_pattern_editor(
                         agent.vendor.as_deref().unwrap_or(""),
                     ),
                     ("Model (optional):", agent.model.as_deref().unwrap_or("")),
-                    ("Instancias (count):", count_str.as_str()),
+                    ("Instances (count):", count_str.as_str()),
                     (
                         "Hierarchy level (level, hierarchical only):",
                         lvl_str.as_str(),
@@ -1033,7 +1033,7 @@ pub fn render_pattern_editor(
             .find(|p| !p.is_error())
             .map(|p| p.message.as_str())
             .unwrap_or("");
-        let warn_msg = format!("⚠ {} aviso(s): {}", warn_count, first_warn);
+        let warn_msg = format!("⚠ {} warning(s): {}", warn_count, first_warn);
         put_str(
             buffer,
             area.x,

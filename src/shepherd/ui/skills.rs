@@ -510,7 +510,7 @@ pub fn render_skills_section(
                 FormField {
                     label: "Skill name".to_string(),
                     value: form.name.clone(),
-                    placeholder: "ej. rust-tools".to_string(),
+                    placeholder: "e.g. rust-tools".to_string(),
                 },
                 FormField {
                     label: "Description".to_string(),
@@ -631,14 +631,14 @@ pub fn render_skills_section(
                         if skill.active {
                             "[active]".to_string()
                         } else {
-                            "[inactiva]".to_string()
+                            "[inactive]".to_string()
                         },
                         status_style,
                     ),
                 ];
                 if skill.edited {
                     badges.push((
-                        "[modificada]".to_string(),
+                        "[modified]".to_string(),
                         Style::default().fg(palette.yellow),
                     ));
                 }
@@ -663,7 +663,7 @@ pub fn render_skills_section(
                     title: format!("SKILL: {}", skill.name),
                     badges,
                     metadata_line: Some(meta_line),
-                    actions: vec![("Alternar".to_string(), Some("Space".into()))],
+                    actions: vec![("Toggle".to_string(), Some("Space".into()))],
                 };
 
                 let mut blocks = vec![
@@ -737,12 +737,12 @@ pub fn render_skills_section(
 
                 if !skill.problems.is_empty() {
                     blocks.push(DetailContentBlock::Notice {
-                        text: format!("Problemas detectados:\n{}", skill.problems.join("\n")),
+                        text: format!("Problems found:\n{}", skill.problems.join("\n")),
                         level: AlertLevel::Warning,
                     });
                 }
 
-                let mut bottom_actions = vec![("Alternar Global", "g", true)];
+                let mut bottom_actions = vec![("Toggle Global", "g", true)];
                 if skill.scope != Scope::Default {
                     bottom_actions.push(("Delete from Catalog", "d", false));
                 }

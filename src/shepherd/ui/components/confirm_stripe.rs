@@ -183,7 +183,7 @@ mod tests {
             &mut buffer,
             area,
             "Archive task #12?",
-            "Confirmar (Enter)",
+            "Confirm (Enter)",
             "Cancel (Esc)",
             true,
             &palette,

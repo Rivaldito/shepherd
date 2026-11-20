@@ -327,18 +327,18 @@ pub fn render_runs_section(
                     FormField {
                         label: "Pause for human approval of the plan:".into(),
                         value: if form.options.wait_plan_approval {
-                            "[✓] Activado".into()
+                            "[✓] On".into()
                         } else {
-                            "[ ] Desactivado".into()
+                            "[ ] Off".into()
                         },
                         placeholder: "Space to toggle".into(),
                     },
                     FormField {
                         label: "Automatic publishing (auto_push - ALWAYS false on open):".into(),
                         value: if form.options.auto_push {
-                            "[✓] Activado".into()
+                            "[✓] On".into()
                         } else {
-                            "[ ] Desactivado (seguro)".into()
+                            "[ ] Off (safe)".into()
                         },
                         placeholder: "Space to toggle".into(),
                     },
@@ -347,7 +347,7 @@ pub fn render_runs_section(
                         value: if form.options.replan {
                             "[✓] Yes (force a new plan)".into()
                         } else if form.has_saved_plan {
-                            "[ ] No (usar plan existente)".into()
+                            "[ ] No (use the existing plan)".into()
                         } else {
                             "[!] Unavailable (no saved plan)".into()
                         },
@@ -376,7 +376,7 @@ pub fn render_runs_section(
             let mut badges = vec![];
             if run.pending_gate.is_some() {
                 badges.push((
-                    "[ESPERANDO PUERTA HUMANA]".into(),
+                    "[WAITING FOR A HUMAN GATE]".into(),
                     Style::default()
                         .fg(palette.yellow)
                         .add_modifier(Modifier::BOLD),
@@ -440,7 +440,7 @@ pub fn render_runs_section(
             )));
 
             if !run.active_agents.is_empty() {
-                content.push(DetailContentBlock::Heading("AGENTES ASIGNADOS:".into()));
+                content.push(DetailContentBlock::Heading("ASSIGNED AGENTS:".into()));
                 content.push(DetailContentBlock::BulletList(run.active_agents.clone()));
             }
 

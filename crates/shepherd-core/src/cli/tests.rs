@@ -602,7 +602,7 @@ fn test_server_mode_delegation_via_in_process_client() {
                         }
                     ],
                     "gh_available": false,
-                    "gh_note": "gh no disponible",
+                    "gh_note": "gh not available",
                     "error": null
                 }
             })),

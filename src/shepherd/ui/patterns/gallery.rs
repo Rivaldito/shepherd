@@ -55,7 +55,7 @@ pub fn render_patterns_section(
         })
         .collect();
 
-    let filter_tabs = ["All", "Proyecto", "Global", "Plantillas"];
+    let filter_tabs = ["All", "Project", "Global", "Templates"];
     let split = split_panes(
         area,
         list_width,
@@ -118,7 +118,7 @@ pub fn render_patterns_section(
                             FormField {
                                 label: "New pattern name:".into(),
                                 value: st.name.clone(),
-                                placeholder: "mi-patron".into(),
+                                placeholder: "my-pattern".into(),
                             },
                             FormField {
                                 label: format!(
@@ -126,10 +126,10 @@ pub fn render_patterns_section(
                                     if st.is_global {
                                         "Global (~/.config)"
                                     } else {
-                                        "Proyecto (.shepherd)"
+                                        "Project (.shepherd)"
                                     }
                                 ),
-                                value: if st.is_global { "Global" } else { "Proyecto" }.into(),
+                                value: if st.is_global { "Global" } else { "Project" }.into(),
                                 placeholder: "".into(),
                             },
                         ],
@@ -163,10 +163,10 @@ pub fn render_patterns_section(
                                     if st.is_global {
                                         "Global (~/.config)"
                                     } else {
-                                        "Proyecto (.shepherd)"
+                                        "Project (.shepherd)"
                                     }
                                 ),
-                                value: if st.is_global { "Global" } else { "Proyecto" }.into(),
+                                value: if st.is_global { "Global" } else { "Project" }.into(),
                                 placeholder: "".into(),
                             },
                         ],
@@ -202,7 +202,7 @@ pub fn render_patterns_section(
                             FormField {
                                 label: "Isolated worktree (optional):".into(),
                                 value: st.worktree.clone(),
-                                placeholder: "p.ej. /tmp/worktree-f8d".into(),
+                                placeholder: "e.g. /tmp/worktree-f8d".into(),
                             },
                         ],
                         active_field: st.active_field,
@@ -230,7 +230,7 @@ pub fn render_patterns_section(
                 ("[✓ Valid]".to_string(), Style::default().fg(palette.green))
             } else {
                 (
-                    format!("[✗ {} errores]", error_count),
+                    format!("[✗ {} errors]", error_count),
                     Style::default().fg(palette.red),
                 )
             };
@@ -268,10 +268,10 @@ pub fn render_patterns_section(
                 metadata_line: Some(meta),
                 actions: vec![
                     ("Edit".into(), Some("e".into())),
-                    ("Duplicar".into(), Some("c".into())),
-                    ("Validar".into(), Some("v".into())),
+                    ("Duplicate".into(), Some("c".into())),
+                    ("Validate".into(), Some("v".into())),
                     ("Delete".into(), Some("d".into())),
-                    ("Ejecutar".into(), Some("r".into())),
+                    ("Run".into(), Some("r".into())),
                 ],
             };
 
@@ -290,7 +290,7 @@ pub fn render_patterns_section(
             blocks.push(DetailContentBlock::Preformatted(diag_lines));
 
             blocks.push(DetailContentBlock::Heading(format!(
-                "AGENTES ({})",
+                "AGENTS ({})",
                 detail.pattern.agents.len()
             )));
             let mut agent_entries = Vec::new();
@@ -306,10 +306,10 @@ pub fn render_patterns_section(
                     desc.push_str(&format!(" | model: {}", m));
                 }
                 if let Some(l) = a.level {
-                    desc.push_str(&format!(" | nivel: {}", l));
+                    desc.push_str(&format!(" | level: {}", l));
                 }
                 if let Some(ref g) = a.group {
-                    desc.push_str(&format!(" | grupo: {}", g));
+                    desc.push_str(&format!(" | group: {}", g));
                 }
                 if !a.publishes.is_empty() {
                     desc.push_str(&format!(" | publishes: [{}]", a.publishes.join(", ")));
@@ -333,10 +333,10 @@ pub fn render_patterns_section(
             for t in &detail.pattern.topics {
                 let mut desc = format!("{}: {} partition(s)", t.name, t.partitions);
                 if let Some(ref k) = t.key {
-                    desc.push_str(&format!(" | clave: {}", k));
+                    desc.push_str(&format!(" | key: {}", k));
                 }
                 if let Some(ref f) = t.filter {
-                    desc.push_str(&format!(" | filtro: {}", f));
+                    desc.push_str(&format!(" | filter: {}", f));
                 }
                 topic_entries.push(desc);
             }
@@ -358,10 +358,10 @@ pub fn render_patterns_section(
 
             let bottom_actions = [
                 ("Edit", "e", true),
-                ("Duplicar", "c", false),
-                ("Validar", "v", false),
+                ("Duplicate", "c", false),
+                ("Validate", "v", false),
                 ("Delete", "d", false),
-                ("Ejecutar", "r", is_valid),
+                ("Run", "r", is_valid),
             ];
 
             hits.detail_hits = Some(render_detail_view(

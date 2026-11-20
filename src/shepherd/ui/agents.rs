@@ -159,15 +159,15 @@ impl ShepherdAgentsSectionState {
                 ),
                 FormField::new(
                     "Vendor / Model (optional)",
-                    "ej. anthropic/claude-3-7-sonnet",
+                    "e.g. anthropic/claude-3-7-sonnet",
                 ),
                 FormField::new(
                     "Worktree / Directory (optional)",
-                    "ej. .shepherd/worktrees/task-12",
+                    "e.g. .shepherd/worktrees/task-12",
                 ),
                 FormField::new(
                     "Additional skills (comma separated)",
-                    "ej. git-safe, rust-tools",
+                    "e.g. git-safe, rust-tools",
                 ),
             ],
         ));
@@ -716,7 +716,7 @@ pub fn render_agents_section(
             badges,
             metadata_line: Some(meta_line),
             actions: vec![
-                ("Ir a Terminal".to_string(), Some("Enter".into())),
+                ("Go to Terminal".to_string(), Some("Enter".into())),
                 ("+ New".to_string(), Some("s".into())),
             ],
         };
@@ -758,7 +758,7 @@ pub fn render_agents_section(
         }));
 
         let mut bottom_actions = vec![
-            ("Ir a Terminal", "Enter", true),
+            ("Go to Terminal", "Enter", true),
             ("Kill Agent", "K", false),
             ("Clean Session", "x", false),
             ("Snapshots", "t", false),

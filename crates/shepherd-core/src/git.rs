@@ -481,10 +481,10 @@ where
             let text = String::from_utf8_lossy(&out.stdout);
             match parse_gh_pr_list_json(&text) {
                 Ok(prs) => (prs, true, None),
-                Err(_) => (Vec::new(), false, Some("gh no disponible".to_string())),
+                Err(_) => (Vec::new(), false, Some("gh not available".to_string())),
             }
         }
-        _ => (Vec::new(), false, Some("gh no disponible".to_string())),
+        _ => (Vec::new(), false, Some("gh not available".to_string())),
     };
 
     let mut worktrees = Vec::new();

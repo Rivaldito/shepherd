@@ -112,7 +112,7 @@ fn test_pattern_editor_live_validation_and_guards() {
     assert!(!editor.is_valid(), "empty pattern name must be invalid");
 
     // Restore name
-    editor.name = "mi-patron".into();
+    editor.name = "my-pattern".into();
     editor.revalidate();
     assert!(editor.is_valid());
 
