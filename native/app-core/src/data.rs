@@ -88,6 +88,30 @@ pub struct Data {
     pub models: Models,
     /// What each agent's state did over the last day (Activity draws its timelines from it).
     pub state_log: Vec<shepherd_core::StateChange>,
+    /// The version the server answered `ping` with (`None` when it could not be asked).
+    pub server_version: Option<String>,
+    /// The server is up but its Shepherd layer is off (`shepherd.enabled = false`, or a server started before
+    /// the layer was on by default), so every Shepherd question comes back refused.
+    pub layer_off: bool,
+}
+
+/// What to tell the person when the server is not the one this app belongs to, or has the Shepherd layer off.
+/// `None` when all is as it should be.
+pub fn server_notice(data: &Data, app_version: &str) -> Option<String> {
+    if data.layer_off {
+        return Some(match data.server_version.as_deref() {
+            Some(v) if v != app_version => format!(
+                "The server that is running is {v}, an older version than this app ({app_version}), and its orchestration is off. Restart it to get patterns, runs and agents: `shepherd server stop`, then `shepherd` (that closes the terminals of this session)."
+            ),
+            _ => "The orchestration is off on this server (`shepherd.enabled = false` in your config), so patterns, runs and agents are unavailable. Turn it on in `~/.config/shepherd/config.toml`, then restart the server: `shepherd server stop`, then `shepherd`.".to_owned(),
+        });
+    }
+    match data.server_version.as_deref() {
+        Some(v) if v != app_version => Some(format!(
+            "The server that is running is {v}; this app is {app_version}. Restart the server to use the new version: `shepherd server stop`, then `shepherd` (that closes the terminals of this session)."
+        )),
+        _ => None,
+    }
 }
 
 /// The project a folder belongs to: the one with the nearest `.shepherd/config.yaml`, else the folder.
@@ -189,7 +213,7 @@ impl Data {
         let ask = |method: &str, params: Value| {
             crate::api::call(api, method, params).unwrap_or(Value::Null)
         };
-        let (agents, runs, tasks, snapshots, gates, patterns, cfg) = std::thread::scope(|s| {
+        let (agents, runs, tasks, snapshots, gates, (patterns, layer_off), cfg, server_version) = std::thread::scope(|s| {
             let agents = s.spawn(|| {
                 let mut agents = parse_agents(&ask("shepherd.agent.list", json!({})));
                 agents.sort_by_key(|a| a.seq);
@@ -239,10 +263,15 @@ impl Data {
                 ))
             });
             let patterns = s.spawn(|| {
-                parse_list(
-                    &ask("shepherd.pattern.list", json!({ "root": root_text })),
-                    "patterns",
-                )
+                match crate::api::call(api, "shepherd.pattern.list", json!({ "root": root_text })) {
+                    Ok(reply) => (parse_list(&reply, "patterns"), false),
+                    Err(why) => (Vec::new(), why.contains("not running")),
+                }
+            });
+            let version = s.spawn(|| {
+                crate::api::call(api, "ping", json!({}))
+                    .ok()
+                    .and_then(|pong| pong["version"].as_str().map(str::to_owned))
             });
             let cfg = config::load_config(&root).unwrap_or_default();
             (
@@ -253,6 +282,7 @@ impl Data {
                 joined(gates),
                 joined(patterns),
                 cfg,
+                version.join().ok().flatten(),
             )
         });
         let since = std::time::SystemTime::now()
@@ -263,6 +293,8 @@ impl Data {
             shepherd_core::load_state_log(&config::state_dir().join("agents.json"), since);
         Self {
             state_log,
+            server_version,
+            layer_off,
             runs,
             tasks,
             snapshots,
@@ -500,8 +532,8 @@ mod tests {
         let data = Data::load(&api, Path::new("/tmp"));
         let took = started.elapsed();
         assert!(data.agents.is_empty() && data.runs.is_empty());
-        // agents, runs, tasks, snapshots, gates, patterns
-        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 6);
+        // agents, runs, tasks, snapshots, gates, patterns, and the ping that asks the server's version
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 7);
         // one after the other would take 6 x 200 ms
         assert!(
             took < std::time::Duration::from_millis(700),
@@ -709,6 +741,22 @@ mod tests {
         // a run whose detail cannot be read is left out, the others stay
         let list = json!({"runs":[{"id":"x","live_agents":1}]});
         assert!(parse_runs(&list, |_| Value::Null).is_empty());
+    }
+
+    #[test]
+    fn the_server_notice_says_what_is_wrong_and_stays_silent_when_all_is_well() {
+        let mut data = Data::default();
+        assert_eq!(server_notice(&data, "0.3.1-beta"), None, "no version known, nothing to say");
+        data.server_version = Some("0.3.1-beta".into());
+        assert_eq!(server_notice(&data, "0.3.1-beta"), None);
+        data.server_version = Some("0.2.3-beta".into());
+        let old = server_notice(&data, "0.3.1-beta").unwrap();
+        assert!(old.contains("0.2.3-beta") && old.contains("shepherd server stop"));
+        data.layer_off = true;
+        let off_old = server_notice(&data, "0.3.1-beta").unwrap();
+        assert!(off_old.contains("orchestration is off") && off_old.contains("0.2.3-beta"));
+        data.server_version = Some("0.3.1-beta".into());
+        assert!(server_notice(&data, "0.3.1-beta").unwrap().contains("shepherd.enabled = false"));
     }
 
     #[test]
