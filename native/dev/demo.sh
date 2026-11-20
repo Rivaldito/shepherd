@@ -54,6 +54,9 @@ B=$("$SERVER" workspace create --cwd "$T/beta" --label beta --focus | json "d['r
 (cd "$T/alpha" && "$SERVER" task new "Sample task" --description "Something to try the panels with" --criteria "it works" >/dev/null 2>&1 && "$SERVER" pattern run duo --task "Task #1: Sample task" >/dev/null 2>&1)
 # a few messages on the run's topic, so Events has something to show
 for n in 1 2 3; do (cd "$T/alpha" && "$SERVER" topic publish work "demo message $n" >/dev/null 2>&1); done
+# a git repository with two snapshots of an agent, so Snapshots has something to show (best effort)
+(cd "$T/alpha" && git init -q . >/dev/null 2>&1 && git -c user.email=d@d -c user.name=demo add -A >/dev/null 2>&1 && git -c user.email=d@d -c user.name=demo commit -qm demo >/dev/null 2>&1
+ echo one >notes.txt; "$SERVER" snapshot capture specialist-1 >/dev/null 2>&1; printf 'two\nthree\n' >notes.txt; echo x >more.txt; "$SERVER" snapshot capture specialist-1 >/dev/null 2>&1; echo four >>notes.txt)
 "$SERVER" workspace focus w1 >/dev/null 2>&1
 sleep 2
 [ -n "${MODE:-}" ] && export SHEPHERD_NATIVE_MODE="$MODE"

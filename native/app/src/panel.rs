@@ -158,6 +158,7 @@ pub enum PanelMsg {
     /// One agent's skill: on, off, or back to what its role gives (`None`). Applies at its next start.
     AgentSkill(String, String, Option<bool>),
     SnapCompare(String),
+    SnapHide,
     SnapCompared(
         String,
         Result<Box<shepherd_app_core::shepherd_core::snapshot::DiffResult>, String>,
@@ -1243,10 +1244,8 @@ impl Panel {
                             async move {
                                 actions::snapshot_restore(&api, &id, &root).map(|r| {
                                     format!(
-                                        "Restored {} ({} file(s)); the state before is snapshot {}",
-                                        r.restored.id,
-                                        r.restored_files.len(),
-                                        r.pre_restore.id
+                                        "Restored {}. What was there before is saved as {}.",
+                                        r.restored.id, r.pre_restore.id
                                     )
                                 })
                             },
@@ -1274,14 +1273,26 @@ impl Panel {
                             ctx.data,
                             &self.snap_id(ctx).unwrap_or_default(),
                         );
+                        let had = ctx
+                            .data
+                            .snapshots
+                            .iter()
+                            .filter(|s| s.agent == agent)
+                            .count();
                         return Task::perform(
                             async move {
                                 actions::snapshot_prune(&api, &agent, &root).map(|r| {
-                                    format!(
-                                        "Pruned {} old snapshot(s) of {agent}; kept {}",
-                                        r.pruned.len(),
-                                        r.kept
-                                    )
+                                    if r.pruned.is_empty() {
+                                        crate::ui::info(&format!(
+                                            "{agent} has {had} snapshots; nothing older to prune."
+                                        ))
+                                    } else {
+                                        format!(
+                                            "Pruned {} older snapshots of {agent}; kept {}.",
+                                            r.pruned.len(),
+                                            r.kept
+                                        )
+                                    }
                                 })
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
@@ -1377,7 +1388,15 @@ impl Panel {
             }
             PanelMsg::SnapShown(id, shown) => {
                 if self.snap_id(ctx).as_deref() == Some(id.as_str()) {
-                    self.snap_detail = Some((id, shown));
+                    self.snap_detail = Some((id.clone(), shown));
+                }
+                // verification aid: `SHEPHERD_NATIVE_COMPARE=1` presses Compare once, for pictures
+                static COMPARED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if std::env::var_os("SHEPHERD_NATIVE_COMPARE").is_some()
+                    && !COMPARED.swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    return self.update(PanelMsg::SnapCompare(id), ctx);
                 }
             }
             PanelMsg::SnapCapture(agent) => return self.snap_capture(agent, ctx),
@@ -1399,6 +1418,7 @@ impl Panel {
                     |r| Message::Panel(PanelMsg::Done(r)),
                 );
             }
+            PanelMsg::SnapHide => self.snap_compare = None,
             PanelMsg::SnapCompare(id) => {
                 self.snap_compare = None;
                 let api = ctx.api.clone();

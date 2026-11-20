@@ -76,8 +76,9 @@ impl Panel {
         Task::perform(
             async move {
                 actions::snapshot_capture(&api, &agent, &root).map(|c| {
+                    let agent = agent.clone();
                     if c.created {
-                        format!("Took snapshot {}", c.snapshot.id)
+                        format!("Took snapshot {} of {agent}’s worktree.", c.snapshot.id)
                     } else {
                         format!(
                             "Nothing changed since {}, so no new snapshot",
@@ -217,7 +218,25 @@ impl Panel {
                 let sel = shown.as_deref() == Some(s.id.as_str());
                 let rc = reason_color(s.reason);
                 let body = row![
-                    text("●").size(12).color(if sel { theme::HI } else { rc }),
+                    // a line the items hang on, and a ring in the reason colour
+                    container(text(""))
+                        .width(1)
+                        .height(Length::Fill)
+                        .style(|_| container::Style {
+                            background: Some(iced::Background::Color(theme::LINE2)),
+                            ..container::Style::default()
+                        }),
+                    container(text(""))
+                        .width(11)
+                        .height(11)
+                        .style(move |_| container::Style {
+                            border: iced::Border {
+                                color: if sel { theme::HI } else { rc },
+                                width: 2.0,
+                                radius: 6.0.into(),
+                            },
+                            ..container::Style::default()
+                        }),
                     column![
                         row![
                             text(s.id.clone())
@@ -258,6 +277,7 @@ impl Panel {
                     .width(Length::Fill),
                 ]
                 .spacing(10)
+                .height(40)
                 .align_y(iced::Alignment::Center);
                 items.push(
                     button(body)
@@ -349,25 +369,45 @@ impl Panel {
             )
             .size(11.5)
             .color(DIM),
-            text(match &snap.prev {
-                Some(prev) => format!(
-                    "Changes since {prev}   {} files +{} -{}",
-                    snap.files, snap.added, snap.removed
-                ),
-                None => format!(
-                    "First snapshot of this agent   {} files +{} -{}",
-                    snap.files, snap.added, snap.removed
-                ),
-            })
-            .size(12.5)
-            .color(theme::HI),
         ]
         .spacing(10);
 
+        // the file list of a diff: status, path, +A -D
+        let files = |files: &'a [shepherd_app_core::shepherd_core::snapshot::DiffFile]| {
+            let mut list = column![].spacing(6);
+            for f in files {
+                list = list.push(
+                    row![
+                        container(
+                            text(f.status.clone())
+                                .size(11)
+                                .color(change_color(&f.status))
+                        )
+                        .width(90),
+                        text(f.path.clone()).size(12).color(FG).width(Length::Fill),
+                        text(if f.binary {
+                            "binary".to_owned()
+                        } else {
+                            format!("+{} −{}", f.added, f.removed)
+                        })
+                        .size(11)
+                        .color(DIM),
+                    ]
+                    .spacing(8),
+                );
+            }
+            list
+        };
+
+        let since = match &snap.prev {
+            Some(prev) => format!("since {prev}: "),
+            None => "first snapshot of this agent: ".to_owned(),
+        };
+        let mut body = column![].spacing(8);
         match self.snap_detail.as_ref().filter(|(id, _)| *id == snap.id) {
-            None => page = page.push(text("Loading the changed files…").size(12).color(DIM)),
+            None => body = body.push(text("Loading the changed files…").size(12).color(DIM)),
             Some((_, Err(e))) => {
-                page = page.push(alert(
+                body = body.push(alert(
                     text(format!("Could not read the snapshot: {e}"))
                         .size(12)
                         .into(),
@@ -376,45 +416,44 @@ impl Panel {
             }
             Some((_, Ok(shown))) => {
                 if shown.diff.files.is_empty() {
-                    page = page.push(
+                    body = body.push(
                         text("No file changed since the previous snapshot.")
                             .size(12)
                             .color(DIM),
                     );
                 }
-                for f in &shown.diff.files {
-                    page = page.push(
-                        row![
-                            container(
-                                text(f.status.clone())
-                                    .size(11)
-                                    .color(change_color(&f.status))
-                            )
-                            .width(90),
-                            text(f.path.clone()).size(12).color(FG).width(Length::Fill),
-                            text(if f.binary {
-                                "binary".to_owned()
-                            } else {
-                                format!("+{} −{}", f.added, f.removed)
-                            })
-                            .size(11)
-                            .color(DIM),
-                        ]
-                        .spacing(8),
-                    );
-                }
+                body = body.push(files(&shown.diff.files));
             }
         }
-        for o in &snap.omitted {
-            page = page.push(
+        if !snap.omitted.is_empty() {
+            body = body.push(
                 text(format!(
-                    "Left out: {} ({}, {} bytes)",
-                    o.path, o.reason, o.size
+                    "{} file(s) not listed: {}",
+                    snap.omitted.len(),
+                    snap.omitted
+                        .iter()
+                        .map(|o| format!("{} ({}, {} bytes)", o.path, o.reason, o.size))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ))
                 .size(11)
                 .color(WARN),
             );
         }
+        page = page.push(card(
+            "CHANGES",
+            Some(
+                text(format!(
+                    "{since}{} files +{} −{}",
+                    snap.files, snap.added, snap.removed
+                ))
+                .size(11)
+                .color(DIM)
+                .into(),
+            ),
+            body.into(),
+        ));
+
         match self.snap_compare.as_ref().filter(|(id, _)| *id == snap.id) {
             None => {}
             Some((_, Err(e))) => {
@@ -424,46 +463,78 @@ impl Panel {
                 ))
             }
             Some((_, Ok(diff))) => {
-                page = page.push(
-                    text(format!(
-                        "Worktree now vs this snapshot: {} file(s), +{} −{}",
-                        diff.files.len(),
-                        diff.added,
-                        diff.removed
-                    ))
-                    .size(12)
-                    .color(FG),
-                );
+                let mut body = column![].spacing(8);
                 if diff.files.is_empty() {
-                    page = page.push(
+                    body = body.push(
                         text("The worktree is the same as this snapshot.")
                             .size(12)
                             .color(DIM),
                     );
                 }
-                for f in &diff.files {
-                    page = page.push(
-                        row![
-                            container(
-                                text(f.status.clone())
-                                    .size(11)
-                                    .color(change_color(&f.status))
-                            )
-                            .width(90),
-                            text(f.path.clone()).size(12).color(FG).width(Length::Fill),
-                            text(if f.binary {
-                                "binary".to_owned()
-                            } else {
-                                format!("+{} −{}", f.added, f.removed)
-                            })
-                            .size(11)
-                            .color(DIM),
-                        ]
-                        .spacing(8),
-                    );
+                body = body.push(files(&diff.files));
+                if let Some(patch) = diff.patch.as_ref().filter(|p| !p.trim().is_empty()) {
+                    body = body.push(diff_excerpt(patch));
                 }
+                page = page.push(card(
+                    "WORKTREE NOW COMPARED WITH THIS SNAPSHOT",
+                    Some(
+                        row![
+                            text(snap.id.clone()).size(11).color(DIM),
+                            button(text("Hide").size(11.5))
+                                .padding([3, 10])
+                                .style(theme::outline_button_style(false))
+                                .on_press(Message::Panel(PanelMsg::SnapHide)),
+                        ]
+                        .spacing(10)
+                        .align_y(iced::Alignment::Center)
+                        .into(),
+                    ),
+                    body.into(),
+                ));
             }
         }
         page.into()
     }
+}
+
+/// The first lines of a unified diff: hunk headers dim, removed lines red, added lines green.
+fn diff_excerpt<'a>(patch: &str) -> Element<'a, Message> {
+    const SHOWN: usize = 60;
+    let mut lines = column![].spacing(1);
+    let all: Vec<&str> = patch
+        .lines()
+        .filter(|l| !(l.starts_with("diff --git") || l.starts_with("index ")))
+        .collect();
+    for l in all.iter().take(SHOWN) {
+        let color = if l.starts_with("@@") || l.starts_with("---") || l.starts_with("+++") {
+            DIM
+        } else if l.starts_with('-') {
+            BAD
+        } else if l.starts_with('+') {
+            OK
+        } else {
+            theme::TEXT2
+        };
+        lines = lines.push(text((*l).to_owned()).size(11).color(color));
+    }
+    if all.len() > SHOWN {
+        lines = lines.push(
+            text(format!("… {} more lines", all.len() - SHOWN))
+                .size(11)
+                .color(DIM),
+        );
+    }
+    container(lines)
+        .padding([8, 10])
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::INPUT)),
+            border: iced::Border {
+                color: theme::LINE,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
 }

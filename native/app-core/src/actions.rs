@@ -338,7 +338,7 @@ pub fn snapshot_compare(
     let reply = call(
         api,
         "shepherd.snapshot.diff",
-        json!({ "from": id, "root": root, "full": false }),
+        json!({ "from": id, "root": root, "full": true }),
     )?;
     typed(&reply, "diff")
 }
