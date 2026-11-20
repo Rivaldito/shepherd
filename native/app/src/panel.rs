@@ -883,6 +883,17 @@ impl Panel {
             .map(|v| (run.run.pattern.clone(), v.graph));
     }
 
+    /// A notice from the window itself (the connection): a toast and a line of the history.
+    pub fn notify(&mut self, notice: String) {
+        self.notice = notice;
+        self.sync_toast();
+    }
+
+    /// Drops the toasts that say exactly `text` (the "lost the connection" one, once it is back).
+    pub fn drop_toasts_saying(&mut self, text: &str) {
+        self.toasts.retain(|t| t.text.trim_end() != text);
+    }
+
     /// The toast to draw now, if any (a success goes away after a few seconds).
     pub fn toasts(&self) -> Vec<(usize, &crate::ui::Toast)> {
         self.toasts
@@ -5761,6 +5772,20 @@ mod tests {
         let _ = panel.update(PanelMsg::Done(Err("task 4 is in a run".into())), &ctx);
         assert_eq!(panel.notice, "Not deleted.\ntask 4 is in a run");
         assert!(crate::ui::is_error(&panel.notice));
+    }
+
+    #[test]
+    fn a_lost_connection_toast_stays_until_it_is_dropped() {
+        let mut panel = Panel::default();
+        panel.notify(crate::ui::invalid(
+            "Lost the connection to the server. Reconnecting…",
+        ));
+        assert!(panel.toasts().iter().all(|(_, t)| t.error));
+        assert_eq!(panel.toasts().len(), 1);
+        panel.drop_toasts_saying("Lost the connection to the server. Reconnecting…");
+        assert!(panel.toasts().is_empty());
+        panel.notify(crate::ui::info("Reconnected."));
+        assert!(panel.toasts().iter().all(|(_, t)| t.info));
     }
 
     #[test]

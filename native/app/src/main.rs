@@ -79,6 +79,8 @@ fn main() -> iced::Result {
 /// The session the app was switched to (see `Message::SwitchSession`); the connection thread reads it on every
 /// (re)connect, so a switch is: set this, close the current connection, and let the reader reconnect.
 static SOCKET_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// The summary of the toast that stays while the server cannot be reached.
+const LOST: &str = "Lost the connection to the server. Reconnecting…";
 static MENU_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CLOSE_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static NEW_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -318,6 +320,8 @@ struct App {
     surface: Option<PaneSurface>,
     snapshot: Snapshot,
     status: String,
+    /// The connection was lost and has not come back yet (one toast per outage).
+    was_lost: bool,
     pending_close: Option<PendingClose>,
     /// Animation step of the prism canvases.
     frame: u32,
@@ -376,6 +380,7 @@ impl App {
             surface: None,
             snapshot: Snapshot::default(),
             status: "connecting…".into(),
+            was_lost: false,
             pending_close: None,
             window: start_size(),
             sent: None,
@@ -500,6 +505,10 @@ impl App {
                 self.sender = Some(sender);
                 self.sent = None;
                 self.status = "connected".into();
+                if std::mem::take(&mut self.was_lost) {
+                    self.panel.drop_toasts_saying(LOST);
+                    self.panel.notify(ui::info("Reconnected."));
+                }
                 self.sync_size();
                 // verification aid: `SHEPHERD_NATIVE_NEWSESSION=<name>` types that name in the `+` box and submits it
                 if let Some(name) = std::env::var_os("SHEPHERD_NATIVE_NEWSESSION") {
@@ -531,6 +540,10 @@ impl App {
             Message::Lost(why) => {
                 self.sender = None;
                 self.status = format!("disconnected ({why}); reconnecting…");
+                // one persistent error toast per outage
+                if !std::mem::replace(&mut self.was_lost, true) {
+                    self.panel.notify(ui::invalid(LOST));
+                }
             }
             Message::Snapshot(snapshot) => {
                 let before = self.folder();
@@ -839,6 +852,18 @@ impl App {
             }
             Message::Act(action) => {
                 self.pending_close = None;
+                if let Action::FocusAgent(id) = &action {
+                    let pane = self
+                        .snapshot
+                        .agents
+                        .iter()
+                        .find(|a| a.display_name() == *id || a.pane_id == *id)
+                        .map(|a| a.pane_id.clone())
+                        .unwrap_or_default();
+                    self.panel.notify(ui::info(&format!(
+                        "Focused {id} (pane {pane}) in Terminal mode."
+                    )));
+                }
                 let (method, params) = match action {
                     Action::FocusSpace(id) => {
                         ("workspace.focus", serde_json::json!({ "workspace_id": id }))
