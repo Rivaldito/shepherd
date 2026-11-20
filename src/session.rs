@@ -283,7 +283,8 @@ pub(crate) fn restart_active_server() -> Result<(), String> {
 #[cfg(unix)]
 fn start_detached_server() -> Result<(), String> {
     use std::os::unix::process::CommandExt;
-    let exe = std::env::current_exe().map_err(|err| format!("could not find this binary: {err}"))?;
+    let exe =
+        std::env::current_exe().map_err(|err| format!("could not find this binary: {err}"))?;
     std::process::Command::new(exe)
         .arg("server")
         .stdin(std::process::Stdio::null())
@@ -297,7 +298,10 @@ fn start_detached_server() -> Result<(), String> {
 
 #[cfg(not(unix))]
 fn start_detached_server() -> Result<(), String> {
-    Err("restarting the server is not supported on this platform; run `shepherd server` yourself".into())
+    Err(
+        "restarting the server is not supported on this platform; run `shepherd server` yourself"
+            .into(),
+    )
 }
 
 fn stop_session_with_timeout(name: Option<&str>, timeout: Duration) -> Result<SessionInfo, String> {
