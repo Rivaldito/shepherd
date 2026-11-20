@@ -1212,7 +1212,7 @@ impl App {
             .spacing(8)
             .align_y(iced::Alignment::Center),
         )
-        .width(360)
+        .width(Length::Fill)
         .height(30)
         .padding([0, 10])
         .style(theme::outline_button_style(false))
@@ -1566,8 +1566,10 @@ impl App {
                 .on_press(Message::GoTo(panel::Tab::Overview)),
                 self.mode_switch(),
                 self.session_buttons(),
-                container(text("")).width(Length::Fill),
-                self.search_box(),
+                // the search box gives way before anything else is cut off (up to 360 px)
+                container(container(self.search_box()).max_width(360))
+                    .width(Length::Fill)
+                    .align_x(iced::alignment::Horizontal::Right),
                 self.needs_pill(),
                 text("●").size(9).color(status_color_val),
                 text(if connected {
