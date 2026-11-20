@@ -4136,6 +4136,23 @@ impl Panel {
             .spawn_vendor
             .as_ref()
             .and_then(|v| vendor_choices.iter().find(|c| c.name == v.name).cloned());
+        // the models of the vendor in use (the picked one, else the role's), from its list and its agent
+        let vendor_in_use = self
+            .spawn_vendor
+            .as_ref()
+            .map(|v| v.name.clone())
+            .or_else(|| {
+                self.spawn_role
+                    .as_ref()
+                    .and_then(|r| ctx.data.models.roles.get(&r.name))
+                    .map(|r| r.vendor.clone())
+            })
+            .unwrap_or_default();
+        let model_dropdown: Element<'a, Message> = crate::config_panel::dropdown_over(
+            self.cfg.models_of(&vendor_in_use),
+            &self.spawn_model,
+            |model| Message::Panel(PanelMsg::SpawnAgentModel(model)),
+        );
         let workspace_label = self
             .spawn_workspace
             .as_ref()
@@ -4162,9 +4179,7 @@ impl Panel {
             .placeholder("Pick a vendor")
             .width(Length::Fill),
             text("Model (optional)").size(12).color(DIM),
-            text_input("Model name", &self.spawn_model)
-                .on_input(|v| Message::Panel(PanelMsg::SpawnAgentModel(v)))
-                .width(Length::Fill),
+            model_dropdown,
             text("Task").size(12).color(DIM),
             text_input("Agent task description", &self.spawn_task_text)
                 .on_input(|v| Message::Panel(PanelMsg::SpawnAgentTask(v)))

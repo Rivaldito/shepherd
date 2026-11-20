@@ -1100,6 +1100,16 @@ impl ConfigPanel {
                     RField::Skills => r.skills = words(&value),
                     RField::Prompt => r.prompt = value,
                 }
+                // another vendor: a model it does not offer goes back to its default
+                if field == RField::Vendor
+                    && !self.role.model.is_empty()
+                    && !self.models_of(&self.role.vendor).contains(&self.role.model)
+                {
+                    self.role.model.clear();
+                    if let Some(slot) = self.rfields.iter_mut().find(|(f, _)| *f == RField::Model) {
+                        slot.1.clear();
+                    }
+                }
             }
             CfgMsg::RoleWorktree(on) => self.role.worktree = on,
             CfgMsg::RoleSpawn(on) => self.role.can_spawn = on,
@@ -2571,7 +2581,12 @@ impl ConfigPanel {
                             .push(
                                 row![
                                     self.vbox("Models (comma or space separated)", VField::Models),
-                                    self.vbox("Default model", VField::DefaultModel)
+                                    self.dropdown_vbox(
+                                        "Default model",
+                                        VField::DefaultModel,
+                                        self.models_for_form(),
+                                        Some(DEFAULT_MODEL),
+                                    )
                                 ]
                                 .spacing(16),
                             )
@@ -2614,8 +2629,13 @@ impl ConfigPanel {
                             self.models.vendors.keys().cloned().collect();
                         form = form
                             .push(self.rbox("name", RField::Name))
-                            .push(self.picked_rbox("vendor", RField::Vendor, vendor_names))
-                            .push(self.picked_rbox("model", RField::Model, self.role_models()))
+                            .push(self.dropdown_rbox("vendor", RField::Vendor, vendor_names, None))
+                            .push(self.dropdown_rbox(
+                                "model",
+                                RField::Model,
+                                self.role_models(),
+                                Some(DEFAULT_MODEL),
+                            ))
                             .push(self.rbox("fallback", RField::Fallback))
                             .push(self.rbox("must differ from", RField::MustDiffer))
                             .push(self.skills_row())
@@ -2889,6 +2909,23 @@ impl ConfigPanel {
         .into()
     }
 
+    /// The models the vendor being edited can have as its default: its list plus what its agent lists.
+    fn models_for_form(&self) -> Vec<String> {
+        let mut models = self.vendor.models.clone();
+        if let Some(found) = self
+            .installed
+            .iter()
+            .find(|r| !self.vendor.command.is_empty() && r.command == self.vendor.command)
+        {
+            for m in &found.models {
+                if !models.contains(m) {
+                    models.push(m.clone());
+                }
+            }
+        }
+        models
+    }
+
     /// Under a vendor's `models`: the models its agent offers that are not in the list yet, one click to add.
     fn model_chips<'a>(&'a self) -> Element<'a, Message> {
         let found = self
@@ -2932,9 +2969,9 @@ impl ConfigPanel {
         .into()
     }
 
-    /// The models a role can pick: its vendor's list plus what that vendor's agent offers on this computer.
-    fn role_models(&self) -> Vec<String> {
-        let vendor = self.models.vendors.get(&self.role.vendor);
+    /// The models a vendor offers: its own list plus what its agent lists on this computer.
+    pub fn models_of(&self, vendor: &str) -> Vec<String> {
+        let vendor = self.models.vendors.get(vendor);
         let mut models: Vec<String> = vendor.map(|v| v.models.clone()).unwrap_or_default();
         if let Some(v) = vendor {
             if let Some(found) = self.installed.iter().find(|r| r.command == v.command) {
@@ -2948,23 +2985,58 @@ impl ConfigPanel {
         models
     }
 
-    /// A text field of a role that also offers a list to pick from (the text stays editable).
-    fn picked_rbox<'a>(
+    /// The models a role can pick: those of its vendor.
+    fn role_models(&self) -> Vec<String> {
+        self.models_of(&self.role.vendor)
+    }
+
+    /// A role's choice among `options` (a dropdown, not a text field). `empty_label` is how "nothing chosen" reads.
+    fn dropdown_rbox<'a>(
         &'a self,
         label: &'static str,
         field: RField,
         options: Vec<String>,
+        empty_label: Option<&'static str>,
     ) -> Element<'a, Message> {
+        let value = self
+            .rfields
+            .iter()
+            .find(|(f, _)| *f == field)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("");
         row![
-            self.rbox(label, field),
-            iced::widget::pick_list(options, None::<String>, move |choice| {
-                cfg(CfgMsg::RoleField(field, choice))
-            })
-            .placeholder("pick…")
-            .width(150),
+            iced::widget::container(text(label).size(12).color(DIM)).width(110),
+            dropdown(options, value, empty_label, move |choice| cfg(
+                CfgMsg::RoleField(field, choice)
+            )),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center)
+        .into()
+    }
+
+    /// A vendor field chosen among `options` (a dropdown, not a text field).
+    fn dropdown_vbox<'a>(
+        &'a self,
+        label: &'static str,
+        field: VField,
+        options: Vec<String>,
+        empty_label: Option<&'static str>,
+    ) -> Element<'a, Message> {
+        let value = self
+            .vfields
+            .iter()
+            .find(|(f, _)| *f == field)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("");
+        column![
+            text(label).size(12).color(DIM),
+            dropdown(options, value, empty_label, move |choice| cfg(
+                CfgMsg::VendorField(field, choice)
+            )),
+        ]
+        .spacing(6)
+        .width(Length::Fill)
         .into()
     }
 
@@ -3186,9 +3258,118 @@ fn display(path: &Path) -> String {
     path.display().to_string()
 }
 
+/// How "no model chosen" reads in a dropdown: the agent uses its own default.
+const DEFAULT_MODEL: &str = "(default)";
+
+/// The dropdown of a model that may be left to the agent's default (`""`).
+pub fn dropdown_over<'a>(
+    options: Vec<String>,
+    current: &str,
+    on_pick: impl Fn(String) -> Message + 'a,
+) -> Element<'a, Message> {
+    dropdown(options, current, Some(DEFAULT_MODEL), on_pick)
+}
+
+/// A dropdown over `options` showing `current` (listed even when it is not among them, so a value set by hand is not
+/// lost). `empty_label`, when given, is the entry for the empty value.
+fn dropdown<'a>(
+    options: Vec<String>,
+    current: &str,
+    empty_label: Option<&'static str>,
+    on_pick: impl Fn(String) -> Message + 'a,
+) -> Element<'a, Message> {
+    let mut list: Vec<String> = Vec::new();
+    if let Some(label) = empty_label {
+        list.push(label.to_owned());
+    }
+    for option in options {
+        if !list.contains(&option) {
+            list.push(option);
+        }
+    }
+    if !current.is_empty() && !list.iter().any(|o| o == current) {
+        list.push(current.to_owned());
+    }
+    let selected = if current.is_empty() {
+        empty_label.map(str::to_owned)
+    } else {
+        Some(current.to_owned())
+    };
+    iced::widget::pick_list(list, selected, move |choice: String| {
+        on_pick(if Some(choice.as_str()) == empty_label {
+            String::new()
+        } else {
+            choice
+        })
+    })
+    .placeholder("pick…")
+    .text_size(13)
+    .padding([8, 10])
+    .width(Length::Fill)
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn vendor_with(command: &str, models: &[&str]) -> Vendor {
+        Vendor {
+            command: command.into(),
+            models: models.iter().map(|m| m.to_string()).collect(),
+            ..Vendor::default()
+        }
+    }
+
+    #[test]
+    fn a_vendor_offers_its_list_and_what_its_agent_lists_without_repeats() {
+        let mut panel = ConfigPanel::default();
+        panel
+            .models
+            .vendors
+            .insert("claude".into(), vendor_with("claude", &["opus", "sonnet"]));
+        panel.installed.push(InstalledRow {
+            command: "claude".into(),
+            path: Some("/bin/claude".into()),
+            vendor: Some("claude".into()),
+            state: None,
+            default_model: None,
+            models: vec!["sonnet".into(), "haiku".into()],
+        });
+        assert_eq!(panel.models_of("claude"), ["opus", "sonnet", "haiku"]);
+        assert!(panel.models_of("unknown").is_empty());
+    }
+
+    #[test]
+    fn another_vendor_resets_a_model_it_does_not_offer() {
+        let mut panel = ConfigPanel::default();
+        panel
+            .models
+            .vendors
+            .insert("claude".into(), vendor_with("claude", &["opus"]));
+        panel
+            .models
+            .vendors
+            .insert("codex".into(), vendor_with("codex", &["gpt-x"]));
+        panel.role.vendor = "claude".into();
+        panel.role.model = "opus".into();
+        panel.rfields = vec![
+            (RField::Vendor, "claude".into()),
+            (RField::Model, "opus".into()),
+        ];
+        let root = Path::new("/nowhere");
+        // the same vendor again keeps its model
+        let _ = panel.update(CfgMsg::RoleField(RField::Vendor, "claude".into()), root);
+        assert_eq!(panel.role.model, "opus");
+        // another vendor, which does not offer it, goes back to the default
+        let _ = panel.update(CfgMsg::RoleField(RField::Vendor, "codex".into()), root);
+        assert_eq!(panel.role.vendor, "codex");
+        assert_eq!(panel.role.model, "");
+        assert!(panel
+            .rfields
+            .iter()
+            .all(|(f, v)| *f != RField::Model || v.is_empty()));
+    }
 
     #[test]
     fn lists_split_on_commas_and_spaces_and_ignore_the_empty_bits() {
