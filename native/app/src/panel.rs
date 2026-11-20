@@ -159,6 +159,7 @@ pub enum PanelMsg {
     AgentSkill(String, String, Option<bool>),
     SnapCompare(String),
     SnapHide,
+    SnapFiles(String, Vec<String>),
     SnapCompared(
         String,
         Result<Box<shepherd_app_core::shepherd_core::snapshot::DiffResult>, String>,
@@ -269,6 +270,8 @@ pub struct Panel {
     armed: Option<Armed>,
     /// The snapshot picked in the Snapshots tab, and what the server said it holds.
     snap: Option<String>,
+    /// The files each snapshot holds, loaded while the Snapshots filter has text (to search by file).
+    snap_files: std::collections::HashMap<String, Vec<String>>,
     snap_detail: Option<(
         String,
         Result<Box<shepherd_app_core::shepherd_core::snapshot::ShowResult>, String>,
@@ -367,6 +370,7 @@ impl Default for Panel {
             objective: text_editor::Content::new(),
             armed: None,
             snap: None,
+            snap_files: std::collections::HashMap::new(),
             snap_detail: None,
             snap_compare: None,
             notice: String::new(),
@@ -938,7 +942,42 @@ impl Panel {
                 }
             }
             PanelMsg::Cfg(msg) => return self.cfg.update(msg, &ctx.data.root),
-            PanelMsg::Filter(t) => self.filter = t,
+            PanelMsg::Filter(t) => {
+                self.filter = t;
+                // searching Snapshots by file: ask what the snapshots not seen yet hold
+                if self.tab == Tab::Snapshots && !self.filter.trim().is_empty() {
+                    let unseen: Vec<_> = ctx
+                        .data
+                        .snapshots
+                        .iter()
+                        .filter(|s| !self.snap_files.contains_key(&s.id))
+                        .collect();
+                    let tasks: Vec<Task<Message>> = unseen
+                        .into_iter()
+                        .map(|s| {
+                            // marked as asked, so typing more letters does not ask again
+                            self.snap_files.insert(s.id.clone(), vec![]);
+                            let (api, id) = (ctx.api.clone(), s.id.clone());
+                            let root = snapshots::restore_root(ctx.data, &id);
+                            Task::perform(
+                                async move {
+                                    let files = actions::snapshot_show(&api, &id, &root)
+                                        .map(|shown| {
+                                            shown.diff.files.into_iter().map(|f| f.path).collect()
+                                        })
+                                        .unwrap_or_default();
+                                    (id, files)
+                                },
+                                |(id, files)| Message::Panel(PanelMsg::SnapFiles(id, files)),
+                            )
+                        })
+                        .collect();
+                    return Task::batch(tasks);
+                }
+            }
+            PanelMsg::SnapFiles(id, files) => {
+                self.snap_files.insert(id, files);
+            }
             PanelMsg::Chip(i) => self.chip = i,
             PanelMsg::DismissToast(i) => {
                 if i < self.toasts.len() {

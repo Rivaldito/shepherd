@@ -148,7 +148,7 @@ impl Panel {
         }
         let filters = container(
             row![
-                text_input("Filter by agent or id", &self.filter)
+                text_input("Filter by file, like auth/logout.go", &self.filter)
                     .on_input(|t| Message::Panel(PanelMsg::Filter(t)))
                     .id(crate::ui::FILTER_ID)
                     .style(theme::input_style)
@@ -180,7 +180,14 @@ impl Panel {
                     .snap_reason_filter
                     .as_deref()
                     .is_none_or(|r| r == s.reason.as_str())
-                && self.passes(&format!("{} {}", s.id, s.agent))
+                && self.passes(&format!(
+                    "{} {} {}",
+                    s.id,
+                    s.agent,
+                    self.snap_files
+                        .get(&s.id)
+                        .map_or(String::new(), |f| f.join(" "))
+                ))
         };
         // grouped by agent (newest first inside), each group with its own prune
         let mut items: Vec<Element<'a, Message>> = vec![];

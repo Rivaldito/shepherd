@@ -183,8 +183,10 @@ pub struct ConfigPanel {
     baseline: String,
     /// Roles changed in the table and not saved yet.
     role_pending: std::collections::BTreeMap<String, Role>,
-    /// Roles removed in the table and not saved yet.
+    /// Roles removed and not saved yet.
     role_removed: std::collections::BTreeSet<String>,
+    /// Vendors removed and not saved yet.
+    vendor_removed: std::collections::BTreeSet<String>,
     /// `Look again` was pressed: the next detection says how many agent commands it found.
     looking_again: bool,
     /// What the last action was doing, shown above the server's refusal.
@@ -377,6 +379,9 @@ impl ConfigPanel {
 
     /// Are there changes that `Save to config.yaml` would write?
     fn dirty(&self) -> bool {
+        if !self.vendor_removed.is_empty() || !self.role_removed.is_empty() {
+            return true;
+        }
         match &self.editing {
             Some(Editing::Vendor(_) | Editing::Role(_)) => {
                 self.is_new || self.snapshot() != self.baseline
@@ -384,6 +389,20 @@ impl ConfigPanel {
             Some(Editing::Roles) => !self.role_pending.is_empty() || !self.role_removed.is_empty(),
             _ => false,
         }
+    }
+
+    /// Writes the removals that wait for the next save: roles first, then the vendors (a vendor a role uses
+    /// cannot go).
+    fn apply_removals(&mut self) -> Result<(), String> {
+        for name in &self.role_removed {
+            config_data::delete_entry("roles", name)?;
+        }
+        for name in &self.vendor_removed {
+            config_data::delete_entry("vendors", name)?;
+        }
+        self.role_removed.clear();
+        self.vendor_removed.clear();
+        Ok(())
     }
 
     /// The role as the table shows it: with the change that is waiting to be saved, if any.
@@ -510,7 +529,13 @@ impl ConfigPanel {
                 self.models = models;
                 self.loading = false;
                 if self.editing.is_none() {
-                    if let Some(name) = self.models.vendors.keys().next().cloned() {
+                    let first = self
+                        .models
+                        .vendors
+                        .keys()
+                        .find(|n| !self.vendor_removed.contains(*n))
+                        .cloned();
+                    if let Some(name) = first {
                         self.open_vendor(&name, false);
                     }
                 }
@@ -1016,6 +1041,12 @@ impl ConfigPanel {
             CfgMsg::Discard => {
                 self.role_pending.clear();
                 self.role_removed.clear();
+                self.vendor_removed.clear();
+                if self.editing.is_none() {
+                    if let Some(name) = self.models.vendors.keys().next().cloned() {
+                        self.open_vendor(&name, false);
+                    }
+                }
                 match self.editing.clone() {
                     Some(Editing::Vendor(name)) if !self.is_new => self.open_vendor(&name, false),
                     Some(Editing::Role(name)) if !self.is_new => self.open_role(&name, false),
@@ -1105,19 +1136,12 @@ impl ConfigPanel {
                             }
                         }
                         if done.is_ok() {
-                            for name in &self.role_removed {
-                                if let Err(e) = config_data::delete_entry("roles", name) {
-                                    done = Err(e);
-                                    break;
-                                }
-                            }
+                            done = self.apply_removals().map(|()| PathBuf::new());
                         }
                         match done {
-                            Ok(path) => {
+                            Ok(_) => {
                                 self.role_pending.clear();
-                                self.role_removed.clear();
                                 self.notice = "Saved config.yaml.".into();
-                                let _ = path;
                                 return Self::load_models(root);
                             }
                             Err(e) => {
@@ -1126,10 +1150,24 @@ impl ConfigPanel {
                             }
                         }
                     }
-                    Some(Editing::Installed) | None => return Task::none(),
+                    Some(Editing::Installed) | None => {
+                        // nothing open: only the removals wait to be written
+                        if !self.dirty() {
+                            return Task::none();
+                        }
+                        match self.apply_removals() {
+                            Ok(()) => self.notice = "Saved config.yaml.".into(),
+                            Err(e) => self.notice = crate::panel::refusal(self.fail, &e),
+                        }
+                        return Self::load_models(root);
+                    }
                 };
                 match result {
                     Ok((_, editing)) => {
+                        if let Err(e) = self.apply_removals() {
+                            self.notice = crate::panel::refusal(self.fail, &e);
+                            return Task::none();
+                        }
                         self.notice = "Saved config.yaml.".into();
                         self.editing = Some(editing);
                         self.is_new = false;
@@ -1151,18 +1189,44 @@ impl ConfigPanel {
                 ) {
                     return Task::none();
                 }
-                let result = match self.editing.take() {
-                    Some(Editing::Vendor(name)) => config_data::delete_entry("vendors", &name),
-                    Some(Editing::Role(name)) => config_data::delete_entry("roles", &name),
-                    Some(Editing::Installed | Editing::Roles) | None => return Task::none(),
-                };
-                match result {
-                    Ok(path) => {
-                        self.notice = format!("Deleted from {}", display(&path));
-                        return Self::load_models(root);
+                let is_new = self.is_new;
+                match self.editing.take() {
+                    Some(Editing::Vendor(name)) => {
+                        let users: Vec<&str> = self
+                            .models
+                            .roles
+                            .iter()
+                            .filter(|(n, r)| r.vendor == name && !self.role_removed.contains(*n))
+                            .map(|(n, _)| n.as_str())
+                            .collect();
+                        if !users.is_empty() && !is_new {
+                            self.notice = crate::panel::refusal(
+                                "Not deleted.",
+                                &format!(
+                                    "config: vendor \"{name}\" is used by roles: {}",
+                                    users.join(", ")
+                                ),
+                            );
+                            self.editing = Some(Editing::Vendor(name));
+                            return Task::none();
+                        }
+                        if !is_new {
+                            self.vendor_removed.insert(name.clone());
+                            self.notice = crate::ui::info(&format!(
+                                "Deleted vendor {name}. Save to keep it."
+                            ));
+                        }
                     }
-                    Err(e) => self.notice = crate::panel::refusal(self.fail, &e),
+                    Some(Editing::Role(name)) => {
+                        if !is_new {
+                            self.role_removed.insert(name.clone());
+                            self.notice =
+                                crate::ui::info(&format!("Deleted role {name}. Save to keep it."));
+                        }
+                    }
+                    Some(Editing::Installed | Editing::Roles) | None => {}
                 }
+                self.is_new = false;
             }
             CfgMsg::RefreshEvents => {
                 self.announce_topics = true;
@@ -2401,7 +2465,12 @@ impl ConfigPanel {
             .into(),
             crate::theme::label("VENDORS").into(),
         ];
-        for (name, v) in &self.models.vendors {
+        for (name, v) in self
+            .models
+            .vendors
+            .iter()
+            .filter(|(n, _)| !self.vendor_removed.contains(*n))
+        {
             let selected = matches!(&self.editing, Some(Editing::Vendor(n)) if n == name);
             items.push(
                 button(column![
@@ -2419,7 +2488,12 @@ impl ConfigPanel {
             );
         }
         items.push(crate::theme::label("ROLES").into());
-        for (name, r) in &self.models.roles {
+        for (name, r) in self
+            .models
+            .roles
+            .iter()
+            .filter(|(n, _)| !self.role_removed.contains(*n))
+        {
             let selected = matches!(&self.editing, Some(Editing::Role(n)) if n == name);
             items.push(
                 button(column![
@@ -3224,6 +3298,41 @@ mod tests {
         assert!(!panel.dirty());
         assert_eq!(panel.role_now("coder").vendor, "a");
         assert!(crate::ui::Toast::new(panel.notice.clone()).info);
+    }
+
+    #[test]
+    fn deleting_a_vendor_waits_for_the_save_and_a_vendor_a_role_uses_cannot_go() {
+        let root = Path::new("/nowhere");
+        let mut panel = ConfigPanel::default();
+        panel.models.vendors.insert("a".into(), Vendor::default());
+        panel.models.vendors.insert("b".into(), Vendor::default());
+        panel.models.roles.insert(
+            "coder".into(),
+            Role {
+                vendor: "a".into(),
+                ..Role::default()
+            },
+        );
+        // a used vendor is refused, with the config's own words
+        panel.open_vendor("a", false);
+        let _ = panel.update(CfgMsg::Delete, root);
+        let _ = panel.update(CfgMsg::Delete, root);
+        assert!(panel.vendor_removed.is_empty());
+        assert!(
+            panel.notice.contains("is used by roles: coder"),
+            "{}",
+            panel.notice
+        );
+        // an unused one is marked, nothing is written, and the save bar has something to save
+        panel.open_vendor("b", false);
+        let _ = panel.update(CfgMsg::Delete, root);
+        let _ = panel.update(CfgMsg::Delete, root);
+        assert!(panel.vendor_removed.contains("b"));
+        assert!(panel.dirty());
+        assert!(panel.notice.contains("Deleted vendor b. Save to keep it."));
+        // Discard brings it back
+        let _ = panel.update(CfgMsg::Discard, root);
+        assert!(panel.vendor_removed.is_empty() && !panel.dirty());
     }
 
     #[test]
