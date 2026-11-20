@@ -364,7 +364,7 @@ impl PatternEditor {
         self.editor.dirty = true;
     }
 
-    pub fn view<'a>(&'a self, frame: u32, delete_armed: bool) -> Element<'a, Message> {
+    pub fn view<'a>(&'a self, delete_armed: bool) -> Element<'a, Message> {
         let edit = |m: EditMsg| Message::Panel(crate::panel::PanelMsg::EditPattern(m));
         let tool = |label: &'static str, msg: EditMsg, on: bool| {
             button(container(text(label).size(12.5)).center_y(Length::Fill))
@@ -562,7 +562,6 @@ impl PatternEditor {
                 selected: self.selected.as_ref().map(Sel::key),
                 connecting: self.connecting.as_ref().map(Sel::key),
                 zoom: mini_zoom,
-                frame,
                 mini: true,
             })
             .width(170)
@@ -666,7 +665,6 @@ impl PatternEditor {
                     selected: self.selected.as_ref().map(Sel::key),
                     connecting: self.connecting.as_ref().map(Sel::key),
                     zoom: self.zoom,
-                    frame,
                     mini: false,
                 })
                 .width(Length::Fixed(self.graph.width.max(960.0) * self.zoom))

@@ -87,6 +87,7 @@ impl Preset {
         ..BASE
     };
     /// The 3 px strip across the top of an agent node in the pattern graph.
+    #[cfg(test)]
     pub const NODE: Preset = Preset {
         px: 1.0,
         reach: 1.05,

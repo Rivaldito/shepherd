@@ -1,7 +1,6 @@
 //! Draws a pattern graph (positions come from `pattern_graph::layout`).
 
-use crate::prism::{self, Preset};
-use crate::theme::{ACCENT, BAD, DIM, HI, LINE2, OK};
+use crate::theme::{ACCENT, BAD, DIM, HI, LINE2, LINE3, OK};
 use iced::widget::canvas::{self, Path, Stroke, Text};
 use iced::{mouse, Color, Point, Rectangle, Size, Theme, Vector};
 use shepherd_app_core::pattern_graph::{Graph, Node, NodeKind, NODE_H, NODE_W};
@@ -12,8 +11,6 @@ pub struct GraphView<'a> {
     pub selected: Option<String>,
     pub connecting: Option<String>,
     pub zoom: f32,
-    /// Animation step: the dashes of the gradient on the edges run along them.
-    pub frame: u32,
     /// The overview map of the inspector: just a box per node.
     pub mini: bool,
 }
@@ -27,19 +24,35 @@ pub fn node_at(graph: &Graph, p: Point) -> Option<&Node> {
         .find(|n| p.x >= n.x && p.x <= n.x + NODE_W && p.y >= n.y && p.y <= n.y + NODE_H)
 }
 
-/// The right-angled route of an arrow between two nodes.
-pub fn edge_route(from_node: &Node, to_node: &Node) -> Vec<Point> {
-    let (a, b) = anchors(from_node, to_node);
-    let horizontal = (to_node.x - from_node.x).abs() > 1.0;
-    if (a.x - b.x).abs() < 1.0 || (a.y - b.y).abs() < 1.0 {
-        vec![a, b]
-    } else if horizontal {
-        let mx = (a.x + b.x) / 2.0;
-        vec![a, Point::new(mx, a.y), Point::new(mx, b.y), b]
-    } else {
-        let my = (a.y + b.y) / 2.0;
-        vec![a, Point::new(a.x, my), Point::new(b.x, my), b]
+/// The point where the line from the centre of a `w` x `h` box (centred on `b`) towards `a` leaves the box.
+fn clip_to(a: Point, b: Point, w: f32, h: f32) -> Point {
+    let (dx, dy) = (a.x - b.x, a.y - b.y);
+    if dx == 0.0 && dy == 0.0 {
+        return b;
     }
+    let tx = if dx != 0.0 {
+        (w / 2.0 / dx).abs()
+    } else {
+        f32::INFINITY
+    };
+    let ty = if dy != 0.0 {
+        (h / 2.0 / dy).abs()
+    } else {
+        f32::INFINITY
+    };
+    let t = tx.min(ty);
+    Point::new(b.x + dx * t, b.y + dy * t)
+}
+
+/// The straight arrow between two nodes of the editor: from the border of the sender to the border of the
+/// receiver (4 px short of it, so the head does not touch the box).
+pub fn straight_edge(from: &Node, to: &Node) -> (Point, Point) {
+    let a = Point::new(from.x + NODE_W / 2.0, from.y + NODE_H / 2.0);
+    let b = Point::new(to.x + NODE_W / 2.0, to.y + NODE_H / 2.0);
+    (
+        clip_to(b, a, NODE_W, NODE_H),
+        clip_to(a, b, NODE_W + 8.0, NODE_H + 8.0),
+    )
 }
 
 /// The live topology of a run: the pattern's graph, read-only, each agent coloured by its state and the
@@ -89,30 +102,35 @@ impl canvas::Program<crate::Message> for TopologyView<'_> {
                 .position(|n| n.key == node.key)?;
             self.agents.iter().filter(|(_, r, _, _)| r == role).nth(nth)
         };
+        // lines between the centres of the boxes, under them: grey and still, or cyan and flowing while live
         for edge in &self.graph.edges {
-            let route = edge_route(&self.graph.nodes[edge.from], &self.graph.nodes[edge.to]);
-            let path = Path::new(|p| {
-                p.move_to(route[0]);
-                for point in &route[1..] {
-                    p.line_to(*point);
-                }
-            });
-            frame.stroke(
-                &path,
-                Stroke {
-                    style: canvas::Style::Solid(Color { a: 0.7, ..ACCENT }),
-                    width: 1.0,
-                    line_dash: canvas::LineDash {
-                        segments: &[4.0, 5.0],
-                        offset: if self.live {
-                            (9 - (self.frame as usize * 2) % 9) % 9
-                        } else {
-                            0
-                        },
-                    },
-                    ..Stroke::default()
-                },
+            let (from, to) = (&self.graph.nodes[edge.from], &self.graph.nodes[edge.to]);
+            let line = Path::line(
+                Point::new(from.x + NODE_W / 2.0, from.y + NODE_H / 2.0),
+                Point::new(to.x + NODE_W / 2.0, to.y + NODE_H / 2.0),
             );
+            if self.live {
+                frame.stroke(
+                    &line,
+                    Stroke {
+                        style: canvas::Style::Solid(Color { a: 0.55, ..ACCENT }),
+                        width: 1.5,
+                        line_dash: canvas::LineDash {
+                            segments: &[4.0, 6.0],
+                            // one dash period (10 px) per second, at about 8 frames a second
+                            offset: (10 - (self.frame as usize * 10 / 8) % 10) % 10,
+                        },
+                        ..Stroke::default()
+                    },
+                );
+            } else {
+                frame.stroke(
+                    &line,
+                    Stroke::default()
+                        .with_color(crate::theme::LINE3)
+                        .with_width(1.5),
+                );
+            }
         }
         for node in &self.graph.nodes {
             let is_agent = matches!(node.kind, NodeKind::Agent);
@@ -162,26 +180,6 @@ impl canvas::Program<crate::Message> for TopologyView<'_> {
             });
         }
         vec![frame.into_geometry()]
-    }
-}
-
-/// Where an arrow leaves `from` and enters `to`: the facing sides, or bottom to top in the same column.
-pub fn anchors(from: &Node, to: &Node) -> (Point, Point) {
-    let mid = |n: &Node, side_x: f32| Point::new(n.x + side_x, n.y + NODE_H / 2.0);
-    if to.x > from.x + 1.0 {
-        (mid(from, NODE_W), mid(to, 0.0))
-    } else if to.x + 1.0 < from.x {
-        (mid(from, 0.0), mid(to, NODE_W))
-    } else if to.y >= from.y {
-        (
-            Point::new(from.x + NODE_W / 2.0, from.y + NODE_H),
-            Point::new(to.x + NODE_W / 2.0, to.y),
-        )
-    } else {
-        (
-            Point::new(from.x + NODE_W / 2.0, from.y),
-            Point::new(to.x + NODE_W / 2.0, to.y + NODE_H),
-        )
     }
 }
 
@@ -273,76 +271,55 @@ impl canvas::Program<crate::Message> for GraphView<'_> {
             }
             return vec![frame.into_geometry()];
         }
-        let dot = Color::from_rgba8(160, 160, 190, 0.22);
+        let dot = Color::from_rgba8(160, 160, 190, 0.16);
         for x in (0..bounds.width as u32).step_by(18) {
             for y in (0..bounds.height as u32).step_by(18) {
                 frame.fill_rectangle(Point::new(x as f32, y as f32), Size::new(1.0, 1.0), dot);
             }
         }
-        // Edges leave and enter with a right-angled route, like the mockup; the arrow head follows the last leg.
+        // Edges: straight grey lines (1.5 px) from the sender's border to the receiver's, with a grey arrow head
         for edge in &self.graph.edges {
-            let (a, b) = anchors(&self.graph.nodes[edge.from], &self.graph.nodes[edge.to]);
-            let route = edge_route(&self.graph.nodes[edge.from], &self.graph.nodes[edge.to]);
-            let path = Path::new(|p| {
-                p.move_to(route[0]);
-                for point in &route[1..] {
-                    p.line_to(*point);
-                }
-            });
-            frame.stroke(&path, Stroke::default().with_color(LINE2).with_width(2.0));
-            // `.edge`: dashes in the prism gradient that move from the source to the target
-            let mut gradient = canvas::gradient::Linear::new(a, b);
-            for (stop, (r, g, bl)) in [
-                (0.0, (255, 45, 85)),
-                (0.33, (255, 212, 0)),
-                (0.66, (25, 211, 255)),
-                (1.0, (177, 77, 255)),
-            ] {
-                gradient = gradient.add_stop(stop, Color::from_rgb8(r, g, bl));
-            }
+            let (s, d) = straight_edge(&self.graph.nodes[edge.from], &self.graph.nodes[edge.to]);
             frame.stroke(
-                &path,
-                Stroke {
-                    style: canvas::Style::Gradient(gradient.into()),
-                    width: 2.0,
-                    line_dash: canvas::LineDash {
-                        segments: &[6.0, 8.0],
-                        offset: (14 - (self.frame as usize * 5) % 14) % 14,
-                    },
-                    ..Stroke::default()
-                },
+                &Path::line(s, d),
+                Stroke::default().with_color(LINE3).with_width(1.5),
             );
-            let (from, to) = (route[route.len() - 2], route[route.len() - 1]);
-            let (dx, dy) = (to.x - from.x, to.y - from.y);
+            let (dx, dy) = (d.x - s.x, d.y - s.y);
             let len = (dx * dx + dy * dy).sqrt().max(1.0);
             let (ux, uy) = (dx / len, dy / len);
-            let base = Point::new(to.x - ux * 9.0, to.y - uy * 9.0);
+            // the marker of the reference: 7 line widths long and wide
+            let size = 10.5;
+            let base = Point::new(d.x - ux * size, d.y - uy * size);
             let head = Path::new(|p| {
-                p.move_to(to);
-                p.line_to(Point::new(base.x - uy * 4.5, base.y + ux * 4.5));
-                p.line_to(Point::new(base.x + uy * 4.5, base.y - ux * 4.5));
+                p.move_to(d);
+                p.line_to(Point::new(
+                    base.x - uy * size / 2.0,
+                    base.y + ux * size / 2.0,
+                ));
+                p.line_to(Point::new(
+                    base.x + uy * size / 2.0,
+                    base.y - ux * size / 2.0,
+                ));
                 p.close();
             });
-            frame.fill(&head, DIM);
+            frame.fill(&head, LINE3);
         }
-        for (index, node) in self.graph.nodes.iter().enumerate() {
+        for node in &self.graph.nodes {
             let marked = self.selected.as_deref() == Some(node.key.as_str());
             let linking = self.connecting.as_deref() == Some(node.key.as_str());
             let origin = Point::new(node.x, node.y);
             let size = Size::new(NODE_W, NODE_H);
-            let rect = Path::rounded_rectangle(origin, size, 6.0.into());
+            let rect = Path::rounded_rectangle(origin, size, 8.0.into());
             if marked {
-                // glow: `0 0 24px rgba(25,211,255,.18)`
-                for (grow, alpha) in [(6.0, 0.05), (3.0, 0.08)] {
-                    let halo = Path::rounded_rectangle(
-                        Point::new(node.x - grow, node.y - grow),
-                        Size::new(NODE_W + 2.0 * grow, NODE_H + 2.0 * grow),
-                        (6.0 + grow).into(),
-                    );
-                    frame.fill(&halo, Color { a: alpha, ..ACCENT });
-                }
+                // selection: a 3 px ring, cyan at 18 %
+                let ring = Path::rounded_rectangle(
+                    Point::new(node.x - 3.0, node.y - 3.0),
+                    Size::new(NODE_W + 6.0, NODE_H + 6.0),
+                    11.0.into(),
+                );
+                frame.fill(&ring, Color { a: 0.18, ..ACCENT });
             }
-            frame.fill(&rect, Color::from_rgb8(0x10, 0x10, 0x18));
+            frame.fill(&rect, crate::theme::SURFACE);
             let is_agent = matches!(node.kind, NodeKind::Agent);
             let mut stroke = Stroke::default()
                 .with_color(if linking {
@@ -350,11 +327,14 @@ impl canvas::Program<crate::Message> for GraphView<'_> {
                 } else if marked {
                     ACCENT
                 } else if is_agent {
-                    Color::from_rgb8(0x3A, 0x3A, 0x4C)
+                    Color { a: 0.4, ..ACCENT }
                 } else {
-                    LINE2
+                    Color {
+                        a: 0.6,
+                        ..crate::theme::VIOLET
+                    }
                 })
-                .with_width(if marked || linking { 1.5 } else { 1.0 });
+                .with_width(1.0);
             if !is_agent {
                 stroke.line_dash = canvas::LineDash {
                     segments: &[4.0, 3.0],
@@ -362,28 +342,26 @@ impl canvas::Program<crate::Message> for GraphView<'_> {
                 };
             }
             frame.stroke(&rect, stroke);
-            if is_agent {
-                // `.st`: the animated 3 px prism strip along the top edge, each node a little out of step
-                let strip = Size::new(NODE_W - 2.0, 3.0);
-                let step = self.frame.wrapping_add(index as u32 * 3);
-                for (x, y, [r, g, b]) in prism::cells(strip, &Preset::NODE, step) {
-                    frame.fill_rectangle(
-                        Point::new(node.x + 1.0 + x as f32, node.y + y as f32),
-                        Size::new(1.0, 1.0),
-                        Color::from_rgb8(r, g, b),
-                    );
-                }
-            }
+            // a square in the node's colour, then the name and the line under it
+            frame.fill_rectangle(
+                Point::new(node.x + 10.0, node.y + 14.0),
+                Size::new(7.0, 7.0),
+                if is_agent {
+                    ACCENT
+                } else {
+                    crate::theme::VIOLET
+                },
+            );
             frame.fill_text(Text {
                 content: node.label.clone(),
-                position: Point::new(node.x + 12.0, node.y + 11.0),
+                position: Point::new(node.x + 24.0, node.y + 10.0),
                 color: HI,
-                size: 14.0.into(),
+                size: 12.5.into(),
                 ..Text::default()
             });
             frame.fill_text(Text {
                 content: node.detail.clone(),
-                position: Point::new(node.x + 12.0, node.y + 33.0),
+                position: Point::new(node.x + 10.0, node.y + 31.0),
                 color: DIM,
                 size: 11.0.into(),
                 ..Text::default()
@@ -447,20 +425,15 @@ mod tests {
     }
 
     #[test]
-    fn arrows_leave_and_enter_the_facing_sides() {
-        let (a, b) = anchors(&node(0.0, 0.0), &node(300.0, 0.0));
+    fn an_arrow_runs_from_border_to_border_and_stops_short_of_the_target() {
+        let (a, b) = straight_edge(&node(0.0, 0.0), &node(300.0, 0.0));
+        assert_eq!(a.x, NODE_W, "leaves the right side of the sender");
+        assert_eq!(b.x, 300.0 - 4.0, "enters the left side, 4 px short");
+        let (a, b) = straight_edge(&node(0.0, 0.0), &node(0.0, 100.0));
         assert_eq!(
-            (a.x, b.x),
-            (NODE_W, 300.0),
-            "forward: right side to left side"
+            (a.y, b.y),
+            (NODE_H, 100.0 - 4.0),
+            "same column: bottom to top"
         );
-        let (a, b) = anchors(&node(300.0, 0.0), &node(0.0, 0.0));
-        assert_eq!(
-            (a.x, b.x),
-            (300.0, NODE_W),
-            "backward: left side to right side"
-        );
-        let (a, b) = anchors(&node(0.0, 0.0), &node(0.0, 100.0));
-        assert_eq!((a.y, b.y), (NODE_H, 100.0), "same column: bottom to top");
     }
 }

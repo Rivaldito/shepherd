@@ -4795,10 +4795,8 @@ impl Panel {
                 .style(card_style)
                 .into()
             }
-            Some(edit) => column![edit.view(
-                ctx.frame,
-                self.armed == Some(Armed::DeletePattern(edit.editor.pattern.name.clone()))
-            ),]
+            Some(edit) => column![edit
+                .view(self.armed == Some(Armed::DeletePattern(edit.editor.pattern.name.clone()))),]
             .spacing(10)
             .into(),
         };
