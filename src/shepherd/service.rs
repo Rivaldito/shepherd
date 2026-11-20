@@ -565,7 +565,26 @@ impl ShepherdRuntimeService {
                             } else {
                                 backup_interval
                             };
-                            let _ = core_for_rec.terminals().wait_agent_event(wait);
+                            // Wait in short slices, so a shutdown does not sit out the whole interval (it used to
+                            // take up to 10 s to stop the server). An agent event ends the wait at once.
+                            let deadline = std::time::Instant::now() + wait;
+                            loop {
+                                let left =
+                                    deadline.saturating_duration_since(std::time::Instant::now());
+                                if left.is_zero() {
+                                    break;
+                                }
+                                let slice = left.min(std::time::Duration::from_millis(200));
+                                if matches!(
+                                    core_for_rec.terminals().wait_agent_event(slice),
+                                    Ok(true)
+                                ) {
+                                    break;
+                                }
+                                if lock.lock().map(|stopped| *stopped).unwrap_or(false) {
+                                    break;
+                                }
+                            }
 
                             if let Ok(guard) = lock.lock() {
                                 if *guard {

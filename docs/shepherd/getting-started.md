@@ -34,16 +34,16 @@ cd shepherd
 
 The binary is `target/release/shepherd`. Put it on your `PATH`, or run it from there. For a quick local try you can use the debug build (`./cargo-fork.sh build`, binary in `target/debug/shepherd`). A debug build reads its configuration from `~/.config/shepherd-dev/` instead of `~/.config/shepherd/`.
 
-## 3. Enable the orchestrator
+## 3. Check the configuration
 
-Without this switch Shepherd behaves like a plain terminal multiplexer. Create `~/.config/shepherd/config.toml`:
+The orchestrator is on by default, so there is nothing to enable. If you want Shepherd to behave like a plain terminal multiplexer, create `~/.config/shepherd/config.toml` with:
 
 ```toml
 [shepherd]
-enabled = true
+enabled = false
 ```
 
-Check it:
+Check the configuration:
 
 ```
 $ shepherd config check

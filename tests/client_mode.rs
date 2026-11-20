@@ -160,7 +160,7 @@ fn spawn_server(
         runtime_dir,
         api_socket_path,
         client_socket_path,
-        "onboarding = false\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n",
     )
 }
 
@@ -297,7 +297,7 @@ fn direct_attach_initial_mouse_capture_follows_config() {
         &runtime_dir,
         &api_socket,
         &client_socket,
-        "onboarding = false\n[ui]\nmouse_capture = false\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n[ui]\nmouse_capture = false\n",
     );
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
@@ -370,7 +370,7 @@ fn direct_attach_initial_mouse_capture_follows_config() {
 
     fs::write(
         &config_path,
-        "onboarding = false\n[ui]\nmouse_capture = true\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n[ui]\nmouse_capture = true\n",
     )
     .unwrap();
     let attach = spawn_client_process_with_args(
@@ -494,7 +494,7 @@ fn server_unreachable_shows_clear_error() {
     register_runtime_dir(&runtime_dir);
     fs::write(
         config_home.join("shepherd/config.toml"),
-        "onboarding = false\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n",
     )
     .unwrap();
 
@@ -730,7 +730,7 @@ fn sigwinch_refreshes_host_palette_without_resizing() {
         &runtime_dir,
         &api_socket,
         &client_socket,
-        "onboarding = false\n[theme]\nname = \"terminal\"\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n[theme]\nname = \"terminal\"\n",
     );
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
@@ -852,7 +852,7 @@ fn attach_thin_client(
         runtime_dir,
         api_socket,
         client_socket,
-        "onboarding = false\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n",
     )
 }
 
@@ -916,7 +916,7 @@ fn federated_launch_opens_local_directly_while_saved_ssh_is_unavailable() {
         fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
         fs::write(
             config_home.join(app_dir_name()).join("config.toml"),
-            "onboarding = false\n",
+            "onboarding = false\n[shepherd]\nenabled = false\n",
         )
         .unwrap();
         let catalog_dir = runtime_dir
@@ -1023,7 +1023,7 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
     fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
     fs::write(
         config_home.join(app_dir_name()).join("config.toml"),
-        "onboarding = false\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n",
     )
     .unwrap();
     let catalog_dir = runtime_dir
@@ -1474,7 +1474,7 @@ fn configured_window_title_tracks_all_tokens_and_focused_osc_only() {
         &runtime_dir,
         &api_socket,
         &client_socket,
-        "onboarding = false\n[ui]\nwindow_title = \"H={hostname}|W={workspace}|T={tab}|P={pane}|O={terminal_title}\"\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n[ui]\nwindow_title = \"H={hostname}|W={workspace}|T={tab}|P={pane}|O={terminal_title}\"\n",
     );
 
     let created = send_json_request(
@@ -2062,7 +2062,7 @@ fn client_receives_notify_on_agent_state_change() {
     fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
     fs::write(
         config_home.join(app_dir_name()).join("config.toml"),
-        "onboarding = false\n[ui.toast]\nenabled = true\n[ui.sound]\nenabled = true\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n[ui.toast]\nenabled = true\n[ui.sound]\nenabled = true\n",
     )
     .unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();

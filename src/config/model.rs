@@ -359,7 +359,7 @@ impl Default for ShepherdSnapshotsConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ShepherdConfig {
-    /// Start the in-process Shepherd orchestration service on server startup. Default: false.
+    /// Start the in-process Shepherd orchestration service on server startup. On unless the config says `enabled = false`.
     pub enabled: bool,
     pub limits: ShepherdLimitsConfig,
     pub snapshots: ShepherdSnapshotsConfig,

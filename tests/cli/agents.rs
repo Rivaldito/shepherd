@@ -67,7 +67,7 @@ fn agent_start_waits_for_a_new_pane_shell_to_finish_initializing() {
     let socket_path = runtime_dir.join("shepherd.sock");
     let (bin, delayed_shell, invocations) = write_delayed_shell_and_fake_pi(&base, "0.4");
     let config = format!(
-        "onboarding = false\n[terminal]\ndefault_shell = {:?}\nshell_mode = \"non_login\"\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n[terminal]\ndefault_shell = {:?}\nshell_mode = \"non_login\"\n",
         delayed_shell.to_str().unwrap()
     );
     let shepherd = spawn_shepherd_with_config(
@@ -148,7 +148,7 @@ fn agent_start_stops_retrying_when_the_pane_shell_stays_busy() {
     let socket_path = runtime_dir.join("shepherd.sock");
     let (bin, delayed_shell, invocations) = write_delayed_shell_and_fake_pi(&base, "2.3");
     let config = format!(
-        "onboarding = false\n[terminal]\ndefault_shell = {:?}\nshell_mode = \"non_login\"\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n[terminal]\ndefault_shell = {:?}\nshell_mode = \"non_login\"\n",
         delayed_shell.to_str().unwrap()
     );
     let shepherd = spawn_shepherd_with_config(

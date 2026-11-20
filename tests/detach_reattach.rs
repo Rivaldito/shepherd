@@ -96,7 +96,7 @@ fn spawn_server(
         runtime_dir,
         api_socket_path,
         client_socket_path,
-        "onboarding = false\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n",
     )
 }
 
