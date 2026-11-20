@@ -208,7 +208,7 @@ pub fn toasts_view<'a>(toasts: Vec<(usize, &'a Toast)>) -> Element<'a, Message> 
         } else {
             body = body.push(text(toast.text.clone()).size(12).color(theme::FG));
         }
-        let close = button(text("×").size(14))
+        let close = button(container(text("×").size(14)).center_y(Length::Fill))
             .padding([0, 6])
             .width(22)
             .height(22)

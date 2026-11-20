@@ -1501,25 +1501,28 @@ impl App {
     /// The box in the top bar that opens the command palette.
     fn search_box(&self) -> Element<'_, Message> {
         button(
-            row![
-                text("⌕").size(14).color(DIM),
-                text("Jump to a view, agent or task")
-                    .size(11.5)
-                    .color(DIM)
-                    .wrapping(iced::widget::text::Wrapping::None),
-                container(text("")).width(Length::Fill),
-                container(
-                    text("Ctrl+Shift+P")
-                        .size(10)
+            container(
+                row![
+                    text("⌕").size(14).color(DIM),
+                    text("Jump to a view, agent or task")
+                        .size(11.5)
                         .color(DIM)
-                        .wrapping(iced::widget::text::Wrapping::None)
-                )
-                .padding([1, 6])
-                .width(Length::Shrink)
-                .style(theme::kbd_style),
-            ]
-            .spacing(8)
-            .align_y(iced::Alignment::Center),
+                        .wrapping(iced::widget::text::Wrapping::None),
+                    container(text("")).width(Length::Fill),
+                    container(
+                        text("Ctrl+Shift+P")
+                            .size(10)
+                            .color(DIM)
+                            .wrapping(iced::widget::text::Wrapping::None)
+                    )
+                    .padding([1, 6])
+                    .width(Length::Shrink)
+                    .style(theme::kbd_style),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            )
+            .center_y(Length::Fill),
         )
         .width(Length::Fill)
         .height(30)
@@ -2406,7 +2409,7 @@ impl App {
             let tab_id = tab.tab_id.clone();
             let tab_content = row![
                 text(label.clone()).size(13),
-                button(text("✕").size(9))
+                button(container(text("✕").size(9)).center_y(Length::Fill))
                     .padding([2, 4])
                     .width(18.0)
                     .height(18.0)
@@ -2583,26 +2586,31 @@ impl App {
                 .into()
             } else {
                 let name_btn = button(
-                    row![
-                        container(text("")).width(7).height(7).style({
-                            let c = roll.square;
-                            move |_| container::Style {
-                                background: Some(Background::Color(c)),
-                                border: Border {
-                                    radius: 1.0.into(),
-                                    ..Border::default()
-                                },
-                                ..container::Style::default()
-                            }
-                        }),
-                        text(name)
-                            .size(12.5)
-                            .color(if current { theme::HI } else { theme::TEXT2 }),
-                        container(text("")).width(Length::Fill),
-                        text(roll.label.clone()).size(10.5).color(roll.label_color),
-                    ]
-                    .spacing(8)
-                    .align_y(iced::Alignment::Center),
+                    container(
+                        row![
+                            container(text("")).width(7).height(7).style({
+                                let c = roll.square;
+                                move |_| container::Style {
+                                    background: Some(Background::Color(c)),
+                                    border: Border {
+                                        radius: 1.0.into(),
+                                        ..Border::default()
+                                    },
+                                    ..container::Style::default()
+                                }
+                            }),
+                            text(name).size(12.5).color(if current {
+                                theme::HI
+                            } else {
+                                theme::TEXT2
+                            }),
+                            container(text("")).width(Length::Fill),
+                            text(roll.label.clone()).size(10.5).color(roll.label_color),
+                        ]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
+                    )
+                    .center_y(Length::Fill),
                 )
                 .padding([0, 4])
                 .width(Length::Fill)
@@ -2666,13 +2674,16 @@ impl App {
                         .count();
                     chips = chips.push(
                         button(
-                            row![
-                                text(sidebar::ellipsize(&tab.label, 14))
-                                    .size(11)
-                                    .color(if shown { theme::HI } else { theme::TEXT2 }),
-                                text(count.to_string()).size(11).color(theme::FAINT),
-                            ]
-                            .spacing(4),
+                            container(
+                                row![
+                                    text(sidebar::ellipsize(&tab.label, 14))
+                                        .size(11)
+                                        .color(if shown { theme::HI } else { theme::TEXT2 }),
+                                    text(count.to_string()).size(11).color(theme::FAINT),
+                                ]
+                                .spacing(4),
+                            )
+                            .center_y(Length::Fill),
                         )
                         .padding([0, 7])
                         .height(22)
@@ -2743,19 +2754,22 @@ impl App {
                         };
                         inner = inner.push(
                             button(
-                                row![
-                                    icon,
-                                    text(sidebar::ellipsize(
-                                        &agent.display_name(),
-                                        sidebar::agent_name_max_chars(&word)
-                                    ))
-                                    .size(12.5)
-                                    .color(theme::FG),
-                                    container(text("")).width(Length::Fill),
-                                    text(word).size(10.5).color(color),
-                                ]
-                                .spacing(8)
-                                .align_y(iced::Alignment::Center),
+                                container(
+                                    row![
+                                        icon,
+                                        text(sidebar::ellipsize(
+                                            &agent.display_name(),
+                                            sidebar::agent_name_max_chars(&word)
+                                        ))
+                                        .size(12.5)
+                                        .color(theme::FG),
+                                        container(text("")).width(Length::Fill),
+                                        text(word).size(10.5).color(color),
+                                    ]
+                                    .spacing(8)
+                                    .align_y(iced::Alignment::Center),
+                                )
+                                .center_y(Length::Fill),
                             )
                             .padding([0, 6])
                             .width(Length::Fill)
@@ -2810,12 +2824,15 @@ impl App {
                 inner = inner.push(
                     container(
                         button(
-                            row![
-                                text("›_").size(11).color(DIM),
-                                text("New terminal").size(11.5).color(DIM),
-                            ]
-                            .spacing(8)
-                            .align_y(iced::Alignment::Center),
+                            container(
+                                row![
+                                    text("›_").size(11).color(DIM),
+                                    text("New terminal").size(11.5).color(DIM),
+                                ]
+                                .spacing(8)
+                                .align_y(iced::Alignment::Center),
+                            )
+                            .center_y(Length::Fill),
                         )
                         .padding([0, 6])
                         .width(Length::Fill)
@@ -2872,37 +2889,40 @@ impl App {
             ))
             .width(Length::Fill);
         let hide = button(
-            row![
-                // a small panel icon: a rounded box with a line at one third
-                container(
-                    row![
-                        Space::new().width(3),
-                        container(text(""))
-                            .width(1)
-                            .height(Length::Fill)
-                            .style(|_| container::Style {
-                                background: Some(Background::Color(theme::FAINT)),
-                                ..container::Style::default()
-                            }),
-                    ]
-                    .height(Length::Fill)
-                )
-                .width(12)
-                .height(12)
-                .style(|_| container::Style {
-                    border: Border {
-                        color: theme::FAINT,
-                        width: 1.0,
-                        radius: 2.0.into(),
-                    },
-                    ..container::Style::default()
-                }),
-                text("Hide sidebar").size(11.5).color(DIM),
-                container(text("")).width(Length::Fill),
-                text("Ctrl+B").size(10).color(theme::FAINT),
-            ]
-            .spacing(8)
-            .align_y(iced::Alignment::Center),
+            container(
+                row![
+                    // a small panel icon: a rounded box with a line at one third
+                    container(
+                        row![
+                            Space::new().width(3),
+                            container(text(""))
+                                .width(1)
+                                .height(Length::Fill)
+                                .style(|_| container::Style {
+                                    background: Some(Background::Color(theme::FAINT)),
+                                    ..container::Style::default()
+                                }),
+                        ]
+                        .height(Length::Fill)
+                    )
+                    .width(12)
+                    .height(12)
+                    .style(|_| container::Style {
+                        border: Border {
+                            color: theme::FAINT,
+                            width: 1.0,
+                            radius: 2.0.into(),
+                        },
+                        ..container::Style::default()
+                    }),
+                    text("Hide sidebar").size(11.5).color(DIM),
+                    container(text("")).width(Length::Fill),
+                    text("Ctrl+B").size(10).color(theme::FAINT),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            )
+            .center_y(Length::Fill),
         )
         .padding([0, 8])
         .width(Length::Fill)

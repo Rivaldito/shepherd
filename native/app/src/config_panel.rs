@@ -1772,7 +1772,7 @@ impl ConfigPanel {
             .spacing(10)
             .align_y(iced::Alignment::Center);
             table = table.push(
-                button(line)
+                button(container(line).center_y(Length::Fill))
                     .width(Length::Fill)
                     .height(44)
                     .padding([0, 16])

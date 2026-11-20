@@ -1993,14 +1993,13 @@ impl Panel {
                     }),
                 );
             }
-            if !key.is_empty() {
-                r = r.push(
-                    text(key)
-                        .size(10)
-                        .color(theme::FAINT)
-                        .width(Length::Fixed(44.0)),
-                );
-            }
+            // the shortcut column is always there (empty for Models and Snapshots), so the badges line up
+            r = r.push(
+                text(key)
+                    .size(10)
+                    .color(theme::FAINT)
+                    .width(Length::Fixed(44.0)),
+            );
             button(container(r).center_y(Length::Fill))
                 .width(Length::Fill)
                 .height(30)
@@ -2011,17 +2010,20 @@ impl Panel {
         // a group label is a button: it folds the group (chevron, then the spaced pixel label)
         let label = |s: &'static str, index: u8, closed: bool| {
             button(
-                row![
-                    text(if closed { "›" } else { "⌄" })
-                        .size(11)
-                        .color(theme::FAINT),
-                    text(crate::sidebar::spaced(s))
-                        .font(theme::PIXEL)
-                        .size(10)
-                        .color(DIM),
-                ]
-                .spacing(6)
-                .align_y(iced::Alignment::Center),
+                container(
+                    row![
+                        text(if closed { "›" } else { "⌄" })
+                            .size(11)
+                            .color(theme::FAINT),
+                        text(crate::sidebar::spaced(s))
+                            .font(theme::PIXEL)
+                            .size(10)
+                            .color(DIM),
+                    ]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center),
+                )
+                .center_y(Length::Fill),
             )
             .padding([0, 8])
             .height(16)
@@ -4941,43 +4943,46 @@ impl Panel {
             // columns: 170 (state, id, word) | lane (flexible, 400 at least) | 250 (current task); the row opens the agent
             rows = rows.push(
                 button(
-                    row![
+                    container(
                         row![
-                            text("■").size(10).color(status_color(status)),
-                            text(a.id.clone())
-                                .font(theme::MONO_BOLD)
-                                .size(12.5)
-                                .color(theme::HI),
-                            text(word).size(11).color(status_color(status)),
+                            row![
+                                text("■").size(10).color(status_color(status)),
+                                text(a.id.clone())
+                                    .font(theme::MONO_BOLD)
+                                    .size(12.5)
+                                    .color(theme::HI),
+                                text(word).size(11).color(status_color(status)),
+                            ]
+                            .spacing(8)
+                            .width(170),
+                            container(bar)
+                                .padding([2, 2])
+                                .width(Length::Fill)
+                                .style(|_| container::Style {
+                                    background: Some(Background::Color(Color::from_rgb8(8, 8, 11))),
+                                    border: iced::Border {
+                                        color: Color::from_rgb8(0x15, 0x15, 0x1C),
+                                        width: 1.0,
+                                        radius: 3.0.into(),
+                                    },
+                                    ..container::Style::default()
+                                }),
+                            container(
+                                text(if a.task_text.is_empty() {
+                                    String::new()
+                                } else {
+                                    a.task_text.chars().take(32).collect()
+                                })
+                                .size(11.5)
+                                .color(DIM)
+                            )
+                            .width(250)
+                            .clip(true),
                         ]
-                        .spacing(8)
-                        .width(170),
-                        container(bar)
-                            .padding([2, 2])
-                            .width(Length::Fill)
-                            .style(|_| container::Style {
-                                background: Some(Background::Color(Color::from_rgb8(8, 8, 11))),
-                                border: iced::Border {
-                                    color: Color::from_rgb8(0x15, 0x15, 0x1C),
-                                    width: 1.0,
-                                    radius: 3.0.into(),
-                                },
-                                ..container::Style::default()
-                            }),
-                        container(
-                            text(if a.task_text.is_empty() {
-                                String::new()
-                            } else {
-                                a.task_text.chars().take(32).collect()
-                            })
-                            .size(11.5)
-                            .color(DIM)
-                        )
-                        .width(250)
-                        .clip(true),
-                    ]
-                    .spacing(16)
-                    .align_y(iced::Alignment::Center),
+                        .spacing(16)
+                        .align_y(iced::Alignment::Center),
+                    )
+                    .center_y(Length::Fill),
                 )
                 .width(Length::Fill)
                 .height(38)
