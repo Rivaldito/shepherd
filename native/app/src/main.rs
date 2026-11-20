@@ -1228,12 +1228,15 @@ impl App {
         let n = gates + blocked;
         if n == 0 {
             return button(
-                row![
-                    text("■").size(8).color(theme::OK),
-                    text("all clear").size(11.5).color(DIM)
-                ]
-                .spacing(7)
-                .align_y(iced::Alignment::Center),
+                container(
+                    row![
+                        text("■").size(8).color(theme::OK),
+                        text("all clear").size(11.5).color(DIM)
+                    ]
+                    .spacing(7)
+                    .align_y(iced::Alignment::Center),
+                )
+                .center_y(Length::Fill),
             )
             .padding([0, 12])
             .height(30)
@@ -1979,7 +1982,7 @@ impl App {
                 .center_y(Length::Fill),
             )
             .width(Length::Fill)
-            .height(36)
+            .height(32)
             .padding([0, 8])
             .style(item_style(workspace.focused))
             .on_press(go);
@@ -2100,6 +2103,18 @@ impl App {
                         .padding(pad(0.0, 0.0, 0.0, 12.0)),
                     );
                 }
+            }
+            if self
+                .snapshot
+                .panes
+                .iter()
+                .all(|p| p.workspace_id != workspace.workspace_id)
+            {
+                inner = inner.push(
+                    text("No terminals yet. Open one to start a shell or an agent here.")
+                        .size(11)
+                        .color(theme::FAINT),
+                );
             }
             let plain = self
                 .snapshot
