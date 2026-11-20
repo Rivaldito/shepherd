@@ -3180,8 +3180,8 @@ impl Panel {
             // one card: the four numbers, each a link, and the herd pulse under them
             card("AT A GLANCE", None, column![kpis, pulse].spacing(12).into()),
             row![
-                container(needs_card).width(Length::Fill),
-                container(tasks_card).width(420)
+                container(needs_card).width(Length::FillPortion(155)),
+                container(tasks_card).width(Length::FillPortion(100))
             ]
             .spacing(20),
             work_card,

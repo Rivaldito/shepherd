@@ -1752,6 +1752,25 @@ impl App {
         body: Element<'a, Message>,
         status_color_val: Color,
     ) -> Element<'a, Message> {
+        // without the server the views keep their last data, dimmed to about 60 % (the overlay lets clicks through)
+        let body: Element<'a, Message> = if self.was_lost {
+            iced::widget::stack![
+                body,
+                container(text(""))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(Color {
+                            a: 0.4,
+                            ..theme::BG
+                        })),
+                        ..container::Style::default()
+                    })
+            ]
+            .into()
+        } else {
+            body
+        };
         // the strip and the logo animate in both modes: they belong to the shared window
         let strip = Canvas::new(prism::Prism {
             preset: prism::Preset::STRIP,
