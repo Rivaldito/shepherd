@@ -70,6 +70,7 @@ fn window_icon() -> Option<iced::window::Icon> {
 
 /// The name a desktop knows the app by: `shepherd-native.desktop` and the icon of that name (`make native-desktop`)
 /// are what the dock shows under Wayland, where a window cannot set its own icon.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // only Linux windows use it
 pub const APP_ID: &str = "shepherd-native";
 
 fn main() -> iced::Result {
@@ -85,9 +86,15 @@ fn main() -> iced::Result {
         .window(iced::window::Settings {
             size: start_size(),
             icon: window_icon(),
-            platform_specific: iced::window::settings::PlatformSpecific {
-                application_id: APP_ID.to_owned(),
-                ..Default::default()
+            // only Linux windows have an application id (macOS and Windows take the icon from the app bundle)
+            platform_specific: {
+                #[allow(unused_mut)]
+                let mut specific = iced::window::settings::PlatformSpecific::default();
+                #[cfg(target_os = "linux")]
+                {
+                    specific.application_id = APP_ID.to_owned();
+                }
+                specific
             },
             ..Default::default()
         })
