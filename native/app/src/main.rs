@@ -570,6 +570,17 @@ impl App {
                     if is_s && modifiers.control() && modifiers.shift() {
                         return Task::done(Message::SetMode(self.mode.other()));
                     }
+                    // Tab and Shift+Tab move between the text fields of the view (iced focuses fields, not buttons)
+                    if self.mode == Mode::Shepherd
+                        && self.palette.is_none()
+                        && matches!(key, keyboard::Key::Named(keyboard::key::Named::Tab))
+                    {
+                        return if modifiers.shift() {
+                            iced::widget::operation::focus_previous()
+                        } else {
+                            iced::widget::operation::focus_next()
+                        };
+                    }
                     // `/` jumps to the filter of the list (a focused input has already taken the key)
                     if self.mode == Mode::Shepherd
                         && self.palette.is_none()
