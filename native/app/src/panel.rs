@@ -2005,7 +2005,8 @@ impl Panel {
                 .height(30)
                 .padding([0, 10])
                 .style(item_style(selected))
-                .on_press(Message::Panel(PanelMsg::Tab(tab)))
+                // GoTo, not just Tab: the view must also be what the main area shows, from the terminal too
+                .on_press(Message::GoTo(tab))
         };
         // a group label is a button: it folds the group (chevron, then the spaced pixel label)
         let label = |s: &'static str, index: u8, closed: bool| {

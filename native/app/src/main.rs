@@ -680,7 +680,7 @@ impl App {
                     {
                         return iced::widget::operation::focus(ui::FILTER_ID);
                     }
-                    if self.mode == Mode::Shepherd && modifiers.control() {
+                    if modifiers.control() {
                         let tab = match key {
                             keyboard::Key::Character(c) => match c.as_str() {
                                 "1" => Some(panel::Tab::Overview),
@@ -697,7 +697,7 @@ impl App {
                             _ => None,
                         };
                         if let Some(tab) = tab {
-                            return Task::done(Message::Panel(panel::PanelMsg::Tab(tab)));
+                            return Task::done(Message::GoTo(tab));
                         }
                     }
                     if self.mode == Mode::Shepherd
@@ -1155,10 +1155,15 @@ impl App {
             Message::ToggleMotion => self.still = !self.still,
             Message::ToggleHistory => self.history_open = !self.history_open,
             Message::GoTo(tab) => {
-                return Task::batch([
-                    Task::done(Message::SetMode(Mode::Shepherd)),
-                    Task::done(Message::Panel(panel::PanelMsg::Tab(tab))),
-                ]);
+                // a view of the sidebar: the main area shows it, whatever it showed before (a terminal included)
+                self.mode = Mode::Shepherd;
+                let ctx = panel::Ctx {
+                    api: self.api_socket.clone(),
+                    data: &self.data,
+                    snapshot: &self.snapshot,
+                    frame: self.frame,
+                };
+                return self.panel.update(panel::PanelMsg::Tab(tab), &ctx);
             }
             Message::ToggleWorkspace(id) => {
                 let now = self.expanded.get(&id).copied().unwrap_or_else(|| {
@@ -3288,6 +3293,20 @@ fn connection() -> impl iced::futures::Stream<Item = Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The window opens on a terminal. A view of the sidebar (Orchestrate, Inspect) must open on the first click,
+    /// not only select a tab of a panel that is not on screen.
+    #[test]
+    fn a_view_of_the_sidebar_opens_from_the_terminal_on_the_first_click() {
+        let (mut app, _) = App::boot();
+        assert_eq!(app.mode, Mode::Terminal);
+        for tab in [panel::Tab::Runs, panel::Tab::Skills, panel::Tab::Snapshots] {
+            app.mode = Mode::Terminal;
+            let _ = app.update(Message::GoTo(tab));
+            assert_eq!(app.mode, Mode::Shepherd, "{tab:?} did not show");
+            assert_eq!(app.panel.tab, tab);
+        }
+    }
 
     #[test]
     fn the_terminal_area_is_what_the_window_leaves() {
