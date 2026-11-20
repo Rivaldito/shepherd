@@ -4201,7 +4201,10 @@ impl Panel {
                         ..button::Style::default()
                     }
                 })
-                .on_press(Message::Panel(PanelMsg::SelectTask(t.status.id)))
+                .on_press(crate::ui::nav(
+                    sel,
+                    Message::Panel(PanelMsg::SelectTask(t.status.id)),
+                ))
                 .into()
         };
         let column_of = |title: &'static str,

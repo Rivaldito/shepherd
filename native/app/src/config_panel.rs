@@ -1727,7 +1727,10 @@ impl ConfigPanel {
                             ..button::Style::default()
                         }
                     })
-                    .on_press(cfg(CfgMsg::SelectWorktree(w.path.clone()))),
+                    .on_press(crate::ui::nav(
+                        sel,
+                        cfg(CfgMsg::SelectWorktree(w.path.clone())),
+                    )),
             );
         }
         let table = container(table).width(Length::Fill).style(card_style);
