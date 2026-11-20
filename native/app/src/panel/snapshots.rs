@@ -273,23 +273,39 @@ impl Panel {
             items.push(text("No snapshot matches.").size(12).color(DIM).into());
         }
 
-        let detail = match shown.as_deref().and_then(|id| snaps.iter().find(|s| s.id == id)) {
-            Some(snap) => self.snapshot_detail(snap),
-            None => column![
-                text("No snapshots yet").size(16).color(theme::HI),
-                text(
-                    "The server takes one of an agent's worktree when the agent goes idle or finishes, \
-                     and now and then while it works. Use Capture to take one yourself."
-                )
-                .size(12)
-                .color(DIM),
-            ]
-            .spacing(6)
-            .into(),
+        // the detail is the flexible region: at least 600 px, scrolling when narrower
+        let detail = {
+            let (this, ctx) = (self, ctx.clone());
+            crate::ui::flex(600.0, [22.0, 28.0], move || {
+                let shown = this.snap_id(&ctx);
+                match shown
+                    .as_deref()
+                    .and_then(|id| ctx.data.snapshots.iter().find(|s| s.id == id))
+                {
+                    Some(snap) => this.snapshot_detail(snap),
+                    None => column![
+                        text("No snapshots match").size(16).color(theme::HI),
+                        text(
+                            "The server takes one when an agent goes idle or finishes, and before every restore."
+                        )
+                        .size(12)
+                        .color(DIM),
+                        btn_primary("Capture now", PanelMsg::SnapCapture(
+                            ctx.data.agents.first().map(|a| a.id.clone()).unwrap_or_default()
+                        )),
+                    ]
+                    .spacing(8)
+                    .into(),
+                }
+            })
         };
         column![
             filters,
-            row![self.list(items, vec![]), self.detail(detail)].height(Length::Fill),
+            row![
+                crate::panel::list_box_sized(400.0, None, items, vec![]),
+                detail
+            ]
+            .height(Length::Fill),
         ]
         .into()
     }

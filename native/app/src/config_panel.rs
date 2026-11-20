@@ -1649,53 +1649,8 @@ impl ConfigPanel {
         .into()
     }
 
-    pub fn events_view<'a>(&'a self, frame: u32, filter: &str) -> Element<'a, Message> {
-        if self.loading && self.topics.is_empty() {
-            return loading_state("Loading event topics…");
-        }
-        let items = self
-            .topics
-            .iter()
-            .filter(|t| {
-                let f = filter.to_lowercase();
-                f.split_whitespace()
-                    .all(|w| t.name.to_lowercase().contains(w))
-            })
-            .map(|t| {
-                let unread: u64 = t
-                    .groups
-                    .iter()
-                    .flat_map(|g| g.lag_by_partition.values())
-                    .sum();
-                let mut title = row![text(format!("#{}", t.name))
-                    .size(13)
-                    .color(crate::theme::HI)]
-                .spacing(8)
-                .align_y(iced::Alignment::Center);
-                if t.paused {
-                    title = title.push(text("paused").size(11).color(WARN));
-                }
-                if unread > 0 {
-                    title = title.push(text(format!("{unread} unread")).size(11).color(WARN));
-                }
-                let body = column![
-                    title,
-                    text(format!(
-                        "{} messages · {} partition(s)",
-                        t.messages_count, t.partitions
-                    ))
-                    .size(11)
-                    .color(DIM)
-                ]
-                .spacing(1);
-                button(body)
-                    .width(Length::Fill)
-                    .padding([4, 8])
-                    .style(item_style(self.topic.as_deref() == Some(t.name.as_str())))
-                    .on_press(cfg(CfgMsg::SelectTopic(t.name.clone())))
-                    .into()
-            })
-            .collect();
+    /// The detail of the open topic (or the open form): the content of Events' flexible region.
+    fn events_detail<'a>(&'a self, frame: u32) -> Element<'a, Message> {
         let detail: Element<'a, Message> = match self
             .topic
             .as_deref()
@@ -1832,6 +1787,57 @@ impl ConfigPanel {
             Some(form) => self.topic_form_view(form),
             None => detail,
         };
+        detail
+    }
+
+    pub fn events_view<'a>(&'a self, frame: u32, filter: &str) -> Element<'a, Message> {
+        if self.loading && self.topics.is_empty() {
+            return loading_state("Loading event topics…");
+        }
+        let items = self
+            .topics
+            .iter()
+            .filter(|t| {
+                let f = filter.to_lowercase();
+                f.split_whitespace()
+                    .all(|w| t.name.to_lowercase().contains(w))
+            })
+            .map(|t| {
+                let unread: u64 = t
+                    .groups
+                    .iter()
+                    .flat_map(|g| g.lag_by_partition.values())
+                    .sum();
+                let mut title = row![text(format!("#{}", t.name))
+                    .size(13)
+                    .color(crate::theme::HI)]
+                .spacing(8)
+                .align_y(iced::Alignment::Center);
+                if t.paused {
+                    title = title.push(text("paused").size(11).color(WARN));
+                }
+                if unread > 0 {
+                    title = title.push(text(format!("{unread} unread")).size(11).color(WARN));
+                }
+                let body = column![
+                    title,
+                    text(format!(
+                        "{} messages · {} partition(s)",
+                        t.messages_count, t.partitions
+                    ))
+                    .size(11)
+                    .color(DIM)
+                ]
+                .spacing(1);
+                button(body)
+                    .width(Length::Fill)
+                    .padding([4, 8])
+                    .style(item_style(self.topic.as_deref() == Some(t.name.as_str())))
+                    .on_press(cfg(CfgMsg::SelectTopic(t.name.clone())))
+                    .into()
+            })
+            .collect();
+        let detail = crate::ui::flex(760.0, [20.0, 28.0], move || self.events_detail(frame));
         let footer = vec![
             cfg_btn("+ Topic", CfgMsg::TopicFormOpen(false), false),
             cfg_btn("Send message", CfgMsg::TopicFormOpen(true), false),
@@ -1855,15 +1861,17 @@ impl ConfigPanel {
                 .spacing(12)
                 .align_y(iced::Alignment::Center),
             )
-            .padding([12, 24])
+            .padding([0, 28])
             .width(Length::Fill)
+            .height(64)
+            .center_y(Length::Fill)
             .style(crate::theme::top_line_style)
             .into(),
             _ => container(text("")).height(0).into(),
         };
         row![
-            crate::panel::list_box_with(Some(top), items, vec![]),
-            column![detail_box(detail), composer].width(Length::Fill)
+            crate::panel::list_box_sized(250.0, Some(top), items, vec![]),
+            column![detail, composer].width(Length::Fill)
         ]
         .height(Length::Fill)
         .into()
@@ -2163,9 +2171,12 @@ impl ConfigPanel {
             }
         };
         let _ = footer;
-        let base: Element<'a, Message> = row![list_box(items, vec![]), detail_box(detail)]
-            .height(Length::Fill)
-            .into();
+        let base: Element<'a, Message> = row![
+            crate::panel::list_box_sized(230.0, None, items, vec![]),
+            detail_box(detail)
+        ]
+        .height(Length::Fill)
+        .into();
         match &self.skill_picker {
             Some(picker) => iced::widget::stack![base, self.skill_picker_view(picker)].into(),
             None => base,

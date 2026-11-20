@@ -2153,14 +2153,6 @@ impl Panel {
         line.into()
     }
 
-    fn list<'a>(
-        &self,
-        items: Vec<Element<'a, Message>>,
-        footer: Vec<Element<'a, Message>>,
-    ) -> Element<'a, Message> {
-        list_box(items, footer)
-    }
-
     /// A list with the filter box and chips of the redesign above it.
     fn filtered_list<'a>(
         &self,
@@ -4905,7 +4897,7 @@ impl Panel {
         }
         let side = container(senders)
             .padding(16)
-            .width(250)
+            .width(240)
             .height(Length::Fill);
 
         // messages
@@ -5045,8 +5037,10 @@ impl Panel {
             .spacing(12)
             .align_y(iced::Alignment::Center),
         )
-        .padding([12, 28])
+        .padding([0, 28])
         .width(Length::Fill)
+        .height(64)
+        .center_y(Length::Fill)
         .style(theme::top_line_style);
         column![
             header,
