@@ -255,6 +255,51 @@ pub(crate) fn stop_active_server() -> Result<(), String> {
     )
 }
 
+/// Stops the active server (when one is running) and starts a new one, detached from this process, then waits until
+/// it answers on its socket. Every terminal and agent of the old server closes with it.
+pub(crate) fn restart_active_server() -> Result<(), String> {
+    match stop_active_server() {
+        Ok(()) => {}
+        Err(err) if err.contains("not running") => {}
+        Err(err) => return Err(err),
+    }
+    start_detached_server()?;
+    let socket_path = active_api_socket_path();
+    let deadline = Instant::now() + STOP_WAIT_TIMEOUT;
+    while Instant::now() < deadline {
+        if crate::ipc::connect_local_stream(&socket_path).is_ok() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Err(format!(
+        "the new server did not answer at {} within {} s",
+        socket_path.display(),
+        STOP_WAIT_TIMEOUT.as_secs()
+    ))
+}
+
+/// `shepherd server`, in its own process group with no terminal, so it outlives the command that started it.
+#[cfg(unix)]
+fn start_detached_server() -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    let exe = std::env::current_exe().map_err(|err| format!("could not find this binary: {err}"))?;
+    std::process::Command::new(exe)
+        .arg("server")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("could not start the server: {err}"))
+}
+
+#[cfg(not(unix))]
+fn start_detached_server() -> Result<(), String> {
+    Err("restarting the server is not supported on this platform; run `shepherd server` yourself".into())
+}
+
 fn stop_session_with_timeout(name: Option<&str>, timeout: Duration) -> Result<SessionInfo, String> {
     let socket_path = api_socket_path_for(name);
     let client_socket_path = client_socket_path_for(name);
