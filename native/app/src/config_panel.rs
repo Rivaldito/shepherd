@@ -5,7 +5,7 @@ use crate::panel::{detail_box, list_box, PanelMsg, Tab};
 use crate::theme::{card_style, item_style, ACCENT, DIM, OK, WARN};
 use crate::Message;
 use iced::widget::{button, checkbox, column, container, row, text, text_editor, text_input};
-use iced::{Color, Element, Length, Task};
+use iced::{Background, Color, Element, Length, Task};
 use shepherd_app_core::actions;
 use shepherd_app_core::config_data::{self, Models, SkillRow, TopicRow};
 use shepherd_app_core::installed::{self, InstalledRow};
@@ -69,6 +69,13 @@ pub enum CfgMsg {
     TopicDone(Result<String, String>),
     OpenAgent(String),
     SelectTopic(String),
+    /// Events: show only the messages of this partition.
+    MsgPartition(Option<u32>),
+    /// The box at the foot of Events: what is typed, and sending it to the open topic.
+    ComposerText(String),
+    ComposerPartition(Option<u32>),
+    LoadOlder,
+    ComposerSend,
     SelectVendor(String),
     SelectRole(String),
     VendorField(VField, String),
@@ -79,9 +86,17 @@ pub enum CfgMsg {
     RoleSpawn(bool),
     NewVendor,
     NewRole,
+    SelectRoles,
+    RolesVendor(String, String),
+    RolesModel(String, String),
+    RolesRemove(String),
+    Discard,
+    LookAgain,
     Save,
     Delete,
     Refresh,
+    RefreshEvents,
+    RefreshSkills,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +125,8 @@ pub enum RField {
 enum Editing {
     Vendor(String),
     Role(String),
+    /// The table of every role: vendor and model of each, edited together and saved once.
+    Roles,
     /// The list of what is installed on this computer.
     Installed,
 }
@@ -159,6 +176,21 @@ pub struct SkillNew {
 
 #[derive(Default)]
 pub struct ConfigPanel {
+    /// Refresh was pressed on Events / Skills: the next answer says how many it found.
+    announce_topics: bool,
+    announce_skills: bool,
+    /// The form as it was when it was opened or last saved; the save bar shows while it differs.
+    baseline: String,
+    /// Roles changed in the table and not saved yet.
+    role_pending: std::collections::BTreeMap<String, Role>,
+    /// Roles removed and not saved yet.
+    role_removed: std::collections::BTreeSet<String>,
+    /// Vendors removed and not saved yet.
+    vendor_removed: std::collections::BTreeSet<String>,
+    /// `Look again` was pressed: the next detection says how many agent commands it found.
+    looking_again: bool,
+    /// What the last action was doing, shown above the server's refusal.
+    fail: &'static str,
     installed: Vec<InstalledRow>,
     /// The window that assigns skills to the role being edited, while it is open.
     skill_picker: Option<SkillPicker>,
@@ -181,6 +213,12 @@ pub struct ConfigPanel {
     armed_worktree: Option<String>,
     topics: Vec<TopicRow>,
     topic: Option<String>,
+    msg_partition: Option<u32>,
+    /// Where the composer sends: a partition, or by key (None).
+    composer_partition: Option<u32>,
+    /// How many messages of the open topic are loaded: 50 more every time `Load older` is pressed (at most 500).
+    feed_limit: usize,
+    composer: String,
     feed: Vec<BusMessage>,
     models: Models,
     editing: Option<Editing>,
@@ -256,6 +294,32 @@ impl ConfigPanel {
         ])
     }
 
+    /// The topics loaded so far, with their consumer groups.
+    fn topic_partitions(&self, name: &str) -> u32 {
+        self.topics
+            .iter()
+            .find(|t| t.name == name)
+            .map_or(1, |t| t.partitions)
+    }
+
+    /// How many messages of the open topic to ask for.
+    fn feed_limit(&self) -> usize {
+        if self.feed_limit == 0 {
+            50
+        } else {
+            self.feed_limit
+        }
+    }
+
+    pub fn topic_rows(&self) -> &[TopicRow] {
+        &self.topics
+    }
+
+    /// Worktrees of the repository, once the Git tab has loaded them.
+    pub fn git_count(&self) -> Option<usize> {
+        self.git.as_ref().map(|g| g.worktrees.len())
+    }
+
     /// `(skills, topics, vendors)` loaded so far, for the counters on the tabs.
     pub fn counts(&self) -> (usize, usize, usize) {
         (
@@ -284,8 +348,9 @@ impl ConfigPanel {
         let mut tasks = vec![Self::load_topics(&self.api)];
         if let Some(name) = self.topic.clone() {
             let api = self.api.clone();
+            let limit = self.feed_limit();
             tasks.push(Task::perform(
-                async move { config_data::topic_messages(&api, &name, 200) },
+                async move { config_data::topic_messages(&api, &name, limit) },
                 |r| cfg(CfgMsg::Feed(r)),
             ));
         }
@@ -297,6 +362,68 @@ impl ConfigPanel {
         Task::perform(async move { config_data::models(&root) }, |r| {
             Message::Panel(crate::panel::PanelMsg::Cfg(CfgMsg::Models(r)))
         })
+    }
+
+    /// The form's state as text, to tell whether anything changed since it was opened.
+    fn snapshot(&self) -> String {
+        format!(
+            "{:?}{:?}{}{}{}{}",
+            self.vfields,
+            self.rfields,
+            self.vendor.mcp.supported,
+            self.vendor.disabled,
+            self.role.worktree,
+            self.role.can_spawn
+        )
+    }
+
+    /// Are there changes that `Save to config.yaml` would write?
+    fn dirty(&self) -> bool {
+        if !self.vendor_removed.is_empty() || !self.role_removed.is_empty() {
+            return true;
+        }
+        match &self.editing {
+            Some(Editing::Vendor(_) | Editing::Role(_)) => {
+                self.is_new || self.snapshot() != self.baseline
+            }
+            Some(Editing::Roles) => !self.role_pending.is_empty() || !self.role_removed.is_empty(),
+            _ => false,
+        }
+    }
+
+    /// Writes the removals that wait for the next save: roles first, then the vendors (a vendor a role uses
+    /// cannot go).
+    fn apply_removals(&mut self) -> Result<(), String> {
+        for name in &self.role_removed {
+            config_data::delete_entry("roles", name)?;
+        }
+        for name in &self.vendor_removed {
+            config_data::delete_entry("vendors", name)?;
+        }
+        self.role_removed.clear();
+        self.vendor_removed.clear();
+        Ok(())
+    }
+
+    /// The role as the table shows it: with the change that is waiting to be saved, if any.
+    fn role_now(&self, name: &str) -> Role {
+        self.role_pending
+            .get(name)
+            .or_else(|| self.models.roles.get(name))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The models a vendor lists (its own list and its default).
+    fn vendor_models(&self, vendor: &str) -> Vec<String> {
+        let found = self.models.vendors.get(vendor);
+        let mut models: Vec<String> = found.map(|v| v.models.clone()).unwrap_or_default();
+        if let Some(v) = found {
+            if !v.default_model.is_empty() && !models.contains(&v.default_model) {
+                models.insert(0, v.default_model.clone());
+            }
+        }
+        models
     }
 
     fn open_vendor(&mut self, name: &str, new: bool) {
@@ -314,6 +441,7 @@ impl ConfigPanel {
             (VField::ModelFlag, v.model_flag.clone()),
             (VField::ShepherdAgent, v.shepherd_agent.clone()),
         ];
+        self.baseline = self.snapshot();
     }
 
     fn open_role(&mut self, name: &str, new: bool) {
@@ -331,14 +459,32 @@ impl ConfigPanel {
             (RField::Skills, r.skills.join(", ")),
             (RField::Prompt, r.prompt.clone()),
         ];
+        self.baseline = self.snapshot();
     }
 
     pub fn update(&mut self, msg: CfgMsg, root: &Path) -> Task<Message> {
+        self.fail = match &msg {
+            CfgMsg::SkillNewSubmit | CfgMsg::GitFormSubmit | CfgMsg::TopicFormSubmit => {
+                "Not created."
+            }
+            CfgMsg::SkillCustomize(_) | CfgMsg::SkillGlobal(..) | CfgMsg::SkillEditOpen(_) => {
+                "Not changed."
+            }
+            CfgMsg::SkillSave | CfgMsg::Save => "Not saved.",
+            CfgMsg::SkillDelete(_) | CfgMsg::Delete => "Not deleted.",
+            CfgMsg::WorktreeRemove(_) => "Not removed.",
+            CfgMsg::ComposerSend => "Not sent.",
+            _ => self.fail,
+        };
         if !matches!(msg, CfgMsg::Delete) {
             self.armed_delete = false;
         }
         match msg {
             CfgMsg::Skills(Ok(skills)) => {
+                if std::mem::take(&mut self.announce_skills) {
+                    self.notice =
+                        crate::ui::info(&format!("Reloaded {} skills from disk.", skills.len()));
+                }
                 self.skills = skills;
                 self.loading = false;
                 // picture aid: `SHEPHERD_NATIVE_SKILL=new` | `customize:<name>` | `edit:<name>`, applied once
@@ -366,6 +512,10 @@ impl ConfigPanel {
                 self.loading = false;
             }
             CfgMsg::Topics(Ok(topics)) => {
+                if std::mem::take(&mut self.announce_topics) {
+                    self.notice =
+                        crate::ui::info(&format!("Reread {} topics from the bus.", topics.len()));
+                }
                 self.topics = topics;
                 self.loading = false;
                 // like the other tabs, open the first topic instead of an empty detail
@@ -379,7 +529,13 @@ impl ConfigPanel {
                 self.models = models;
                 self.loading = false;
                 if self.editing.is_none() {
-                    if let Some(name) = self.models.vendors.keys().next().cloned() {
+                    let first = self
+                        .models
+                        .vendors
+                        .keys()
+                        .find(|n| !self.vendor_removed.contains(*n))
+                        .cloned();
+                    if let Some(name) = first {
                         self.open_vendor(&name, false);
                     }
                 }
@@ -390,6 +546,10 @@ impl ConfigPanel {
                     if !MODELS_AID_DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
                         if spec == "installed" {
                             self.editing = Some(Editing::Installed);
+                        } else if spec == "roles" {
+                            self.editing = Some(Editing::Roles);
+                        } else if spec == "dirty" {
+                            self.open_vendor("my-vendor", true);
                         } else if let Some(role) = spec.strip_prefix("role:") {
                             self.open_role(role, false);
                         } else if let Some(role) = spec.strip_prefix("picker:") {
@@ -405,6 +565,13 @@ impl ConfigPanel {
                 });
             }
             CfgMsg::Installed(rows) => {
+                if self.looking_again {
+                    self.looking_again = false;
+                    self.notice = crate::ui::info(&format!(
+                        "Looked on PATH again: {} agent commands found.",
+                        rows.iter().filter(|r| r.installed()).count()
+                    ));
+                }
                 // the slow part comes next: some agents take seconds to list their models
                 let asked = rows.clone();
                 self.installed = rows;
@@ -536,14 +703,22 @@ impl ConfigPanel {
                     return Task::none();
                 };
                 let name = form.name.trim().to_owned();
-                match config_data::create_skill(root, &name, form.repo)
+                if name.is_empty() {
+                    form.error = Some("A skill needs a name.".into());
+                    return Task::none();
+                }
+                let repo = form.repo;
+                match config_data::create_skill(root, &name, repo)
                     .and_then(|file| SkillEdit::open(&name, file))
                 {
                     Ok(edit) => {
                         self.skill_new = None;
                         self.skill = Some(name.clone());
                         self.skill_edit = Some(edit);
-                        self.notice = format!("Created skill {name}");
+                        self.notice = format!(
+                            "Created skill {name} in {}.",
+                            if repo { "this project" } else { "your skills" }
+                        );
                         return Self::load_skills(root);
                     }
                     Err(why) => form.error = Some(why),
@@ -555,10 +730,10 @@ impl ConfigPanel {
                 {
                     Ok(edit) => {
                         self.skill_edit = Some(edit);
-                        self.notice = format!("{name} copied to your skills: it is yours to edit");
+                        self.notice = format!("Copied {name} to your skills. Edit it here.");
                         return Self::load_skills(root);
                     }
-                    Err(why) => self.notice = why,
+                    Err(why) => self.notice = crate::panel::refusal(self.fail, &why),
                 }
             }
             CfgMsg::SkillEditOpen(name) => {
@@ -566,7 +741,7 @@ impl ConfigPanel {
                     .and_then(|file| SkillEdit::open(&name, file))
                 {
                     Ok(edit) => self.skill_edit = Some(edit),
-                    Err(why) => self.notice = why,
+                    Err(why) => self.notice = crate::panel::refusal(self.fail, &why),
                 }
             }
             CfgMsg::SkillEdit(action) => {
@@ -584,14 +759,18 @@ impl ConfigPanel {
                     Ok(problems) => {
                         edit.saved = text;
                         self.notice = if problems.is_empty() {
-                            format!("Saved {}", edit.name)
+                            format!("Saved {}/SKILL.md.", edit.name)
                         } else {
-                            format!("Saved {}, with {} problem(s)", edit.name, problems.len())
+                            format!(
+                                "Saved {}/SKILL.md, with {} problem(s).",
+                                edit.name,
+                                problems.len()
+                            )
                         };
                         edit.problems = problems;
                         return Self::load_skills(root);
                     }
-                    Err(why) => self.notice = why,
+                    Err(why) => self.notice = crate::panel::refusal(self.fail, &why),
                 }
             }
             CfgMsg::SkillDelete(name) => {
@@ -604,22 +783,22 @@ impl ConfigPanel {
                     Ok(()) => {
                         self.skill_edit = None;
                         self.skill = None;
-                        self.notice = format!("Deleted skill {name}");
+                        self.notice = format!("Deleted skill {name}.");
                         return Self::load_skills(root);
                     }
-                    Err(why) => self.notice = why,
+                    Err(why) => self.notice = crate::panel::refusal(self.fail, &why),
                 }
             }
             CfgMsg::SkillGlobal(name, on) => match config_data::set_global_skill(root, &name, on) {
                 Ok(()) => {
                     self.notice = if on {
-                        format!("{name} is now global: every agent gets it")
+                        format!("{name} is now global. Every agent gets it at its next start.")
                     } else {
-                        format!("{name} is no longer global")
+                        format!("{name} is no longer global.")
                     };
                     return Self::load_skills(root);
                 }
-                Err(why) => self.notice = why,
+                Err(why) => self.notice = crate::panel::refusal(self.fail, &why),
             },
             CfgMsg::SelectWorktree(path) => {
                 self.armed_worktree = None;
@@ -648,12 +827,11 @@ impl ConfigPanel {
                 };
                 if form.first.trim().is_empty() || (form.worktree && form.second.trim().is_empty())
                 {
-                    self.notice = if form.worktree {
-                        "A worktree needs a folder and a branch"
+                    self.notice = crate::ui::invalid(if form.worktree {
+                        "A worktree needs a folder and a branch."
                     } else {
-                        "A branch needs a name"
-                    }
-                    .into();
+                        "A branch needs a name."
+                    });
                     return Task::none();
                 }
                 self.git_form = None;
@@ -661,11 +839,22 @@ impl ConfigPanel {
                 return Task::perform(
                     async move {
                         if form.worktree {
-                            actions::git_worktree_add(&api, &form.first, &form.second, &root)
-                                .map(|dir| format!("Worktree created at {dir}"))
+                            actions::git_worktree_add(&api, &form.first, &form.second, &root).map(
+                                |dir| format!("Created worktree {dir} on {}.", form.second.trim()),
+                            )
                         } else {
-                            actions::git_branch(&api, &form.first, &form.second, &root)
-                                .map(|_| format!("Branch {} created", form.first.trim()))
+                            actions::git_branch(&api, &form.first, &form.second, &root).map(|_| {
+                                let base = form.second.trim();
+                                format!(
+                                    "Created branch {} from {}.",
+                                    form.first.trim(),
+                                    if base.is_empty() {
+                                        "the current commit"
+                                    } else {
+                                        base
+                                    }
+                                )
+                            })
                         }
                     },
                     |r| cfg(CfgMsg::GitDone(r)),
@@ -681,7 +870,7 @@ impl ConfigPanel {
                 return Task::perform(
                     async move {
                         actions::git_worktree_remove(&api, &path, &root)
-                            .map(|_| format!("Removed worktree {path}"))
+                            .map(|_| format!("Removed worktree {path}. The branch is kept."))
                     },
                     |r| cfg(CfgMsg::GitDone(r)),
                 );
@@ -715,14 +904,14 @@ impl ConfigPanel {
                 if form.publish {
                     let (Some(topic), false) = (self.topic.clone(), form.first.trim().is_empty())
                     else {
-                        self.notice = "A message cannot be empty".into();
+                        self.notice = crate::ui::invalid("A message cannot be empty.");
                         return Task::none();
                     };
                     self.topic_form = None;
                     return Task::perform(
                         async move {
-                            actions::topic_publish(&api, &topic, &form.first)
-                                .map(|_| format!("Sent to #{topic}"))
+                            actions::topic_publish(&api, &topic, &form.first, None)
+                                .map(|_| format!("Sent to #{topic}."))
                         },
                         |r| cfg(CfgMsg::TopicDone(r)),
                     );
@@ -732,18 +921,22 @@ impl ConfigPanel {
                     n => n.parse::<u32>().ok().filter(|n| *n > 0),
                 };
                 let (name, Some(partitions)) = (form.first.trim().to_owned(), partitions) else {
-                    self.notice = "Partitions is a number, 1 or more".into();
+                    self.notice = crate::ui::invalid("Not created: partitions must be 1 or more.");
                     return Task::none();
                 };
                 if name.is_empty() {
-                    self.notice = "A topic needs a name".into();
+                    self.notice = crate::ui::invalid("A topic needs a name.");
                     return Task::none();
                 }
                 self.topic_form = None;
                 return Task::perform(
                     async move {
-                        actions::topic_create(&api, &name, partitions)
-                            .map(|_| format!("Topic #{name} created"))
+                        actions::topic_create(&api, &name, partitions).map(|_| {
+                            format!(
+                                "Created topic #{name} with {partitions} partition{}.",
+                                if partitions == 1 { "" } else { "s" }
+                            )
+                        })
                     },
                     |r| cfg(CfgMsg::TopicDone(r)),
                 );
@@ -751,14 +944,14 @@ impl ConfigPanel {
             CfgMsg::TopicDone(result) => {
                 self.notice = match result {
                     Ok(done) => done,
-                    Err(why) => why,
+                    Err(why) => crate::panel::refusal(self.fail, &why),
                 };
                 return self.reload_events();
             }
             CfgMsg::GitDone(result) => {
                 self.notice = match result {
                     Ok(done) => done,
-                    Err(why) => why,
+                    Err(why) => crate::panel::refusal(self.fail, &why),
                 };
                 return Self::load_git(root);
             }
@@ -768,17 +961,112 @@ impl ConfigPanel {
                     Task::done(Message::Panel(PanelMsg::SelectAgent(id))),
                 ]);
             }
+            CfgMsg::MsgPartition(p) => self.msg_partition = p,
+            CfgMsg::ComposerText(t) => self.composer = t,
+            CfgMsg::ComposerPartition(p) => self.composer_partition = p,
+            CfgMsg::LoadOlder => {
+                let Some(name) = self.topic.clone() else {
+                    return Task::none();
+                };
+                self.feed_limit = (self.feed_limit() + 50).min(500);
+                let (api, limit) = (self.api.clone(), self.feed_limit());
+                return Task::perform(
+                    async move { config_data::topic_messages(&api, &name, limit) },
+                    |r| cfg(CfgMsg::Feed(r)),
+                );
+            }
+            CfgMsg::ComposerSend => {
+                let text = self.composer.trim().to_owned();
+                let Some(topic) = self.topic.clone() else {
+                    self.notice = crate::ui::invalid("Pick a topic to write to.");
+                    return Task::none();
+                };
+                if text.is_empty() {
+                    self.notice =
+                        crate::ui::invalid("Write something first. Empty messages are not sent.");
+                    return Task::none();
+                }
+                self.composer.clear();
+                let api = self.api.clone();
+                let partition = self.composer_partition;
+                return Task::perform(
+                    async move {
+                        actions::topic_publish(&api, &topic, &text, partition).map(|_| {
+                            match partition {
+                                Some(p) => format!("Sent to #{topic} p{p}."),
+                                None => format!("Sent to #{topic}."),
+                            }
+                        })
+                    },
+                    |r| cfg(CfgMsg::TopicDone(r)),
+                );
+            }
             CfgMsg::SelectTopic(name) => {
                 self.topic = Some(name.clone());
+                self.feed_limit = 0;
+                self.composer_partition = None;
                 self.loading = true;
                 let api = self.api.clone();
+                let limit = self.feed_limit();
                 return Task::perform(
-                    async move { config_data::topic_messages(&api, &name, 200) },
+                    async move { config_data::topic_messages(&api, &name, limit) },
                     |r| cfg(CfgMsg::Feed(r)),
                 );
             }
             CfgMsg::SelectVendor(name) => self.open_vendor(&name, false),
             CfgMsg::SelectRole(name) => self.open_role(&name, false),
+            CfgMsg::SelectRoles => {
+                self.editing = Some(Editing::Roles);
+                self.armed_delete = false;
+            }
+            CfgMsg::RolesVendor(name, vendor) => {
+                let mut role = self.role_now(&name);
+                role.model = self
+                    .vendor_models(&vendor)
+                    .first()
+                    .cloned()
+                    .unwrap_or_default();
+                role.vendor = vendor;
+                self.role_pending.insert(name, role);
+            }
+            CfgMsg::RolesModel(name, model) => {
+                let mut role = self.role_now(&name);
+                role.model = model;
+                self.role_pending.insert(name, role);
+            }
+            CfgMsg::RolesRemove(name) => {
+                self.role_pending.remove(&name);
+                self.role_removed.insert(name);
+            }
+            CfgMsg::Discard => {
+                self.role_pending.clear();
+                self.role_removed.clear();
+                self.vendor_removed.clear();
+                if self.editing.is_none() {
+                    if let Some(name) = self.models.vendors.keys().next().cloned() {
+                        self.open_vendor(&name, false);
+                    }
+                }
+                match self.editing.clone() {
+                    Some(Editing::Vendor(name)) if !self.is_new => self.open_vendor(&name, false),
+                    Some(Editing::Role(name)) if !self.is_new => self.open_role(&name, false),
+                    Some(Editing::Vendor(_) | Editing::Role(_)) => {
+                        self.editing = None;
+                        if let Some(name) = self.models.vendors.keys().next().cloned() {
+                            self.open_vendor(&name, false);
+                        }
+                    }
+                    _ => {}
+                }
+                self.notice = crate::ui::info("Discarded your changes.");
+            }
+            CfgMsg::LookAgain => {
+                self.looking_again = true;
+                let vendors = self.models.vendors.clone();
+                return Task::perform(async move { installed::detect(&vendors) }, |rows| {
+                    cfg(CfgMsg::Installed(rows))
+                });
+            }
             CfgMsg::NewVendor => self.open_vendor("my-vendor", true),
             CfgMsg::NewRole => self.open_role("my-role", true),
             CfgMsg::VendorField(field, value) => {
@@ -836,16 +1124,57 @@ impl ConfigPanel {
                             .unwrap_or_default();
                         config_data::save_role(&name, &self.role).map(|p| (p, Editing::Role(name)))
                     }
-                    Some(Editing::Installed) | None => return Task::none(),
-                };
-                match result {
-                    Ok((path, editing)) => {
-                        self.notice = format!("Saved in {}", display(&path));
-                        self.editing = Some(editing);
-                        self.is_new = false;
+                    Some(Editing::Roles) => {
+                        let mut done = Ok(PathBuf::new());
+                        for (name, role) in &self.role_pending {
+                            if self.role_removed.contains(name) {
+                                continue;
+                            }
+                            if let Err(e) = config_data::save_role(name, role) {
+                                done = Err(e);
+                                break;
+                            }
+                        }
+                        if done.is_ok() {
+                            done = self.apply_removals().map(|()| PathBuf::new());
+                        }
+                        match done {
+                            Ok(_) => {
+                                self.role_pending.clear();
+                                self.notice = "Saved config.yaml.".into();
+                                return Self::load_models(root);
+                            }
+                            Err(e) => {
+                                self.notice = crate::panel::refusal(self.fail, &e);
+                                return Task::none();
+                            }
+                        }
+                    }
+                    Some(Editing::Installed) | None => {
+                        // nothing open: only the removals wait to be written
+                        if !self.dirty() {
+                            return Task::none();
+                        }
+                        match self.apply_removals() {
+                            Ok(()) => self.notice = "Saved config.yaml.".into(),
+                            Err(e) => self.notice = crate::panel::refusal(self.fail, &e),
+                        }
                         return Self::load_models(root);
                     }
-                    Err(e) => self.notice = e,
+                };
+                match result {
+                    Ok((_, editing)) => {
+                        if let Err(e) = self.apply_removals() {
+                            self.notice = crate::panel::refusal(self.fail, &e);
+                            return Task::none();
+                        }
+                        self.notice = "Saved config.yaml.".into();
+                        self.editing = Some(editing);
+                        self.is_new = false;
+                        self.baseline = self.snapshot();
+                        return Self::load_models(root);
+                    }
+                    Err(e) => self.notice = crate::panel::refusal(self.fail, &e),
                 }
             }
             CfgMsg::Delete => {
@@ -854,21 +1183,58 @@ impl ConfigPanel {
                     return Task::none();
                 }
                 self.armed_delete = false;
-                if matches!(self.editing, Some(Editing::Installed) | None) {
+                if matches!(
+                    self.editing,
+                    Some(Editing::Installed | Editing::Roles) | None
+                ) {
                     return Task::none();
                 }
-                let result = match self.editing.take() {
-                    Some(Editing::Vendor(name)) => config_data::delete_entry("vendors", &name),
-                    Some(Editing::Role(name)) => config_data::delete_entry("roles", &name),
-                    Some(Editing::Installed) | None => return Task::none(),
-                };
-                match result {
-                    Ok(path) => {
-                        self.notice = format!("Deleted from {}", display(&path));
-                        return Self::load_models(root);
+                let is_new = self.is_new;
+                match self.editing.take() {
+                    Some(Editing::Vendor(name)) => {
+                        let users: Vec<&str> = self
+                            .models
+                            .roles
+                            .iter()
+                            .filter(|(n, r)| r.vendor == name && !self.role_removed.contains(*n))
+                            .map(|(n, _)| n.as_str())
+                            .collect();
+                        if !users.is_empty() && !is_new {
+                            self.notice = crate::panel::refusal(
+                                "Not deleted.",
+                                &format!(
+                                    "config: vendor \"{name}\" is used by roles: {}",
+                                    users.join(", ")
+                                ),
+                            );
+                            self.editing = Some(Editing::Vendor(name));
+                            return Task::none();
+                        }
+                        if !is_new {
+                            self.vendor_removed.insert(name.clone());
+                            self.notice = crate::ui::info(&format!(
+                                "Deleted vendor {name}. Save to keep it."
+                            ));
+                        }
                     }
-                    Err(e) => self.notice = e,
+                    Some(Editing::Role(name)) => {
+                        if !is_new {
+                            self.role_removed.insert(name.clone());
+                            self.notice =
+                                crate::ui::info(&format!("Deleted role {name}. Save to keep it."));
+                        }
+                    }
+                    Some(Editing::Installed | Editing::Roles) | None => {}
                 }
+                self.is_new = false;
+            }
+            CfgMsg::RefreshEvents => {
+                self.announce_topics = true;
+                return self.update(CfgMsg::Refresh, root);
+            }
+            CfgMsg::RefreshSkills => {
+                self.announce_skills = true;
+                return self.update(CfgMsg::Refresh, root);
             }
             CfgMsg::Refresh => {
                 self.loading = true;
@@ -885,47 +1251,92 @@ impl ConfigPanel {
 
     // ---- views -------------------------------------------------------------------------------------------------
 
-    pub fn skills_view<'a>(&'a self) -> Element<'a, Message> {
+    pub fn skills_view<'a>(
+        &'a self,
+        filter: &str,
+        chip: usize,
+        agents: &'a [shepherd_app_core::shepherd_core::Agent],
+    ) -> Element<'a, Message> {
         if self.loading && self.skills.is_empty() {
             return loading_state("Loading skills…");
         }
-        let enabled = self.skills.iter().filter(|s| s.enabled).count();
-        let problems = self
-            .skills
-            .iter()
-            .filter(|s| !s.problems.is_empty())
-            .count();
-        let summary = container(
-            row![
-                config_metric("SKILLS", self.skills.len(), ACCENT),
-                config_metric("ENABLED", enabled, OK),
-                config_metric("ISSUES", problems, if problems > 0 { WARN } else { OK }),
-            ]
-            .spacing(1),
-        )
-        .style(crate::theme::kpi_strip_style);
-        let items = self
-            .skills
-            .iter()
-            .map(|s| {
-                let body = column![
-                    text(format!("{}{}", if s.enabled { "" } else { "✖ " }, s.name)).size(13),
-                    text(format!(
-                        "{}{}",
-                        s.scope,
-                        if s.global { " · global" } else { "" }
-                    ))
+        let builtin = |s: &SkillRow| s.scope == "Default";
+        let used_by = |name: &str| -> Vec<&str> {
+            agents
+                .iter()
+                .filter(|a| a.active_skills.iter().any(|x| x == name))
+                .map(|a| a.id.as_str())
+                .collect()
+        };
+        let counts = [
+            self.skills.len(),
+            self.skills.iter().filter(|s| builtin(s)).count(),
+            self.skills.iter().filter(|s| !builtin(s)).count(),
+            self.skills.iter().filter(|s| s.global).count(),
+        ];
+        let chips = [
+            ("All", counts[0]),
+            ("Built in", counts[1]),
+            ("Yours", counts[2]),
+            ("Global", counts[3]),
+        ];
+        let pass = |s: &&SkillRow| {
+            let f = filter.to_lowercase();
+            let hay = format!("{} {}", s.name, s.description).to_lowercase();
+            let chip_ok = match chip {
+                1 => builtin(s),
+                2 => !builtin(s),
+                3 => s.global,
+                _ => true,
+            };
+            chip_ok && f.split_whitespace().all(|w| hay.contains(w))
+        };
+        let entry = |s: &'a SkillRow| -> Element<'a, Message> {
+            let users = used_by(&s.name).len();
+            let body = column![
+                row![
+                    text(format!("{}{}", if s.enabled { "" } else { "✖ " }, s.name))
+                        .font(crate::theme::MONO_BOLD)
+                        .size(13)
+                        .color(crate::theme::HI)
+                        .width(Length::Fill),
+                    text(if users > 0 {
+                        format!("{users} agent{}", if users == 1 { "" } else { "s" })
+                    } else {
+                        String::new()
+                    })
                     .size(11)
-                    .color(DIM)
-                ];
-                button(body)
-                    .width(Length::Fill)
-                    .padding([4, 8])
-                    .style(item_style(self.skill.as_deref() == Some(s.name.as_str())))
-                    .on_press(cfg(CfgMsg::SelectSkill(s.name.clone())))
-                    .into()
-            })
-            .collect();
+                    .color(DIM),
+                ],
+                text(s.description.chars().take(46).collect::<String>())
+                    .size(11)
+                    .color(DIM),
+            ]
+            .spacing(3);
+            button(body)
+                .width(Length::Fill)
+                .padding([8, 10])
+                .style(item_style(self.skill.as_deref() == Some(s.name.as_str())))
+                .on_press(crate::ui::nav(
+                    self.skill.as_deref() == Some(s.name.as_str()),
+                    cfg(CfgMsg::SelectSkill(s.name.clone())),
+                ))
+                .into()
+        };
+        let heading = |s: String| {
+            container(text(s).size(11.5).color(DIM)).padding(crate::theme::pad(10.0, 4.0, 4.0, 4.0))
+        };
+        let (own, shipped): (Vec<&SkillRow>, Vec<&SkillRow>) =
+            self.skills.iter().filter(pass).partition(|s| !builtin(s));
+        let mut items: Vec<Element<'a, Message>> = vec![];
+        if !own.is_empty() {
+            items.push(heading(format!("Yours ({})", own.len())).into());
+            items.extend(own.into_iter().map(entry));
+        }
+        if !shipped.is_empty() {
+            items.push(heading(format!("Built in ({})", shipped.len())).into());
+            items.extend(shipped.into_iter().map(entry));
+        }
         let detail: Element<'a, Message> = match self
             .skill
             .as_deref()
@@ -939,14 +1350,26 @@ impl ConfigPanel {
             Some(s) => {
                 let mut col = column![
                     row![
-                        text(format!("SKILL {}", s.name))
-                            .size(18)
+                        text(s.name.clone())
+                            .font(crate::theme::MONO_BOLD)
+                            .size(20)
                             .color(crate::theme::HI),
                         crate::panel::badge(
-                            if s.enabled { "ENABLED" } else { "DISABLED" },
-                            if s.enabled { OK } else { crate::theme::BAD }
+                            if !s.enabled {
+                                "disabled".to_owned()
+                            } else if s.scope == "Default" {
+                                "built in, read-only".to_owned()
+                            } else if s.global {
+                                "yours, global".to_owned()
+                            } else {
+                                "yours".to_owned()
+                            },
+                            if s.enabled {
+                                crate::theme::IDLE
+                            } else {
+                                crate::theme::BAD
+                            }
                         ),
-                        text("SKILL.md").size(11).color(DIM),
                     ]
                     .spacing(10)
                     .align_y(iced::Alignment::Center),
@@ -975,13 +1398,13 @@ impl ConfigPanel {
                                     .center_y(Length::Fill),
                             )
                             .padding([0, 12])
-                            .height(34)
+                            .height(32)
                             .style(crate::theme::danger_button_style())
                             .on_press(cfg(CfgMsg::SkillDelete(s.name.clone())))
                         } else {
                             button(container(text("Delete").size(13)).center_y(Length::Fill))
                                 .padding([0, 12])
-                                .height(34)
+                                .height(32)
                                 .style(crate::theme::outline_button_style(false))
                                 .on_press(cfg(CfgMsg::SkillDelete(s.name.clone())))
                         });
@@ -1007,20 +1430,82 @@ impl ConfigPanel {
                     CfgMsg::SkillGlobal(s.name.clone(), !s.global),
                     false,
                 ));
+                let users = used_by(&s.name);
+                let mut used = row![text("Used by").size(12).color(DIM)]
+                    .spacing(10)
+                    .align_y(iced::Alignment::Center);
+                if users.is_empty() {
+                    used = used.push(text("no agent yet").size(12).color(DIM));
+                }
+                for u in users {
+                    used = used.push(
+                        container(text(u.to_owned()).size(11.5))
+                            .padding([2, 10])
+                            .style(|_| container::Style {
+                                border: iced::Border {
+                                    color: crate::theme::LINE2,
+                                    width: 1.0,
+                                    radius: 12.0.into(),
+                                },
+                                ..container::Style::default()
+                            }),
+                    );
+                }
+                let lines = s.body.lines().count();
+                // a 48 px gutter of line numbers (#4A4A5C); the front matter lines `name:` and `description:` are
+                // violet, headings bright
+                let mut source = column![].spacing(2);
+                for (i, l) in s.body.lines().enumerate() {
+                    let color = if l.starts_with("name:") || l.starts_with("description:") {
+                        crate::theme::VIOLET
+                    } else if l.starts_with('#') {
+                        crate::theme::HI
+                    } else {
+                        crate::theme::FG
+                    };
+                    source = source.push(
+                        row![
+                            text((i + 1).to_string())
+                                .size(12)
+                                .color(crate::theme::LINE3)
+                                .width(48)
+                                .align_x(iced::alignment::Horizontal::Right),
+                            text(l.to_owned()).size(12.5).color(color),
+                        ]
+                        .spacing(14),
+                    );
+                }
+                let note = if s.scope == "Default" {
+                    "Customize makes your own copy, which you can edit. The built-in one stays as it is."
+                } else if s.global {
+                    "Global: every agent gets it, whatever its role."
+                } else {
+                    "Agents get it when their role lists it or its description fits."
+                };
                 col.push(actions)
-                    .push(
-                        text("A global skill goes to every agent, whatever its role.")
+                    .push(text(note).size(11.5).color(DIM))
+                    .push(used.wrap())
+                    .push(crate::panel::card(
+                        "SKILL.md",
+                        Some(
+                            text(format!(
+                                "{}  {lines} lines",
+                                if s.scope == "Default" {
+                                    "ships with Shepherd".to_owned()
+                                } else {
+                                    s.dir.clone()
+                                }
+                            ))
                             .size(11)
-                            .color(DIM),
-                    )
-                    .push(markdown(&s.body))
+                            .color(DIM)
+                            .into(),
+                        ),
+                        source.into(),
+                    ))
                     .into()
             }
         };
-        let footer = vec![
-            crate::panel::btn_link("+ Skill", PanelMsg::Cfg(CfgMsg::SkillNewOpen)),
-            refresh_button(),
-        ];
+        let top = crate::ui::filter_bar("Filter by name or what it does", filter, &chips, chip);
         let detail_pane: Element<'a, Message> =
             if let Some(form) = &self.skill_new {
                 detail_box(self.skill_new_view(form))
@@ -1036,10 +1521,11 @@ impl ConfigPanel {
             } else {
                 detail_box(detail)
             };
-        column![
-            summary,
-            row![list_box(items, footer), detail_pane].height(Length::Fill),
+        row![
+            crate::panel::list_box_with(Some(top), items, vec![]),
+            detail_pane
         ]
+        .height(Length::Fill)
         .into()
     }
 
@@ -1138,7 +1624,12 @@ impl ConfigPanel {
         .into()
     }
 
+    /// Git: one flexible region whose table keeps its fixed columns (1120 px), scrolling when narrower.
     pub fn git_view<'a>(&'a self) -> Element<'a, Message> {
+        crate::ui::flex(1120.0, [20.0, 28.0], move || self.git_content())
+    }
+
+    fn git_content<'a>(&'a self) -> Element<'a, Message> {
         let Some(git) = &self.git else {
             if self.loading {
                 return loading_state("Loading Git worktrees…");
@@ -1149,65 +1640,6 @@ impl ConfigPanel {
             ]
             .into();
         };
-        let dirty = git.worktrees.iter().filter(|w| !w.is_clean).count();
-        let ahead = git.worktrees.iter().filter(|w| w.ahead > 0).count();
-        let behind = git.worktrees.iter().filter(|w| w.behind > 0).count();
-        let summary = container(
-            row![
-                config_metric("WORKTREES", git.worktrees.len(), ACCENT),
-                config_metric(
-                    "CLEAN",
-                    git.worktrees.iter().filter(|w| w.is_clean).count(),
-                    OK,
-                ),
-                config_metric("DIRTY", dirty, if dirty > 0 { WARN } else { OK }),
-                config_metric(
-                    "SYNC",
-                    ahead + behind,
-                    if ahead + behind > 0 { WARN } else { OK }
-                ),
-            ]
-            .spacing(1),
-        )
-        .style(crate::theme::kpi_strip_style);
-        let items = git
-            .worktrees
-            .iter()
-            .map(|w| {
-                let state = if w.is_clean {
-                    "clean".to_owned()
-                } else {
-                    format!("dirty {}", w.dirty_count)
-                };
-                let sync = if w.ahead > 0 || w.behind > 0 {
-                    format!(" · +{} -{}", w.ahead, w.behind)
-                } else {
-                    String::new()
-                };
-                let body = column![
-                    text(if w.branch.is_empty() {
-                        "(no branch)".to_owned()
-                    } else {
-                        w.branch.clone()
-                    })
-                    .size(13),
-                    text(format!(
-                        "{state}{sync}{}",
-                        if w.is_main { " · main" } else { "" }
-                    ))
-                    .size(11)
-                    .color(DIM)
-                ];
-                button(body)
-                    .width(Length::Fill)
-                    .padding([4, 8])
-                    .style(item_style(
-                        self.worktree.as_deref() == Some(w.path.as_str()),
-                    ))
-                    .on_press(cfg(CfgMsg::SelectWorktree(w.path.clone())))
-                    .into()
-            })
-            .collect();
         let mut note = column![].spacing(4);
         if let Some(error) = &git.error {
             note = note.push(crate::panel::alert(
@@ -1230,155 +1662,276 @@ impl ConfigPanel {
         {
             note = note.push(text(n.to_owned()).size(12).color(DIM));
         }
-        let detail: Element<'a, Message> = match self
+        if git.worktrees.is_empty() {
+            return container(
+                column![
+                    note,
+                    empty_state(
+                        "No worktrees found",
+                        "This project does not currently expose any Git worktrees.",
+                    )
+                ]
+                .spacing(8),
+            )
+            .padding([16, 28])
+            .into();
+        }
+        let selected = self
             .worktree
             .as_deref()
             .and_then(|p| git.worktrees.iter().find(|w| w.path == p))
-            .or_else(|| git.worktrees.first())
-        {
-            None => note
-                .push(empty_state(
-                    "No worktrees found",
-                    "This project does not currently expose any Git worktrees.",
-                ))
-                .into(),
-            Some(w) => {
-                let sync_label = match (w.ahead, w.behind) {
-                    (0, 0) => "in sync".to_owned(),
-                    (ahead, behind) => format!("+{ahead} ahead · {behind} behind"),
-                };
-                let mut col = column![
-                    row![
-                        text(if w.branch.is_empty() {
-                            "(detached HEAD)".to_owned()
-                        } else {
-                            w.branch.clone()
-                        })
-                        .size(18)
-                        .color(crate::theme::HI),
-                        crate::panel::badge(if w.is_main { "MAIN" } else { "LINKED" }, ACCENT),
-                        crate::panel::badge(
-                            if w.is_clean {
-                                "CLEAN".to_owned()
-                            } else {
-                                format!("DIRTY {}", w.dirty_count)
+            .unwrap_or(&git.worktrees[0]);
+        // fixed columns: Branch 260, Worktree 260, Changes 140, Ahead / behind 120, Agents 160, Pull request 180
+        let cell = |w: f32, e: Element<'a, Message>| container(e).width(w).clip(true);
+        let head = |s: &'static str, w: f32| cell(w, text(s).size(11.5).color(DIM).into());
+        let mut table = column![container(
+            row![
+                head("Branch", 260.0),
+                head("Worktree", 260.0),
+                head("Changes", 140.0),
+                head("Ahead / behind", 120.0),
+                head("Agents", 160.0),
+                head("Pull request", 180.0)
+            ]
+            .spacing(10)
+        )
+        .padding([12, 16])]
+        .spacing(0);
+        for w in &git.worktrees {
+            let sel = w.path == selected.path;
+            let branch: Element<'a, Message> = row![
+                text("⎇").size(12).color(DIM),
+                text(if w.branch.is_empty() {
+                    "(no branch)".to_owned()
+                } else {
+                    w.branch.clone()
+                })
+                .font(crate::theme::MONO_BOLD)
+                .size(12.5)
+                .color(crate::theme::HI),
+                if w.is_main {
+                    container(text("main checkout").size(10).color(ACCENT))
+                        .padding([0, 6])
+                        .style(|_| container::Style {
+                            border: iced::Border {
+                                color: ACCENT,
+                                width: 1.0,
+                                radius: 3.0.into(),
                             },
-                            if w.is_clean { OK } else { WARN }
-                        ),
-                    ]
-                    .spacing(10)
-                    .align_y(iced::Alignment::Center),
-                    text(w.path.clone()).size(12).color(DIM),
-                    text(sync_label)
-                        .size(12)
-                        .color(if w.ahead > 0 || w.behind > 0 {
-                            WARN
-                        } else {
-                            OK
-                        }),
-                ]
-                .spacing(8);
-                if let Some(upstream) = &w.upstream {
-                    col = col.push(text(format!("Upstream: {upstream}")).size(11).color(DIM));
-                }
-                let review_state = if !w.is_clean {
-                    ("Needs review", WARN)
-                } else if w.ahead > 0 {
-                    ("Ready to inspect", ACCENT)
-                } else {
-                    ("No local changes", OK)
-                };
-                col = col.push(crate::panel::card(
-                    "CHANGE SUMMARY",
-                    None,
-                    column![
-                        row![
-                            text(review_state.0).size(13).color(review_state.1),
-                            text(format!(
-                                "{} changed file(s) · {} local commit(s)",
-                                w.dirty_count, w.ahead
-                            ))
-                            .size(11)
-                            .color(DIM),
-                        ]
-                        .spacing(10),
-                        text(if w.behind > 0 {
-                            format!("{} commit(s) behind upstream", w.behind)
-                        } else {
-                            "Branch is not behind upstream.".to_owned()
+                            ..container::Style::default()
                         })
-                        .size(11)
-                        .color(if w.behind > 0 { WARN } else { DIM }),
-                    ]
-                    .spacing(4)
-                    .into(),
-                ));
-                if let Some(agent) = &w.agent_id {
-                    col = col.push(crate::panel::card(
-                        "AGENT CONTEXT",
-                        Some(crate::panel::btn_link(
-                            "Open agent workspace",
-                            crate::panel::PanelMsg::Cfg(CfgMsg::OpenAgent(agent.clone())),
-                        )),
-                        column![
-                            text(agent.clone()).size(13).color(ACCENT),
-                            text("This worktree is linked to a Shepherd agent.")
-                                .size(11)
-                                .color(DIM),
-                        ]
-                        .spacing(4)
-                        .into(),
-                    ));
-                }
-                if let Some(pr) = &w.pr {
-                    col = col.push(crate::panel::card(
-                        "PULL REQUEST",
-                        None,
-                        column![
-                            text(format!("#{} {}", pr.number, pr.title)).size(13),
-                            text(pr.state.clone())
-                                .size(11)
-                                .color(if pr.state == "OPEN" { OK } else { DIM }),
-                        ]
-                        .spacing(4)
-                        .into(),
-                    ));
                 } else {
-                    col = col.push(
-                        text("No pull request detected for this worktree.")
-                            .size(11)
-                            .color(DIM),
-                    );
-                }
-                if !w.is_main {
-                    let armed = self.armed_worktree.as_deref() == Some(w.path.as_str());
-                    col = col.push(cfg_btn(
-                        if armed {
-                            "Confirm: remove this worktree (the branch stays)"
-                        } else {
-                            "Remove worktree"
-                        },
-                        CfgMsg::WorktreeRemove(w.path.clone()),
-                        armed,
-                    ));
-                }
-                col.push(note).max_width(900).into()
-            }
+                    container(text(""))
+                },
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center)
+            .into();
+            let changes: Element<'a, Message> = if w.is_clean {
+                row![text("■").size(9).color(OK), text("clean").size(12)]
+                    .spacing(6)
+                    .into()
+            } else {
+                row![
+                    text("■").size(9).color(WARN),
+                    text(format!("{} uncommitted", w.dirty_count)).size(12)
+                ]
+                .spacing(6)
+                .into()
+            };
+            let pr: Element<'a, Message> = match &w.pr {
+                Some(p) => text(format!("#{} {}", p.number, p.state.to_lowercase()))
+                    .size(12)
+                    .color(if matches!(p.state.as_str(), "OPEN" | "MERGED") {
+                        OK
+                    } else {
+                        DIM
+                    })
+                    .into(),
+                None => text("none").size(12).color(DIM).into(),
+            };
+            let line = row![
+                cell(260.0, branch),
+                cell(
+                    260.0,
+                    text(display(Path::new(&w.path))).size(12).color(DIM).into()
+                ),
+                cell(140.0, changes),
+                cell(
+                    120.0,
+                    text(format!("+{} / {}", w.ahead, w.behind)).size(12).into()
+                ),
+                cell(
+                    160.0,
+                    text(w.agent_id.clone().unwrap_or_else(|| "none".into()))
+                        .size(12)
+                        .into()
+                ),
+                cell(180.0, pr),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center);
+            table = table.push(
+                button(container(line).center_y(Length::Fill))
+                    .width(Length::Fill)
+                    .height(44)
+                    .padding([0, 16])
+                    .style(move |_, status| {
+                        let hot =
+                            matches!(status, button::Status::Hovered | button::Status::Pressed);
+                        button::Style {
+                            background: (sel || hot)
+                                .then_some(Background::Color(crate::theme::SELECTED)),
+                            text_color: crate::theme::FG,
+                            border: iced::Border {
+                                color: if sel { ACCENT } else { Color::TRANSPARENT },
+                                width: 0.0,
+                                radius: 0.0.into(),
+                            },
+                            ..button::Style::default()
+                        }
+                    })
+                    .on_press(crate::ui::nav(
+                        sel,
+                        cfg(CfgMsg::SelectWorktree(w.path.clone())),
+                    )),
+            );
+        }
+        let table = container(table).width(Length::Fill).style(card_style);
+        // what changed in the picked worktree
+        let w = selected;
+        let mut files = column![].spacing(0);
+        if w.changes.is_empty() {
+            files = files.push(
+                text(if w.is_clean {
+                    "Nothing to commit."
+                } else {
+                    "The files could not be listed."
+                })
+                .size(12)
+                .color(DIM),
+            );
+        }
+        for ch in &w.changes {
+            let color = match ch.status.as_str() {
+                "added" | "untracked" => OK,
+                "deleted" => crate::theme::BAD,
+                _ => WARN,
+            };
+            files = files.push(
+                container(
+                    row![
+                        text(ch.status.clone()).size(12).color(color).width(90),
+                        text(ch.path.clone()).size(12).width(Length::Fill),
+                        text(format!("+{}", ch.added)).size(11.5).color(OK),
+                        text(format!("-{}", ch.removed))
+                            .size(11.5)
+                            .color(crate::theme::BAD),
+                    ]
+                    .spacing(8),
+                )
+                .padding([8, 0]),
+            );
+        }
+        let changes_card = crate::panel::card(
+            "CHANGES",
+            Some(
+                text(format!(
+                    "{}  {}",
+                    if w.branch.is_empty() {
+                        "(detached)"
+                    } else {
+                        &w.branch
+                    },
+                    if w.is_clean {
+                        "clean".to_owned()
+                    } else {
+                        format!("{} uncommitted", w.dirty_count)
+                    }
+                ))
+                .size(11.5)
+                .color(if w.is_clean { OK } else { WARN })
+                .into(),
+            ),
+            files.into(),
+        );
+        let kv = |k: &'static str, v: String, color: Color| {
+            row![
+                text(k).size(12).color(DIM).width(90),
+                text(v).size(12).color(color)
+            ]
+            .spacing(8)
         };
-        let detail = match &self.git_form {
-            Some(form) => self.git_form_view(form),
-            None => detail,
-        };
-        let footer = vec![
-            cfg_btn("+ Branch", CfgMsg::GitFormOpen(false), false),
-            cfg_btn("+ Worktree", CfgMsg::GitFormOpen(true), false),
-            refresh_button(),
-        ];
-        column![
-            summary,
-            row![list_box(items, footer), detail_box(detail)].height(Length::Fill),
+        let mut info = column![
+            kv("folder", display(Path::new(&w.path)), crate::theme::FG),
+            kv(
+                "upstream",
+                w.upstream
+                    .clone()
+                    .unwrap_or_else(|| "not pushed yet".into()),
+                crate::theme::FG
+            ),
+            kv(
+                "agents",
+                w.agent_id.clone().unwrap_or_else(|| "none".into()),
+                crate::theme::FG
+            ),
+            kv(
+                "pull request",
+                match &w.pr {
+                    Some(p) => format!("#{} {} ({})", p.number, p.title, p.state.to_lowercase()),
+                    None => "none".into(),
+                },
+                crate::theme::FG
+            ),
         ]
-        .into()
+        .spacing(6);
+        if let Some(agent) = &w.agent_id {
+            info = info.push(crate::panel::btn_link(
+                "Open agent workspace",
+                crate::panel::PanelMsg::Cfg(CfgMsg::OpenAgent(agent.clone())),
+            ));
+        }
+        if !w.is_main {
+            let armed = self.armed_worktree.as_deref() == Some(w.path.as_str());
+            info = info.push(cfg_btn(
+                if armed {
+                    "Confirm: remove this worktree (the branch stays)"
+                } else {
+                    "Remove worktree"
+                },
+                CfgMsg::WorktreeRemove(w.path.clone()),
+                armed,
+            ));
+            let mut why = vec![];
+            if !w.is_clean {
+                why.push(format!("it has {} uncommitted changes", w.dirty_count));
+            }
+            if let Some(a) = &w.agent_id {
+                why.push(format!("agent {a} works in it"));
+            }
+            if !why.is_empty() {
+                info = info.push(
+                    text(format!(
+                        "The server will refuse this: {}.",
+                        why.join(" and ")
+                    ))
+                    .size(11.5)
+                    .color(WARN),
+                );
+            }
+        }
+        let worktree_card = crate::panel::card("WORKTREE", None, info.into());
+        let lower: Element<'a, Message> = match &self.git_form {
+            Some(form) => self.git_form_view(form),
+            None => row![
+                container(changes_card).width(Length::FillPortion(3)),
+                container(worktree_card).width(Length::FillPortion(2)),
+            ]
+            .spacing(16)
+            .into(),
+        };
+        column![note, table, lower].spacing(16).into()
     }
 
     /// The one form for a new branch (name, base) or a new worktree (folder, branch).
@@ -1405,7 +1958,11 @@ impl ConfigPanel {
                     text_input(hint, value)
                         .on_input(move |t| cfg(on(t)))
                         .on_submit(cfg(CfgMsg::GitFormSubmit))
-                        .style(crate::theme::input_style)
+                        .style(crate::theme::input_style_marked(
+                            crate::ui::is_invalid(&self.notice)
+                                && value.trim().is_empty()
+                                && !label.contains("EMPTY"),
+                        ))
                         .padding([8, 10])
                         .size(13),
                 ]
@@ -1429,68 +1986,8 @@ impl ConfigPanel {
         .into()
     }
 
-    pub fn events_view<'a>(&'a self, frame: u32) -> Element<'a, Message> {
-        if self.loading && self.topics.is_empty() {
-            return loading_state("Loading event topics…");
-        }
-        let paused = self.topics.iter().filter(|t| t.paused).count();
-        let unread: u64 = self
-            .topics
-            .iter()
-            .flat_map(|t| t.groups.iter())
-            .flat_map(|g| g.lag_by_partition.values())
-            .sum();
-        let summary = container(
-            row![
-                config_metric("TOPICS", self.topics.len(), ACCENT),
-                config_metric("PAUSED", paused, if paused > 0 { WARN } else { OK }),
-                config_metric(
-                    "UNREAD",
-                    unread as usize,
-                    if unread > 0 { WARN } else { OK }
-                ),
-            ]
-            .spacing(1),
-        )
-        .style(crate::theme::kpi_strip_style);
-        let items = self
-            .topics
-            .iter()
-            .map(|t| {
-                let unread: u64 = t
-                    .groups
-                    .iter()
-                    .flat_map(|g| g.lag_by_partition.values())
-                    .sum();
-                let mut title = row![text(format!("#{}", t.name))
-                    .size(13)
-                    .color(crate::theme::HI)]
-                .spacing(8)
-                .align_y(iced::Alignment::Center);
-                if t.paused {
-                    title = title.push(text("paused").size(11).color(WARN));
-                }
-                if unread > 0 {
-                    title = title.push(text(format!("{unread} unread")).size(11).color(WARN));
-                }
-                let body = column![
-                    title,
-                    text(format!(
-                        "{} messages · {} partition(s)",
-                        t.messages_count, t.partitions
-                    ))
-                    .size(11)
-                    .color(DIM)
-                ]
-                .spacing(1);
-                button(body)
-                    .width(Length::Fill)
-                    .padding([4, 8])
-                    .style(item_style(self.topic.as_deref() == Some(t.name.as_str())))
-                    .on_press(cfg(CfgMsg::SelectTopic(t.name.clone())))
-                    .into()
-            })
-            .collect();
+    /// The detail of the open topic (or the open form): the content of Events' flexible region.
+    fn events_detail<'a>(&'a self, frame: u32) -> Element<'a, Message> {
         let detail: Element<'a, Message> = match self
             .topic
             .as_deref()
@@ -1506,18 +2003,16 @@ impl ConfigPanel {
                     .iter()
                     .flat_map(|g| g.members.iter().cloned())
                     .collect();
+                let _ = &consumers;
                 let mut col = column![row![
                     text(format!("#{}", t.name))
                         .size(18)
-                        .color(crate::theme::HI),
+                        .color(crate::theme::VIOLET),
                     text(format!(
-                        "{} messages · consumers {}",
+                        "{} messages, {} partitions, {} consumer groups",
                         t.messages_count,
-                        if consumers.is_empty() {
-                            "none".to_owned()
-                        } else {
-                            consumers.join(" · ")
-                        }
+                        t.partitions,
+                        t.groups.len()
                     ))
                     .size(12)
                     .color(DIM),
@@ -1553,7 +2048,7 @@ impl ConfigPanel {
                     groups.max(seen)
                 };
                 let max_msgs = (0..t.partitions).map(msgs_of).max().unwrap_or(0).max(1);
-                let mut parts = column![].spacing(8);
+                let mut parts = column![].spacing(8).width(Length::Fill);
                 for p in 0..t.partitions {
                     let (lag, msgs) = (lag_of(p), msgs_of(p));
                     // `lag` canvas: the stream is as long as the partition is full
@@ -1563,7 +2058,7 @@ impl ConfigPanel {
                             text(format!("p{p}"))
                                 .size(12)
                                 .color(crate::theme::HI)
-                                .width(60),
+                                .width(26),
                             iced::widget::canvas::Canvas::new(crate::prism::Prism {
                                 preset: crate::prism::Preset::lag(reach, f64::from(p) * 7.0),
                                 frame: frame.wrapping_add(p * 3),
@@ -1578,33 +2073,136 @@ impl ConfigPanel {
                                     OK
                                 }),
                             ]
-                            .width(150),
+                            .width(116),
                         ]
-                        .spacing(12)
+                        .spacing(8)
+                        .width(Length::Fill)
                         .align_y(iced::Alignment::Center),
                     );
                 }
+                // Flow: who writes (left), the partitions with their lag (middle), who reads (right)
+                let mut senders: Vec<&str> = vec![];
+                for m in &self.feed {
+                    if !senders.contains(&m.from.as_str()) {
+                        senders.push(&m.from);
+                    }
+                }
+                let mut publishers = column![crate::theme::label("PUBLISHERS")].spacing(8);
+                for s in &senders {
+                    let color = crate::theme::emitter_color(s);
+                    publishers = publishers.push(
+                        container(
+                            row![
+                                text("■").size(8).color(color),
+                                text(if *s == "user" { "you" } else { s }.to_owned()).size(12),
+                            ]
+                            .spacing(8)
+                            .align_y(iced::Alignment::Center),
+                        )
+                        .padding([0, 10])
+                        .height(32)
+                        .align_y(iced::alignment::Vertical::Center)
+                        .style(crate::theme::chip_box_style),
+                    );
+                }
+                if senders.is_empty() {
+                    publishers = publishers.push(text("nobody yet").size(12).color(DIM));
+                }
+                let mut readers = column![crate::theme::label("CONSUMER GROUPS")].spacing(8);
+                for g in &t.groups {
+                    let lag: u64 = g.lag_by_partition.values().sum();
+                    readers =
+                        readers.push(
+                            container(
+                                column![
+                                    row![
+                                        text(g.group.clone()).size(12.5).color(crate::theme::HI),
+                                        container(text("")).width(Length::Fill),
+                                        text(if lag == 0 {
+                                            "read".to_owned()
+                                        } else {
+                                            format!("lag {lag}")
+                                        })
+                                        .size(11)
+                                        .color(if lag > 1 { WARN } else { OK }),
+                                    ],
+                                    text(if g.members.is_empty() {
+                                        "no members".to_owned()
+                                    } else {
+                                        g.members.join(", ")
+                                    })
+                                    .size(11)
+                                    .color(DIM),
+                                ]
+                                .spacing(4),
+                            )
+                            .padding([8, 10])
+                            .width(Length::Fill)
+                            .style(crate::theme::chip_box_style),
+                        );
+                }
+                if t.groups.is_empty() {
+                    readers = readers.push(text("nobody reads yet").size(12).color(DIM));
+                }
                 col = col.push(crate::panel::card(
-                    "PARTITIONS · LAG",
-                    Some(text("messages / lag").size(11).color(DIM).into()),
-                    parts.into(),
+                    "FLOW",
+                    Some(
+                        text("who writes, how full, who reads")
+                            .size(11)
+                            .color(DIM)
+                            .into(),
+                    ),
+                    row![
+                        container(publishers).width(170),
+                        column![crate::theme::label("PARTITIONS"), parts]
+                            .spacing(8)
+                            .width(Length::Fill),
+                        container(readers).width(250),
+                    ]
+                    .spacing(20)
+                    .into(),
                 ));
                 // Recent messages, newest first: time, who emitted it, and colours.
                 let mut feed = column![].spacing(0);
                 if self.feed.is_empty() {
                     feed = feed.push(text("No messages yet.").size(12).color(DIM));
                 }
-                for m in self.feed.iter().rev() {
+                for m in self
+                    .feed
+                    .iter()
+                    .rev()
+                    .filter(|m| self.msg_partition.is_none_or(|p| p == m.partition))
+                {
                     feed = feed.push(crate::panel::message_row(m, true));
                 }
+                let mut chips = row![chip_btn(
+                    "All".into(),
+                    self.msg_partition.is_none(),
+                    CfgMsg::MsgPartition(None)
+                )]
+                .spacing(6);
+                for p in 0..t.partitions {
+                    chips = chips.push(chip_btn(
+                        format!("p{p}"),
+                        self.msg_partition == Some(p),
+                        CfgMsg::MsgPartition(Some(p)),
+                    ));
+                }
+                if self.feed.is_empty() {
+                    feed = column![text(format!(
+                        "No messages here yet. Send the first one below; agents reading #{} get it right away.",
+                        t.name
+                    ))
+                    .size(12)
+                    .color(DIM)];
+                } else if self.feed.len() >= self.feed_limit() {
+                    feed = feed.push(
+                        container(cfg_btn("Load older", CfgMsg::LoadOlder, false)).padding([10, 0]),
+                    );
+                }
                 col = col.push(crate::panel::card(
-                    "RECENT MESSAGES",
-                    Some(
-                        text(format!("{} shown", self.feed.len()))
-                            .size(11)
-                            .color(DIM)
-                            .into(),
-                    ),
+                    "MESSAGES · NEWEST FIRST",
+                    Some(chips.into()),
                     feed.into(),
                 ));
                 col.max_width(1000).into()
@@ -1614,15 +2212,113 @@ impl ConfigPanel {
             Some(form) => self.topic_form_view(form),
             None => detail,
         };
+        detail
+    }
+
+    pub fn events_view<'a>(&'a self, frame: u32, filter: &str) -> Element<'a, Message> {
+        if self.loading && self.topics.is_empty() {
+            return loading_state("Loading event topics…");
+        }
+        let items = self
+            .topics
+            .iter()
+            .filter(|t| {
+                let f = filter.to_lowercase();
+                f.split_whitespace()
+                    .all(|w| t.name.to_lowercase().contains(w))
+            })
+            .map(|t| {
+                let unread: u64 = t
+                    .groups
+                    .iter()
+                    .flat_map(|g| g.lag_by_partition.values())
+                    .sum();
+                let mut title = row![text(format!("#{}", t.name))
+                    .size(13)
+                    .color(crate::theme::HI)]
+                .spacing(8)
+                .align_y(iced::Alignment::Center);
+                if t.paused {
+                    title = title.push(text("paused").size(11).color(WARN));
+                }
+                if unread > 0 {
+                    title = title.push(text(format!("{unread} unread")).size(11).color(WARN));
+                }
+                let body = column![
+                    title,
+                    text(format!(
+                        "{} messages · {} partition(s)",
+                        t.messages_count, t.partitions
+                    ))
+                    .size(11)
+                    .color(DIM)
+                ]
+                .spacing(1);
+                button(body)
+                    .width(Length::Fill)
+                    .padding([4, 8])
+                    .style(item_style(self.topic.as_deref() == Some(t.name.as_str())))
+                    .on_press(crate::ui::nav(
+                        self.topic.as_deref() == Some(t.name.as_str()),
+                        cfg(CfgMsg::SelectTopic(t.name.clone())),
+                    ))
+                    .into()
+            })
+            .collect();
+        let detail = crate::ui::flex(760.0, [20.0, 28.0], move || self.events_detail(frame));
         let footer = vec![
             cfg_btn("+ Topic", CfgMsg::TopicFormOpen(false), false),
             cfg_btn("Send message", CfgMsg::TopicFormOpen(true), false),
             refresh_button(),
         ];
-        column![
-            summary,
-            row![list_box(items, footer), detail_box(detail)].height(Length::Fill),
+        let _ = footer;
+        let top = crate::ui::filter_bar("Filter topics", filter, &[], 0);
+        // the box to write to the open topic stays at the foot of the detail
+        let composer: Element<'a, Message> = match &self.topic {
+            Some(t) if self.topic_form.is_none() => container(
+                row![
+                    iced::widget::pick_list(
+                        std::iter::once("by key".to_owned())
+                            .chain((0..self.topic_partitions(t)).map(|p| format!("p{p}")))
+                            .collect::<Vec<_>>(),
+                        Some(match self.composer_partition {
+                            Some(p) => format!("p{p}"),
+                            None => "by key".to_owned(),
+                        }),
+                        |choice| cfg(CfgMsg::ComposerPartition(
+                            choice.strip_prefix('p').and_then(|n| n.parse().ok())
+                        ))
+                    )
+                    .text_size(12)
+                    .padding([8, 10])
+                    .width(130),
+                    text_input(&format!("Message for #{t}, sent as you"), &self.composer)
+                        .on_input(|v| cfg(CfgMsg::ComposerText(v)))
+                        .on_submit(cfg(CfgMsg::ComposerSend))
+                        .style(crate::theme::input_style_marked(
+                            crate::ui::is_invalid(&self.notice) && self.composer.trim().is_empty()
+                        ))
+                        .padding([9, 12])
+                        .size(12.5)
+                        .width(Length::Fill),
+                    crate::panel::btn_primary("Send", PanelMsg::Cfg(CfgMsg::ComposerSend)),
+                ]
+                .spacing(12)
+                .align_y(iced::Alignment::Center),
+            )
+            .padding([0, 28])
+            .width(Length::Fill)
+            .height(64)
+            .align_y(iced::alignment::Vertical::Center)
+            .style(crate::theme::top_line_style)
+            .into(),
+            _ => container(text("")).height(0).into(),
+        };
+        row![
+            crate::panel::list_box_sized(250.0, Some(top), items, vec![]),
+            column![detail, composer].width(Length::Fill)
         ]
+        .height(Length::Fill)
         .into()
     }
 
@@ -1632,7 +2328,9 @@ impl ConfigPanel {
             text_input(hint, value)
                 .on_input(move |t| cfg(on(t)))
                 .on_submit(cfg(CfgMsg::TopicFormSubmit))
-                .style(crate::theme::input_style)
+                .style(crate::theme::input_style_marked(
+                    crate::ui::is_invalid(&self.notice) && value.trim().is_empty() && hint != "1",
+                ))
                 .padding([8, 10])
                 .size(13)
         };
@@ -1694,8 +2392,8 @@ impl ConfigPanel {
             .find(|(f, _)| *f == field)
             .map(|(_, v)| v.as_str())
             .unwrap_or("");
-        row![
-            iced::widget::container(text(label).size(12).color(DIM)).width(110),
+        column![
+            text(label).size(12).color(DIM),
             text_input("", value)
                 .on_input(move |v| cfg(CfgMsg::VendorField(field, v)))
                 .size(13)
@@ -1703,7 +2401,8 @@ impl ConfigPanel {
                 .style(crate::theme::input_style)
                 .width(Length::Fill)
         ]
-        .spacing(8)
+        .spacing(6)
+        .width(Length::Fill)
         .into()
     }
 
@@ -1731,19 +2430,6 @@ impl ConfigPanel {
         if self.loading && self.models.vendors.is_empty() && self.models.roles.is_empty() {
             return loading_state("Loading models and roles…");
         }
-        let summary = container(
-            row![
-                config_metric("VENDORS", self.models.vendors.len(), ACCENT),
-                config_metric("ROLES", self.models.roles.len(), OK),
-                config_metric(
-                    "DISABLED",
-                    self.models.vendors.values().filter(|v| v.disabled).count(),
-                    WARN,
-                ),
-            ]
-            .spacing(1),
-        )
-        .style(crate::theme::kpi_strip_style);
         let mut items: Vec<Element<'a, Message>> = vec![
             crate::theme::label("INSTALLED").into(),
             button(column![
@@ -1764,9 +2450,27 @@ impl ConfigPanel {
             .style(item_style(matches!(self.editing, Some(Editing::Installed))))
             .on_press(cfg(CfgMsg::SelectInstalled))
             .into(),
+            crate::theme::label("TEAM").into(),
+            button(row![
+                text("Roles").size(13),
+                container(text("")).width(Length::Fill),
+                text(self.models.roles.len().to_string())
+                    .size(11)
+                    .color(DIM),
+            ])
+            .width(Length::Fill)
+            .padding([4, 8])
+            .style(item_style(matches!(self.editing, Some(Editing::Roles))))
+            .on_press(cfg(CfgMsg::SelectRoles))
+            .into(),
             crate::theme::label("VENDORS").into(),
         ];
-        for (name, v) in &self.models.vendors {
+        for (name, v) in self
+            .models
+            .vendors
+            .iter()
+            .filter(|(n, _)| !self.vendor_removed.contains(*n))
+        {
             let selected = matches!(&self.editing, Some(Editing::Vendor(n)) if n == name);
             items.push(
                 button(column![
@@ -1776,12 +2480,20 @@ impl ConfigPanel {
                 .width(Length::Fill)
                 .padding([4, 8])
                 .style(item_style(selected))
-                .on_press(cfg(CfgMsg::SelectVendor(name.clone())))
+                .on_press(crate::ui::nav(
+                    selected,
+                    cfg(CfgMsg::SelectVendor(name.clone())),
+                ))
                 .into(),
             );
         }
         items.push(crate::theme::label("ROLES").into());
-        for (name, r) in &self.models.roles {
+        for (name, r) in self
+            .models
+            .roles
+            .iter()
+            .filter(|(n, _)| !self.role_removed.contains(*n))
+        {
             let selected = matches!(&self.editing, Some(Editing::Role(n)) if n == name);
             items.push(
                 button(column![
@@ -1793,42 +2505,77 @@ impl ConfigPanel {
                 .width(Length::Fill)
                 .padding([4, 8])
                 .style(item_style(selected))
-                .on_press(cfg(CfgMsg::SelectRole(name.clone())))
+                .on_press(crate::ui::nav(
+                    selected,
+                    cfg(CfgMsg::SelectRole(name.clone())),
+                ))
                 .into(),
             );
         }
-        let footer = vec![
-            button(text("+ Vendor").size(12))
-                .padding([4, 10])
-                .style(item_style(false))
-                .on_press(cfg(CfgMsg::NewVendor))
-                .into(),
-            button(text("+ Role").size(12))
-                .padding([4, 10])
-                .style(item_style(false))
-                .on_press(cfg(CfgMsg::NewRole))
-                .into(),
-        ];
+        let footer: Vec<Element<'a, Message>> = vec![];
         let target = format!("Saved in {}", display(&self.models.target));
         let detail: Element<'a, Message> = match &self.editing {
             None => text("Pick a vendor or a role.").color(DIM).into(),
             Some(Editing::Installed) => self.installed_view(),
+            Some(Editing::Roles) => self.roles_view(),
             Some(editing) => {
                 let mut form = column![].spacing(6);
                 match editing {
                     Editing::Vendor(_) => {
-                        form = form.push(text("VENDOR").size(11).color(DIM));
-                        for (label, f) in [
-                            ("name", VField::Name),
-                            ("command", VField::Command),
-                            ("args", VField::Args),
-                            ("models", VField::Models),
-                            ("default model", VField::DefaultModel),
-                            ("model flag", VField::ModelFlag),
-                            ("shepherd agent", VField::ShepherdAgent),
-                        ] {
-                            form = form.push(self.vbox(label, f));
-                        }
+                        let val = |f: VField| {
+                            self.vfields
+                                .iter()
+                                .find(|(x, _)| *x == f)
+                                .map(|(_, v)| v.clone())
+                                .unwrap_or_default()
+                        };
+                        let users: Vec<&str> = self
+                            .models
+                            .roles
+                            .iter()
+                            .filter(|(_, r)| r.vendor == val(VField::Name))
+                            .map(|(n, _)| n.as_str())
+                            .collect();
+                        form = form.push(
+                            row![
+                                text(format!("Vendor {}", val(VField::Name)))
+                                    .font(crate::theme::MONO_BOLD)
+                                    .size(18)
+                                    .color(crate::theme::HI),
+                                text(if users.is_empty() {
+                                    "used by no role".to_owned()
+                                } else {
+                                    format!("used by {}", users.join(", "))
+                                })
+                                .size(11.5)
+                                .color(DIM),
+                            ]
+                            .spacing(12)
+                            .align_y(iced::Alignment::Center),
+                        );
+                        form = form
+                            .push(
+                                row![
+                                    self.vbox("Name", VField::Name),
+                                    self.vbox("Command", VField::Command)
+                                ]
+                                .spacing(16),
+                            )
+                            .push(
+                                row![
+                                    self.vbox("Extra arguments", VField::Args),
+                                    self.vbox("Model flag", VField::ModelFlag)
+                                ]
+                                .spacing(16),
+                            )
+                            .push(
+                                row![
+                                    self.vbox("Models (comma or space separated)", VField::Models),
+                                    self.vbox("Default model", VField::DefaultModel)
+                                ]
+                                .spacing(16),
+                            )
+                            .push(self.vbox("Shepherd agent", VField::ShepherdAgent));
                         form = form.push(self.model_chips());
                         form = form.push(
                             checkbox(self.vendor.mcp.supported)
@@ -1844,8 +2591,23 @@ impl ConfigPanel {
                                 .size(14)
                                 .text_size(12),
                         );
+                        let flag = val(VField::ModelFlag);
+                        let model = val(VField::DefaultModel);
+                        let mut starts = format!("Starts as: {}", val(VField::Command));
+                        if !val(VField::Args).is_empty() {
+                            starts.push_str(&format!(" {}", val(VField::Args)));
+                        }
+                        if !flag.is_empty() && !model.is_empty() {
+                            starts.push_str(&format!(" {flag} {model}"));
+                        }
+                        form = form.push(
+                            container(text(starts).size(12))
+                                .padding([12, 14])
+                                .width(Length::Fill)
+                                .style(card_style),
+                        );
                     }
-                    Editing::Installed => {}
+                    Editing::Installed | Editing::Roles => {}
                     Editing::Role(_) => {
                         form = form.push(text("ROLE").size(11).color(DIM));
                         let vendor_names: Vec<String> =
@@ -1879,22 +2641,161 @@ impl ConfigPanel {
                 } else {
                     "Delete"
                 };
-                form.push(row![button(container(text("Save").size(13)).center_y(Length::Fill)).padding([0, 12]).height(34).style(crate::theme::primary_button_style()).on_press(cfg(CfgMsg::Save)), button(container(text(delete_label).size(13)).center_y(Length::Fill)).padding([0, 12]).height(34).style(crate::theme::outline_button_style(!self.armed_delete)).on_press(cfg(CfgMsg::Delete))].spacing(8))
-                    .push(text(target).size(11).color(DIM))
-                    .push(text(if self.is_new { "New entry: pick a name and Save." } else { "Lists are comma or space separated. Saving rewrites config.yaml (comments are lost, a .bak is kept)." }).size(11).color(DIM))
+                form.push(
+                    button(container(text(delete_label).size(13)).center_y(Length::Fill))
+                        .padding([0, 12])
+                        .height(32)
+                        .style(crate::theme::outline_button_style(!self.armed_delete))
+                        .on_press(cfg(CfgMsg::Delete)),
+                )
+                .push(text(target).size(11).color(DIM))
+                .push(
+                    text(if self.is_new {
+                        "New entry: pick a name, then save."
+                    } else {
+                        "Lists are comma or space separated. Saving rewrites config.yaml (comments are lost, a .bak is kept)."
+                    })
+                    .size(11)
+                    .color(DIM),
+                )
                     .into()
             }
         };
-        let base: Element<'a, Message> = column![
-            summary,
-            row![list_box(items, footer), detail_box(detail)].height(Length::Fill),
+        let _ = footer;
+        // the page is as wide as its content needs (720 a vendor, 820 the roles), left aligned
+        let width = if matches!(self.editing, Some(Editing::Roles)) {
+            820.0
+        } else {
+            720.0
+        };
+        let detail = container(detail).max_width(width);
+        let mut page = column![detail_box(detail.into())].height(Length::Fill);
+        if self.dirty() {
+            page = page.push(self.save_bar());
+        }
+        let base: Element<'a, Message> = row![
+            crate::panel::list_box_sized(230.0, None, items, vec![]),
+            page.width(Length::Fill)
         ]
-        .spacing(8)
+        .height(Length::Fill)
         .into();
         match &self.skill_picker {
             Some(picker) => iced::widget::stack![base, self.skill_picker_view(picker)].into(),
             None => base,
         }
+    }
+
+    /// The bar pinned under the settings while there are changes to write: orange line on top.
+    fn save_bar<'a>(&'a self) -> Element<'a, Message> {
+        container(
+            row![
+                text("■").size(8).color(crate::theme::WARN),
+                text("Unsaved changes to config.yaml.").size(12),
+                container(text("")).width(Length::Fill),
+                cfg_btn("Discard", CfgMsg::Discard, false),
+                crate::panel::btn_primary("Save to config.yaml", PanelMsg::Cfg(CfgMsg::Save)),
+            ]
+            .spacing(12)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding([0, 24])
+        .height(52)
+        .width(Length::Fill)
+        .align_y(iced::alignment::Vertical::Center)
+        .style(|_| container::Style {
+            background: Some(Background::Color(Color::from_rgb8(0x0E, 0x0B, 0x09))),
+            border: iced::Border {
+                color: crate::theme::WARN,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+    }
+
+    /// Every role as a row: its name, the vendor and the model as segmented controls, and Remove.
+    fn roles_view<'a>(&'a self) -> Element<'a, Message> {
+        let segments =
+            |options: Vec<String>, current: String, on: Box<dyn Fn(String) -> CfgMsg>| {
+                let mut r = row![].spacing(4).width(Length::Fill);
+                for option in options {
+                    let active = option == current;
+                    let message = cfg(on(option.clone()));
+                    r = r.push(
+                        button(text(option).size(11.5))
+                            .padding([4, 10])
+                            .style(crate::theme::chip_style(active))
+                            .on_press(message),
+                    );
+                }
+                r.wrap()
+            };
+        let mut table = column![row![
+            container(text("Role").size(11).color(DIM)).width(180),
+            container(text("Vendor").size(11).color(DIM)).width(Length::FillPortion(2)),
+            container(text("Model").size(11).color(DIM)).width(Length::FillPortion(3)),
+            container(text("")).width(70),
+        ]
+        .spacing(12)]
+        .spacing(12);
+        for name in self.models.roles.keys() {
+            if self.role_removed.contains(name) {
+                continue;
+            }
+            let role = self.role_now(name);
+            let changed = self.role_pending.contains_key(name);
+            let vendors: Vec<String> = self.models.vendors.keys().cloned().collect();
+            let mut models = self.vendor_models(&role.vendor);
+            if !role.model.is_empty() && !models.contains(&role.model) {
+                models.push(role.model.clone());
+            }
+            let owner = name.clone();
+            let owner2 = name.clone();
+            table = table.push(
+                row![
+                    button(text(name.clone()).size(13).color(if changed {
+                        crate::theme::WARN
+                    } else {
+                        crate::theme::HI
+                    }))
+                    .width(180)
+                    .padding([4, 8])
+                    .style(crate::theme::link_button_style())
+                    .on_press(cfg(CfgMsg::SelectRole(name.clone()))),
+                    container(segments(
+                        vendors,
+                        role.vendor.clone(),
+                        Box::new(move |v| CfgMsg::RolesVendor(owner.clone(), v)),
+                    ))
+                    .width(Length::FillPortion(2)),
+                    container(segments(
+                        models,
+                        role.model.clone(),
+                        Box::new(move |m| CfgMsg::RolesModel(owner2.clone(), m)),
+                    ))
+                    .width(Length::FillPortion(3)),
+                    container(
+                        button(text("Remove").size(11.5).color(DIM))
+                            .padding([4, 8])
+                            .style(crate::theme::link_button_style())
+                            .on_press(cfg(CfgMsg::RolesRemove(name.clone())))
+                    )
+                    .width(70),
+                ]
+                .spacing(12)
+                .align_y(iced::Alignment::Center),
+            );
+        }
+        column![
+            text("Roles").font(crate::theme::MONO_BOLD).size(18).color(crate::theme::HI),
+            text("The vendor and model an agent of each role starts with. A pattern or the New agent form can still override them.")
+                .size(12)
+                .color(DIM),
+            table,
+        ]
+        .spacing(14)
+        .into()
     }
 
     /// What is installed on this computer: each agent CLI with its vendor and its models.
@@ -1965,9 +2866,10 @@ impl ConfigPanel {
             text("Installed on this computer")
                 .size(18)
                 .color(crate::theme::HI),
-            text("Agent CLIs found by your login shell, the vendors Shepherd has for them and the models each offers.")
+            text("Agent commands found on your PATH. A vendor whose command is missing cannot start agents.")
                 .size(12)
                 .color(DIM),
+            cfg_btn("Look again", CfgMsg::LookAgain, false),
             crate::panel::card(
                 "AGENTS · VENDORS · MODELS",
                 Some(
@@ -2230,10 +3132,19 @@ fn chip<'a>(label: String, msg: CfgMsg) -> Element<'a, Message> {
         .into()
 }
 
+/// A filter chip of the config views.
+fn chip_btn<'a>(label: String, on: bool, msg: CfgMsg) -> Element<'a, Message> {
+    button(text(label).size(11.5))
+        .padding([3, 10])
+        .style(crate::theme::chip_style(on))
+        .on_press(cfg(msg))
+        .into()
+}
+
 fn refresh_button<'a>() -> Element<'a, Message> {
     button(container(text("Refresh").size(13)).center_y(Length::Fill))
         .padding([0, 12])
-        .height(34)
+        .height(32)
         .style(crate::theme::outline_button_style(true))
         .on_press(cfg(CfgMsg::Refresh))
         .into()
@@ -2255,44 +3166,6 @@ fn empty_state<'a>(title: &'static str, detail: &'static str) -> Element<'a, Mes
     .into()
 }
 
-/// A small markdown reader for SKILL.md (`.md`): headings, fenced code, list lines and paragraphs.
-fn markdown<'a>(body: &str) -> Element<'a, Message> {
-    let mut col = column![].spacing(4);
-    let mut code: Option<Vec<String>> = None;
-    for line in body.lines() {
-        if line.trim_start().starts_with("```") {
-            match code.take() {
-                Some(lines) => {
-                    col = col.push(
-                        container(text(lines.join("\n")).size(12).color(crate::theme::FG))
-                            .padding(12)
-                            .width(Length::Fill)
-                            .style(crate::theme::graph_style),
-                    );
-                }
-                None => code = Some(Vec::new()),
-            }
-        } else if let Some(lines) = code.as_mut() {
-            lines.push(line.to_owned());
-        } else if line.starts_with('#') {
-            col = col.push(
-                container(
-                    text(line.to_owned())
-                        .font(crate::theme::MONO_BOLD)
-                        .size(13)
-                        .color(crate::theme::HI),
-                )
-                .padding(crate::theme::pad(12.0, 0.0, 2.0, 0.0)),
-            );
-        } else if line.trim().is_empty() {
-            col = col.push(container(text("")).height(4));
-        } else {
-            col = col.push(text(line.to_owned()).size(13).color(crate::theme::FG));
-        }
-    }
-    col.into()
-}
-
 fn loading_state<'a>(label: &'static str) -> Element<'a, Message> {
     container(
         column![
@@ -2307,10 +3180,6 @@ fn loading_state<'a>(label: &'static str) -> Element<'a, Message> {
     .padding(20)
     .style(crate::theme::card_style)
     .into()
-}
-
-fn config_metric<'a>(label: &'static str, value: usize, color: Color) -> Element<'a, Message> {
-    crate::panel::kpi_cell(label, value.to_string(), color, None)
 }
 
 fn display(path: &Path) -> String {
@@ -2339,7 +3208,7 @@ mod tests {
         let _ = panel.update(CfgMsg::GitFormOpen(false), root);
         let _ = panel.update(CfgMsg::GitFormSecond("main".into()), root);
         let _ = panel.update(CfgMsg::GitFormSubmit, root);
-        assert_eq!(panel.notice, "A branch needs a name");
+        assert_eq!(panel.notice, crate::ui::invalid("A branch needs a name."));
         assert!(panel.git_form.is_some());
         // a name is enough (the base may be empty) and closes the form
         let _ = panel.update(CfgMsg::GitFormFirst("feat/x".into()), root);
@@ -2350,7 +3219,10 @@ mod tests {
         let _ = panel.update(CfgMsg::GitFormOpen(true), root);
         let _ = panel.update(CfgMsg::GitFormFirst("../wt".into()), root);
         let _ = panel.update(CfgMsg::GitFormSubmit, root);
-        assert_eq!(panel.notice, "A worktree needs a folder and a branch");
+        assert_eq!(
+            panel.notice,
+            crate::ui::invalid("A worktree needs a folder and a branch.")
+        );
         assert!(panel.git_form.is_some());
         let _ = panel.update(CfgMsg::GitFormCancel, root);
         assert_eq!(panel.git_form, None);
@@ -2384,7 +3256,95 @@ mod tests {
             CfgMsg::GitDone(Err("the main checkout cannot be removed".into())),
             root,
         );
-        assert_eq!(panel.notice, "the main checkout cannot be removed");
+        // the summary first, then the server's words as sent
+        assert_eq!(
+            panel.notice,
+            "Not done.\nthe main checkout cannot be removed"
+        );
+    }
+
+    #[test]
+    fn the_roles_table_keeps_changes_until_saved_and_discard_drops_them() {
+        let root = Path::new("/nowhere");
+        let mut panel = ConfigPanel::default();
+        let vendor = |models: &[&str]| Vendor {
+            command: "x".into(),
+            models: models.iter().map(|m| (*m).to_owned()).collect(),
+            ..Vendor::default()
+        };
+        panel
+            .models
+            .vendors
+            .insert("a".into(), vendor(&["a1", "a2"]));
+        panel.models.vendors.insert("b".into(), vendor(&["b1"]));
+        panel.models.roles.insert(
+            "coder".into(),
+            Role {
+                vendor: "a".into(),
+                model: "a2".into(),
+                ..Role::default()
+            },
+        );
+        let _ = panel.update(CfgMsg::SelectRoles, root);
+        assert!(!panel.dirty());
+        // another vendor picks that vendor's first model
+        let _ = panel.update(CfgMsg::RolesVendor("coder".into(), "b".into()), root);
+        assert!(panel.dirty());
+        let now = panel.role_now("coder");
+        assert_eq!((now.vendor.as_str(), now.model.as_str()), ("b", "b1"));
+        // what is on disk is untouched until Save
+        assert_eq!(panel.models.roles["coder"].vendor, "a");
+        let _ = panel.update(CfgMsg::Discard, root);
+        assert!(!panel.dirty());
+        assert_eq!(panel.role_now("coder").vendor, "a");
+        assert!(crate::ui::Toast::new(panel.notice.clone()).info);
+    }
+
+    #[test]
+    fn deleting_a_vendor_waits_for_the_save_and_a_vendor_a_role_uses_cannot_go() {
+        let root = Path::new("/nowhere");
+        let mut panel = ConfigPanel::default();
+        panel.models.vendors.insert("a".into(), Vendor::default());
+        panel.models.vendors.insert("b".into(), Vendor::default());
+        panel.models.roles.insert(
+            "coder".into(),
+            Role {
+                vendor: "a".into(),
+                ..Role::default()
+            },
+        );
+        // a used vendor is refused, with the config's own words
+        panel.open_vendor("a", false);
+        let _ = panel.update(CfgMsg::Delete, root);
+        let _ = panel.update(CfgMsg::Delete, root);
+        assert!(panel.vendor_removed.is_empty());
+        assert!(
+            panel.notice.contains("is used by roles: coder"),
+            "{}",
+            panel.notice
+        );
+        // an unused one is marked, nothing is written, and the save bar has something to save
+        panel.open_vendor("b", false);
+        let _ = panel.update(CfgMsg::Delete, root);
+        let _ = panel.update(CfgMsg::Delete, root);
+        assert!(panel.vendor_removed.contains("b"));
+        assert!(panel.dirty());
+        assert!(panel.notice.contains("Deleted vendor b. Save to keep it."));
+        // Discard brings it back
+        let _ = panel.update(CfgMsg::Discard, root);
+        assert!(panel.vendor_removed.is_empty() && !panel.dirty());
+    }
+
+    #[test]
+    fn refresh_on_events_says_how_many_topics_it_reread() {
+        let root = Path::new("/nowhere");
+        let mut panel = ConfigPanel::default();
+        let _ = panel.update(CfgMsg::Topics(Ok(vec![])), root);
+        assert!(panel.notice.is_empty(), "a quiet reload says nothing");
+        let _ = panel.update(CfgMsg::RefreshEvents, root);
+        let _ = panel.update(CfgMsg::Topics(Ok(vec![])), root);
+        assert!(crate::ui::Toast::new(panel.notice.clone()).info);
+        assert!(panel.notice.contains("Reread 0 topics from the bus."));
     }
 
     #[test]

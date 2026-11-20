@@ -621,10 +621,19 @@ impl OrchestrationService {
                         .iter()
                         .find(|s| s.state == "awaiting-approval")
                         .map(|subtask| {
-                            serde_json::json!({
+                            let mut gate = serde_json::json!({
                                 "kind": "push_pr",
                                 "subtask": subtask.number,
-                            })
+                            });
+                            // what the branch changes, so the human sees the size of what is published
+                            if let Some((files, added, removed)) =
+                                crate::git::branch_stat(root, &subtask.branch)
+                            {
+                                gate["files"] = files.into();
+                                gate["added"] = added.into();
+                                gate["removed"] = removed.into();
+                            }
+                            gate
                         })
                 };
                 let total = t.status.subtasks.len();

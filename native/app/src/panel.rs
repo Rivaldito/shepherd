@@ -11,13 +11,13 @@ use crate::theme::{
 use crate::{Action, Message};
 use iced::widget::canvas::Canvas;
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, scrollable, text, text_editor, text_input,
+    button, checkbox, column, container, pick_list, row, text, text_editor, text_input,
 };
 use iced::{Background, Color, Element, Length, Task};
 use shepherd_app_core::actions::{self, RunControl};
 use shepherd_app_core::bus_message::line as feed_line;
 use shepherd_app_core::data::{bus_feed, ensure_task_prefix, task_of_run, task_prompt, Data, Gate};
-use shepherd_app_core::pattern_graph::{self, PatternView};
+use shepherd_app_core::pattern_graph::{self, PatternView, PatternView as PatternGraphView};
 use shepherd_app_core::shepherd_core::bus::Message as BusMessage;
 use shepherd_app_core::shepherd_core::service::patterns_run::PatternRunState;
 use shepherd_app_core::snapshot::{Snapshot, Status};
@@ -40,12 +40,24 @@ pub enum Tab {
     Snapshots,
 }
 
+/// Seconds an armed (two-click) button waits for its second click.
+const ARM_SECS: f32 = 4.0;
+
+/// `HH:MM:SS` (UTC) now, for the notice history.
+fn clock_now() -> String {
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    format!("{:02}:{:02}:{:02}", (t / 3600) % 24, (t / 60) % 60, t % 60)
+}
+
 /// A button that needs a second click (no pop-ups).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Armed {
     StopRun(String),
     DeleteRun(String),
     CleanRuns,
+    #[allow(dead_code)]
     CleanBus,
     CleanBusForce,
     ArchiveDone,
@@ -57,6 +69,54 @@ pub enum Armed {
     DeleteSnapshot(String),
     /// Deletes an agent's oldest snapshots.
     PruneSnapshots(String),
+    /// Deletes a pattern file.
+    DeletePattern(String),
+    /// Closes an agent (kills it and cleans it from the registry).
+    CloseAgent(String),
+}
+
+/// The one-line summary (copy deck, section 7) of what an action was doing; the server's refusal follows it.
+fn failure_summary(message: &PanelMsg, armed: Option<&Armed>) -> Option<&'static str> {
+    Some(match message {
+        PanelMsg::CommSend => "Not sent.",
+        PanelMsg::Launch => "Cannot run this pattern yet.",
+        PanelMsg::Control(_, RunControl::Stop) => "Not stopped.",
+        PanelMsg::Control(_, RunControl::Pause) => "Not paused.",
+        PanelMsg::Control(_, RunControl::Resume) => "Not resumed.",
+        PanelMsg::AgentSkill(..) => "Not changed.",
+        PanelMsg::SpawnAgent => "The agent was not started.",
+        PanelMsg::ImportSubmit => "Not imported.",
+        PanelMsg::TaskSave => "Not saved.",
+        PanelMsg::KillAgent(_) => "Not closed.",
+        PanelMsg::ResumeAgents => "Not resumed.",
+        PanelMsg::AssignAgentTask(..) => "Not moved.",
+        PanelMsg::Confirm => match armed? {
+            Armed::StopRun(_) => "Not stopped.",
+            Armed::DeleteRun(_)
+            | Armed::DeleteTask(_)
+            | Armed::DeleteSnapshot(_)
+            | Armed::DeletePattern(_) => "Not deleted.",
+            Armed::CloseAgent(_) => "Not closed.",
+            Armed::CleanRuns | Armed::CleanBus | Armed::CleanBusForce => "Not cleaned.",
+            Armed::ArchiveDone => "Not archived.",
+            Armed::CancelRun(_) => "Not cancelled.",
+            Armed::ApproveGate(..) => "Not approved.",
+            Armed::RejectGate(..) => "Not rejected.",
+            Armed::RestoreSnapshot(_) => "Not restored.",
+            Armed::PruneSnapshots(_) => "Not pruned.",
+        },
+        _ => return None,
+    })
+}
+
+/// A refusal as a notice: the summary, a line break, the server's words as sent.
+pub(crate) fn refusal(summary: &str, server: &str) -> String {
+    let summary = if summary.is_empty() {
+        "Not done."
+    } else {
+        summary
+    };
+    format!("{summary}\n{}", server.trim())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +150,8 @@ pub enum PanelMsg {
     Arm(Armed),
     Confirm,
     Done(Result<String, String>),
+    /// A notice from outside the panel (the window's menus).
+    Notify(String),
     SnapSelect(String),
     SnapShown(
         String,
@@ -99,6 +161,8 @@ pub enum PanelMsg {
     /// One agent's skill: on, off, or back to what its role gives (`None`). Applies at its next start.
     AgentSkill(String, String, Option<bool>),
     SnapCompare(String),
+    SnapHide,
+    SnapFiles(String, Vec<String>),
     SnapCompared(
         String,
         Result<Box<shepherd_app_core::shepherd_core::snapshot::DiffResult>, String>,
@@ -136,6 +200,27 @@ pub enum PanelMsg {
     TaskCancel,
     /// Open the agent form for this task.
     RunTaskWithAgent(u32),
+    /// The list filter box and its chips.
+    Filter(String),
+    Chip(usize),
+    DismissToast(usize),
+    /// What the agents' panes show now.
+    Outputs(Vec<(String, String)>),
+    /// Opens the editor on a blank pattern.
+    NewPattern,
+    /// Snapshots: the agent the header's Capture names, and the two chip filters.
+    SnapAgent(String),
+    SnapFilterAgent(Option<String>),
+    SnapFilterReason(Option<String>),
+    ActivityWindow(usize),
+    /// Opens Events with this topic selected.
+    OpenTopic(String),
+    CommClose,
+    /// Shows or hides the messages of one sender in the communication screen.
+    CommToggle(String),
+    CommTopic(Option<String>),
+    CommText(String),
+    CommSend,
 }
 
 /// The create / edit form of a task.
@@ -173,6 +258,8 @@ impl TaskForm {
 }
 
 pub struct Panel {
+    /// One line saying what was being done, shown above the server's refusal (set before every action).
+    fail_summary: &'static str,
     pub tab: Tab,
     run: Option<String>,
     agent: Option<String>,
@@ -186,6 +273,8 @@ pub struct Panel {
     armed: Option<Armed>,
     /// The snapshot picked in the Snapshots tab, and what the server said it holds.
     snap: Option<String>,
+    /// The files each snapshot holds, loaded while the Snapshots filter has text (to search by file).
+    snap_files: std::collections::HashMap<String, Vec<String>>,
     snap_detail: Option<(
         String,
         Result<Box<shepherd_app_core::shepherd_core::snapshot::ShowResult>, String>,
@@ -217,9 +306,35 @@ pub struct Panel {
     importing: Option<String>,
     /// Why a gate is being rejected (optional): the planner or coder reads it.
     reject_reason: String,
+    /// What the list filter holds, and which chip is on (reset when the view changes).
+    filter: String,
+    chip: usize,
+    /// The notice shown as a toast, and the last notice seen (to know when a new one arrives).
+    toasts: Vec<crate::ui::Toast>,
+    seen_notice: String,
+    /// Every notice of this session, newest last, for the status bar history.
+    pub history: Vec<(String, String)>,
+    /// The graph of the shown run's pattern, for the live topology (cached by pattern name).
+    run_graph: Option<(String, shepherd_app_core::pattern_graph::Graph)>,
+    /// The last lines each agent's pane shows, by pane id (asked from the API while Agents is open).
+    outputs: std::collections::HashMap<String, String>,
+    snap_capture_agent: Option<String>,
+    snap_agent_filter: Option<String>,
+    snap_reason_filter: Option<String>,
+    /// When the armed button was armed: it disarms by itself after `ARM_SECS`.
+    armed_at: Option<std::time::Instant>,
+    /// Activity: 0 = last 5 min, 1 = 30 min, 2 = 2 h.
+    activity_window: usize,
+    /// The communication screen of a run (opened from Runs), the senders hidden in it, the topic it shows
+    /// and what is being typed to the team.
+    comm_open: bool,
+    comm_hidden: std::collections::HashSet<String>,
+    comm_topic: Option<String>,
+    comm_text: String,
 }
 
 /// What the panel needs from the app to act.
+#[derive(Clone)]
 pub struct Ctx<'a> {
     pub api: PathBuf,
     pub data: &'a Data,
@@ -258,6 +373,7 @@ impl Default for Panel {
             objective: text_editor::Content::new(),
             armed: None,
             snap: None,
+            snap_files: std::collections::HashMap::new(),
             snap_detail: None,
             snap_compare: None,
             notice: String::new(),
@@ -278,6 +394,24 @@ impl Default for Panel {
                 .then(TaskForm::new),
             importing: None,
             reject_reason: String::new(),
+            filter: String::new(),
+            chip: 0,
+            toasts: Vec::new(),
+            seen_notice: String::new(),
+            fail_summary: "",
+            history: Vec::new(),
+            run_graph: None,
+            outputs: Default::default(),
+            snap_capture_agent: None,
+            snap_agent_filter: None,
+            snap_reason_filter: None,
+            armed_at: None,
+            activity_window: 1,
+            // picture aid: `SHEPHERD_NATIVE_COMM=1` opens the communication screen
+            comm_open: std::env::var_os("SHEPHERD_NATIVE_COMM").is_some(),
+            comm_hidden: Default::default(),
+            comm_topic: None,
+            comm_text: String::new(),
         }
     }
 }
@@ -329,14 +463,27 @@ fn agent_skill_buttons<'a>(
             PanelMsg::AgentSkill(a.id.clone(), skill.to_owned(), enable),
         )
     };
-    let row_of = |skill: &str, buttons: Vec<Element<'a, Message>>| {
-        let mut r = row![text(skill.to_owned()).size(12).width(Length::Fill)]
-            .spacing(4)
+    // the first of a row's buttons becomes the switch; "Reset" stays a small link
+    let row_of = |skill: &str, enabled: bool, buttons: Vec<Element<'a, Message>>| {
+        let id = a.id.clone();
+        let name = skill.to_owned();
+        let mut r = row![text(skill.to_owned()).size(12.5).width(Length::Fill)]
+            .spacing(8)
             .align_y(iced::Alignment::Center);
-        for b in buttons {
+        if enabled || !a.skills.add.contains(&name) || a.skills.remove.contains(&name) {
+            r = r.push(
+                iced::widget::toggler(enabled)
+                    .size(18)
+                    .style(theme::switch_style)
+                    .on_toggle(move |on| {
+                        Message::Panel(PanelMsg::AgentSkill(id.clone(), name.clone(), Some(on)))
+                    }),
+            );
+        }
+        for b in buttons.into_iter().skip(1) {
             r = r.push(b);
         }
-        Element::from(r)
+        Element::from(container(r).padding([7, 12]).width(Length::Fill))
     };
     let mut rows = Vec::new();
     for skill in a
@@ -348,11 +495,12 @@ fn agent_skill_buttons<'a>(
         if a.skills.add.contains(skill) {
             buttons.push(pick(skill, "Reset", None));
         }
-        rows.push(row_of(skill, buttons));
+        rows.push(row_of(skill, true, buttons));
     }
     for skill in &a.skills.remove {
         rows.push(row_of(
             skill,
+            false,
             vec![
                 pick(skill, "Turn on", Some(true)),
                 pick(skill, "Reset", None),
@@ -360,7 +508,7 @@ fn agent_skill_buttons<'a>(
         ));
     }
     for skill in a.skills.add.iter().filter(|s| !a.active_skills.contains(s)) {
-        rows.push(row_of(skill, vec![pick(skill, "Reset", None)]));
+        rows.push(row_of(skill, true, vec![pick(skill, "Reset", None)]));
     }
     if !rows.is_empty() {
         rows.push(
@@ -373,7 +521,7 @@ fn agent_skill_buttons<'a>(
     rows
 }
 
-fn agent_status(state: &str) -> Status {
+pub(crate) fn agent_status(state: &str) -> Status {
     match state {
         "working" | "starting" => Status::Working,
         "blocked" => Status::Blocked,
@@ -389,6 +537,14 @@ fn reason_of(typed: &str) -> Option<String> {
 }
 
 /// A task whose run can still be cancelled: it has started and has not ended.
+fn tail_is_empty(o: &std::collections::HashMap<String, String>, pane: &str) -> bool {
+    o.get(pane).is_none_or(|t| t.trim().is_empty())
+}
+
+fn msg_hot(status: button::Status) -> bool {
+    matches!(status, button::Status::Hovered | button::Status::Pressed)
+}
+
 fn has_run(state: &str) -> bool {
     !matches!(
         state,
@@ -396,7 +552,7 @@ fn has_run(state: &str) -> bool {
     )
 }
 
-fn task_state_color(state: &str) -> Color {
+pub(crate) fn task_state_color(state: &str) -> Color {
     match state {
         "done" | "completed" | "archived" => OK,
         "blocked" | "waiting" => WARN,
@@ -413,17 +569,6 @@ pub(crate) fn kpi_cell<'a>(
     sub: Option<String>,
 ) -> Element<'a, Message> {
     kpi_inner(label, value, color, sub, None)
-}
-
-/// A KPI cell with the animated sparkline on its right.
-fn kpi_cell_spark<'a>(
-    label: &'static str,
-    value: String,
-    color: Color,
-    sub: Option<String>,
-    frame: u32,
-) -> Element<'a, Message> {
-    kpi_inner(label, value, color, sub, Some(frame))
 }
 
 fn kpi_inner<'a>(
@@ -461,19 +606,6 @@ fn kpi_inner<'a>(
         .padding([12, 16])
         .style(kpi_cell_style)
         .into()
-}
-
-fn agent_metric<'a>(label: &'static str, value: usize, color: Color) -> Element<'a, Message> {
-    kpi_cell(label, value.to_string(), color, None)
-}
-
-fn agent_metric_spark<'a>(
-    label: &'static str,
-    value: usize,
-    color: Color,
-    frame: u32,
-) -> Element<'a, Message> {
-    kpi_cell_spark(label, value.to_string(), color, None, frame)
 }
 
 /// `.sq`: 18 px square with the state glyph, filled with the state color.
@@ -520,16 +652,27 @@ fn btn_body<'a>(label: impl ToString) -> Element<'a, Message> {
 pub(crate) fn btn<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Message> {
     button(btn_body(label))
         .padding([0, 12])
-        .height(34)
+        .height(32)
         .style(theme::outline_button_style(false))
         .on_press(Message::Panel(msg))
         .into()
 }
 
+#[allow(dead_code)]
 pub(crate) fn btn_ghost<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Message> {
     button(btn_body(label))
         .padding([0, 12])
-        .height(34)
+        .height(32)
+        .style(theme::outline_button_style(true))
+        .on_press(Message::Panel(msg))
+        .into()
+}
+
+/// A quiet button (`Refresh`): no border, dim text.
+pub(crate) fn btn_quiet<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Message> {
+    button(btn_body(label))
+        .padding([0, 12])
+        .height(32)
         .style(theme::outline_button_style(true))
         .on_press(Message::Panel(msg))
         .into()
@@ -538,7 +681,7 @@ pub(crate) fn btn_ghost<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, 
 pub(crate) fn btn_link<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Message> {
     button(btn_body(label))
         .padding([0, 8])
-        .height(34)
+        .height(32)
         .style(theme::link_button_style())
         .on_press(Message::Panel(msg))
         .into()
@@ -547,7 +690,7 @@ pub(crate) fn btn_link<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, M
 pub(crate) fn btn_primary<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Message> {
     button(btn_body(label))
         .padding([0, 12])
-        .height(34)
+        .height(32)
         .style(primary_button_style())
         .on_press(Message::Panel(msg))
         .into()
@@ -664,6 +807,110 @@ pub(crate) fn alert<'a>(content: Element<'a, Message>, color: Color) -> Element<
 
 impl Panel {
     pub fn update(&mut self, message: PanelMsg, ctx: &Ctx<'_>) -> Task<Message> {
+        if let Some(summary) = failure_summary(&message, self.armed.as_ref()) {
+            self.fail_summary = summary;
+        }
+        let task = self.update_inner(message, ctx);
+        self.sync_toast();
+        self.refresh_run_graph(ctx);
+        task
+    }
+
+    /// A new notice (the panel's or the config tabs') becomes a toast and a line of the history.
+    fn sync_toast(&mut self) {
+        let current = if matches!(self.tab, Tab::Skills | Tab::Git | Tab::Events | Tab::Models)
+            && !self.cfg.notice.is_empty()
+        {
+            self.cfg.notice.clone()
+        } else {
+            self.notice.clone()
+        };
+        if current != self.seen_notice {
+            self.seen_notice = current.clone();
+            if !current.is_empty() {
+                self.history.push((
+                    clock_now(),
+                    current
+                        .trim_start_matches(crate::ui::INFO)
+                        .replace('\n', " "),
+                ));
+                let extra = self.history.len().saturating_sub(crate::ui::HISTORY);
+                self.history.drain(..extra);
+                self.toasts.push(crate::ui::Toast::new(current));
+                // at most 3: a 4th pushes the oldest out
+                let over = self.toasts.len().saturating_sub(3);
+                self.toasts.drain(..over);
+            }
+        }
+    }
+
+    /// Asks the API for the tail of every agent pane (the cards of Agents show it as live output).
+    fn load_outputs(&self, ctx: &Ctx<'_>) -> Task<Message> {
+        let api = ctx.api.clone();
+        let panes: Vec<String> = ctx
+            .data
+            .agents
+            .iter()
+            .filter(|a| !a.pane.is_empty())
+            .map(|a| a.pane.clone())
+            .collect();
+        if panes.is_empty() {
+            return Task::none();
+        }
+        Task::perform(
+            async move {
+                panes
+                    .into_iter()
+                    .filter_map(|p| actions::pane_tail(&api, &p, 4).ok().map(|t| (p, t)))
+                    .collect::<Vec<_>>()
+            },
+            |l| Message::Panel(PanelMsg::Outputs(l)),
+        )
+    }
+
+    /// The run shown in Runs: the picked one, else the first.
+    fn shown_run<'a>(&self, ctx: &Ctx<'a>) -> Option<&'a shepherd_app_core::data::RunRow> {
+        self.run
+            .as_deref()
+            .and_then(|id| ctx.data.runs.iter().find(|r| r.run.id == id))
+            .or_else(|| ctx.data.runs.first())
+    }
+
+    /// Loads the graph of the shown run's pattern when it changed (it is a small file read).
+    fn refresh_run_graph(&mut self, ctx: &Ctx<'_>) {
+        let Some(run) = self.shown_run(ctx) else {
+            self.run_graph = None;
+            return;
+        };
+        if self.run_graph.as_ref().map(|(n, _)| n.as_str()) == Some(run.run.pattern.as_str()) {
+            return;
+        }
+        self.run_graph = shepherd_app_core::pattern_graph::load(&ctx.data.root, &run.run.pattern)
+            .ok()
+            .map(|v| (run.run.pattern.clone(), v.graph));
+    }
+
+    /// A notice from the window itself (the connection): a toast and a line of the history.
+    pub fn notify(&mut self, notice: String) {
+        self.notice = notice;
+        self.sync_toast();
+    }
+
+    /// Drops the toasts that say exactly `text` (the "lost the connection" one, once it is back).
+    pub fn drop_toasts_saying(&mut self, text: &str) {
+        self.toasts.retain(|t| t.text.trim_end() != text);
+    }
+
+    /// The toast to draw now, if any (a success goes away after a few seconds).
+    pub fn toasts(&self) -> Vec<(usize, &crate::ui::Toast)> {
+        self.toasts
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| !t.expired())
+            .collect()
+    }
+
+    fn update_inner(&mut self, message: PanelMsg, ctx: &Ctx<'_>) -> Task<Message> {
         self.cfg.set_api(&ctx.api);
         // any action other than arming disarms
         if !matches!(message, PanelMsg::Arm(_) | PanelMsg::Confirm) {
@@ -674,11 +921,18 @@ impl Panel {
         match message {
             PanelMsg::Tab(tab) => {
                 self.tab = tab;
+                self.comm_open = false;
+                self.filter.clear();
+                self.chip = 0;
+                if tab == Tab::Agents {
+                    return self.load_outputs(ctx);
+                }
                 if let Some(task) = self.load_config_tab(tab, ctx) {
                     return task;
                 }
                 if tab == Tab::Monitor {
-                    return self.load_feed(ctx);
+                    self.cfg.loading = true;
+                    return crate::config_panel::ConfigPanel::load_topics(&ctx.api);
                 }
                 if tab == Tab::Patterns && self.edit.is_none() {
                     if let Some(first) = self
@@ -691,6 +945,143 @@ impl Panel {
                 }
             }
             PanelMsg::Cfg(msg) => return self.cfg.update(msg, &ctx.data.root),
+            PanelMsg::Filter(t) => {
+                self.filter = t;
+                // searching Snapshots by file: ask what the snapshots not seen yet hold
+                if self.tab == Tab::Snapshots && !self.filter.trim().is_empty() {
+                    let unseen: Vec<_> = ctx
+                        .data
+                        .snapshots
+                        .iter()
+                        .filter(|s| !self.snap_files.contains_key(&s.id))
+                        .collect();
+                    let tasks: Vec<Task<Message>> = unseen
+                        .into_iter()
+                        .map(|s| {
+                            // marked as asked, so typing more letters does not ask again
+                            self.snap_files.insert(s.id.clone(), vec![]);
+                            let (api, id) = (ctx.api.clone(), s.id.clone());
+                            let root = snapshots::restore_root(ctx.data, &id);
+                            Task::perform(
+                                async move {
+                                    let files = actions::snapshot_show(&api, &id, &root)
+                                        .map(|shown| {
+                                            shown.diff.files.into_iter().map(|f| f.path).collect()
+                                        })
+                                        .unwrap_or_default();
+                                    (id, files)
+                                },
+                                |(id, files)| Message::Panel(PanelMsg::SnapFiles(id, files)),
+                            )
+                        })
+                        .collect();
+                    return Task::batch(tasks);
+                }
+            }
+            PanelMsg::SnapFiles(id, files) => {
+                self.snap_files.insert(id, files);
+            }
+            PanelMsg::Chip(i) => self.chip = i,
+            PanelMsg::DismissToast(i) => {
+                if i < self.toasts.len() {
+                    self.toasts.remove(i);
+                }
+            }
+            PanelMsg::ActivityWindow(i) => self.activity_window = i,
+            PanelMsg::OpenTopic(name) => {
+                return Task::batch([
+                    Task::done(Message::Panel(PanelMsg::Tab(Tab::Events))),
+                    Task::done(Message::Panel(PanelMsg::Cfg(
+                        crate::config_panel::CfgMsg::SelectTopic(name),
+                    ))),
+                ]);
+            }
+            PanelMsg::CommClose => {
+                self.comm_open = false;
+                self.tab = Tab::Runs;
+            }
+            PanelMsg::CommToggle(who) => {
+                if !self.comm_hidden.remove(&who) {
+                    self.comm_hidden.insert(who);
+                }
+            }
+            PanelMsg::CommTopic(t) => self.comm_topic = t,
+            PanelMsg::CommText(t) => self.comm_text = t,
+            PanelMsg::CommSend => {
+                let text = self.comm_text.trim().to_owned();
+                let topic = self.comm_topic.clone().or_else(|| {
+                    self.monitor
+                        .as_deref()
+                        .and_then(|id| ctx.data.runs.iter().find(|r| r.run.id == id))
+                        .and_then(|r| r.run.topics.first().cloned())
+                });
+                let Some(topic) = topic else {
+                    self.notice = crate::ui::invalid("This run has no topic to write to.");
+                    return Task::none();
+                };
+                if text.is_empty() {
+                    self.notice = crate::ui::invalid("Write something to send.");
+                    return Task::none();
+                }
+                self.comm_text.clear();
+                return Task::perform(
+                    async move {
+                        actions::topic_publish(&api, &topic, &text, None)
+                            .map(|_| format!("Sent to #{topic}."))
+                    },
+                    |r| Message::Panel(PanelMsg::Done(r)),
+                );
+            }
+            PanelMsg::SnapAgent(a) => self.snap_capture_agent = Some(a),
+            PanelMsg::SnapFilterAgent(a) => self.snap_agent_filter = a,
+            PanelMsg::SnapFilterReason(r) => self.snap_reason_filter = r,
+            PanelMsg::NewPattern => {
+                // the spec: a new pattern is a copy of the orchestrator-worker template, saved in this project
+                if let Ok(view) = pattern_graph::load(&ctx.data.root, "orchestrator-worker") {
+                    let mut editor = PatternEditor::from_view(view);
+                    editor.copy_as("new-pattern");
+                    self.tab = Tab::Patterns;
+                    self.pattern_sel = None;
+                    self.edit = Some(editor);
+                    self.notice = "New pattern new-pattern from the orchestrator-worker template. Rename it, then save.".into();
+                    return Task::none();
+                }
+                use shepherd_app_core::shepherd_core::patterns::{
+                    Pattern, PatternAgent, PatternKind, PatternSource, Topic,
+                };
+                let pattern = Pattern {
+                    name: "my-pattern".into(),
+                    kind: PatternKind::Blackboard,
+                    description: "Describe what this team does".into(),
+                    topics: vec![Topic {
+                        name: "work".into(),
+                        partitions: 1,
+                        key: None,
+                        filter: None,
+                    }],
+                    agents: vec![PatternAgent {
+                        id: "a1".into(),
+                        role: "coder".into(),
+                        publishes: vec!["work".into()],
+                        consumes: vec!["work".into()],
+                        ..PatternAgent::default()
+                    }],
+                };
+                let graph = pattern_graph::layout(&pattern);
+                self.tab = Tab::Patterns;
+                self.pattern_sel = None;
+                let mut editor = PatternEditor::from_view(PatternGraphView {
+                    pattern,
+                    source: PatternSource::Project,
+                    path: None,
+                    problems: vec![],
+                    graph,
+                });
+                editor.mark_new();
+                self.edit = Some(editor);
+                self.notice = "New pattern: name it, add agents and topics, then Save.".into();
+            }
+            PanelMsg::Outputs(list) => self.outputs = list.into_iter().collect(),
             PanelMsg::SelectRun(id) => {
                 self.tab = Tab::Runs;
                 self.run = Some(id);
@@ -760,7 +1151,7 @@ impl Panel {
                     label: p.name.clone(),
                 });
                 let Some(pattern) = self.pattern.clone().or(first) else {
-                    self.notice = "Pick a pattern first.".into();
+                    self.notice = crate::ui::invalid("Pick a pattern first.");
                     return Task::none();
                 };
                 let text = self.objective.text();
@@ -803,13 +1194,22 @@ impl Panel {
                 self.armed = None;
                 return Task::perform(
                     async move {
-                        actions::control_run(&api, &id, control, Some(&root))
-                            .map(|_| format!("{control:?}: ok"))
+                        actions::control_run(&api, &id, control, Some(&root)).map(|_| match control
+                        {
+                            RunControl::Pause => format!(
+                                "Paused {id}. Its agents finish their current step, then wait."
+                            ),
+                            RunControl::Resume => format!("Resumed {id}."),
+                            RunControl::Stop => format!("Stopped {id} and closed its agents."),
+                        })
                     },
                     |r| Message::Panel(PanelMsg::Done(r)),
                 );
             }
-            PanelMsg::Arm(what) => self.armed = Some(what),
+            PanelMsg::Arm(what) => {
+                self.armed = Some(what);
+                self.armed_at = Some(std::time::Instant::now());
+            }
             PanelMsg::Confirm => {
                 let Some(armed) = self.armed.take() else {
                     return Task::none();
@@ -818,6 +1218,20 @@ impl Panel {
                     Armed::StopRun(id) => {
                         return self.update(PanelMsg::Control(id, RunControl::Stop), ctx)
                     }
+                    Armed::CloseAgent(id) => {
+                        return self.update(PanelMsg::KillAgent(id), ctx);
+                    }
+                    Armed::DeletePattern(name) => {
+                        self.edit = None;
+                        self.pattern_sel = None;
+                        return Task::perform(
+                            async move {
+                                actions::delete_pattern(&api, &name, &root)
+                                    .map(|_| format!("Deleted pattern {name}."))
+                            },
+                            |r| Message::Panel(PanelMsg::Done(r)),
+                        );
+                    }
                     Armed::DeleteTask(id) => {
                         if self.task == Some(id) {
                             self.task = None;
@@ -825,7 +1239,7 @@ impl Panel {
                         return Task::perform(
                             async move {
                                 actions::delete_task(&api, id, &root)
-                                    .map(|_| format!("Deleted task #{id}"))
+                                    .map(|_| format!("Deleted task #{id}."))
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
                         );
@@ -857,7 +1271,15 @@ impl Panel {
                         return Task::perform(
                             async move {
                                 actions::clean_runs(&api, Some(&root)).map(|(runs, agents)| {
-                                    format!("Cleaned {runs} run(s) and {agents} agent(s)")
+                                    if runs == 0 && agents == 0 {
+                                        crate::ui::info("No finished runs or agents to clean.")
+                                    } else {
+                                        format!(
+                                            "Cleaned {runs} finished run{} and {agents} finished agent{}.",
+                                            if runs == 1 { "" } else { "s" },
+                                            if agents == 1 { "" } else { "s" }
+                                        )
+                                    }
                                 })
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
@@ -886,10 +1308,8 @@ impl Panel {
                             async move {
                                 actions::snapshot_restore(&api, &id, &root).map(|r| {
                                     format!(
-                                        "Restored {} ({} file(s)); the state before is snapshot {}",
-                                        r.restored.id,
-                                        r.restored_files.len(),
-                                        r.pre_restore.id
+                                        "Restored {}. What was there before is saved as {}.",
+                                        r.restored.id, r.pre_restore.id
                                     )
                                 })
                             },
@@ -905,7 +1325,7 @@ impl Panel {
                         return Task::perform(
                             async move {
                                 actions::snapshot_delete(&api, &id, &root)
-                                    .map(|_| format!("Deleted snapshot {id}"))
+                                    .map(|_| format!("Deleted snapshot {id}."))
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
                         );
@@ -917,14 +1337,26 @@ impl Panel {
                             ctx.data,
                             &self.snap_id(ctx).unwrap_or_default(),
                         );
+                        let had = ctx
+                            .data
+                            .snapshots
+                            .iter()
+                            .filter(|s| s.agent == agent)
+                            .count();
                         return Task::perform(
                             async move {
                                 actions::snapshot_prune(&api, &agent, &root).map(|r| {
-                                    format!(
-                                        "Pruned {} old snapshot(s) of {agent}; kept {}",
-                                        r.pruned.len(),
-                                        r.kept
-                                    )
+                                    if r.pruned.is_empty() {
+                                        crate::ui::info(&format!(
+                                            "{agent} has {had} snapshots; nothing older to prune."
+                                        ))
+                                    } else {
+                                        format!(
+                                            "Pruned {} older snapshots of {agent}; kept {}.",
+                                            r.pruned.len(),
+                                            r.kept
+                                        )
+                                    }
                                 })
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
@@ -934,7 +1366,12 @@ impl Panel {
                         return Task::perform(
                             async move {
                                 actions::approve_gate(&api, id, &gate.target(), &root)
-                                    .map(|_| format!("Approved {} of task #{id}", gate.label()))
+                                    .map(|_| match &gate {
+                                        Gate::Plan => format!("Approved the plan of task #{id}."),
+                                        Gate::PushPr(n) => format!(
+                                            "Approved subtask {n}. Pushed its branch and opened its pull request."
+                                        ),
+                                    })
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
                         );
@@ -950,7 +1387,20 @@ impl Panel {
                                     reason.as_deref(),
                                     &root,
                                 )
-                                .map(|_| format!("Rejected {} of task #{id}", gate.label()))
+                                .map(|_| {
+                                    let why = reason
+                                        .as_deref()
+                                        .map(|r| format!(" ({r})"))
+                                        .unwrap_or_default();
+                                    match &gate {
+                                        Gate::Plan => {
+                                            format!("Rejected the plan of task #{id}{why}. Nothing was started.")
+                                        }
+                                        Gate::PushPr(n) => {
+                                            format!("Rejected subtask {n}{why}. Nothing was pushed.")
+                                        }
+                                    }
+                                })
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
                         );
@@ -976,7 +1426,10 @@ impl Panel {
                                         actions::archive_task(&api, **id, Some(&root)).is_ok()
                                     })
                                     .count();
-                                Ok(format!("Archived {archived} task(s)"))
+                                Ok(format!(
+                                    "Archived {archived} done task{}.",
+                                    if archived == 1 { "" } else { "s" }
+                                ))
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
                         );
@@ -989,7 +1442,8 @@ impl Panel {
                 self.task_form = None;
                 return Task::done(Message::Reload);
             }
-            PanelMsg::Done(Err(e)) => self.notice = e,
+            PanelMsg::Notify(text) => self.notice = text,
+            PanelMsg::Done(Err(e)) => self.notice = refusal(self.fail_summary, &e),
             PanelMsg::SnapSelect(id) => {
                 self.snap = Some(id);
                 self.snap_detail = None;
@@ -998,7 +1452,15 @@ impl Panel {
             }
             PanelMsg::SnapShown(id, shown) => {
                 if self.snap_id(ctx).as_deref() == Some(id.as_str()) {
-                    self.snap_detail = Some((id, shown));
+                    self.snap_detail = Some((id.clone(), shown));
+                }
+                // verification aid: `SHEPHERD_NATIVE_COMPARE=1` presses Compare once, for pictures
+                static COMPARED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if std::env::var_os("SHEPHERD_NATIVE_COMPARE").is_some()
+                    && !COMPARED.swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    return self.update(PanelMsg::SnapCompare(id), ctx);
                 }
             }
             PanelMsg::SnapCapture(agent) => return self.snap_capture(agent, ctx),
@@ -1007,12 +1469,20 @@ impl Panel {
                 return Task::perform(
                     async move {
                         actions::agent_skill(&api, &agent, &skill, enable, &root).map(|_| {
-                            format!("Saved {skill} for {agent}; it applies the next time the agent starts")
+                            format!(
+                                "Saved: {skill} {} for {agent}. It applies the next time the agent starts.",
+                                match enable {
+                                    Some(true) => "on",
+                                    Some(false) => "off",
+                                    None => "reset",
+                                }
+                            )
                         })
                     },
                     |r| Message::Panel(PanelMsg::Done(r)),
                 );
             }
+            PanelMsg::SnapHide => self.snap_compare = None,
             PanelMsg::SnapCompare(id) => {
                 self.snap_compare = None;
                 let api = ctx.api.clone();
@@ -1026,13 +1496,20 @@ impl Panel {
                 );
             }
             PanelMsg::SnapCompared(id, diff) => {
+                if diff.is_ok() {
+                    self.notice =
+                        crate::ui::info(&format!("Compared {id} with the worktree as it is now."));
+                }
                 if self.snap_id(ctx).as_deref() == Some(id.as_str()) {
                     self.snap_compare = Some((id, diff));
                 }
             }
             PanelMsg::ShowMonitor(run) => {
-                self.tab = Tab::Monitor;
-                self.monitor = Some(run);
+                self.tab = Tab::Runs;
+                self.comm_open = true;
+                self.comm_topic = None;
+                self.comm_hidden.clear();
+                self.monitor = (!run.is_empty()).then_some(run);
                 return self.load_feed(ctx);
             }
             PanelMsg::Feed(feed) => self.feed = feed,
@@ -1113,7 +1590,12 @@ impl Panel {
                             task_id,
                         )
                         .map(|agent| {
-                            format!("Agent {} started", agent["id"].as_str().unwrap_or("?"))
+                            format!(
+                                "Launched {} in pane {} of {}.",
+                                agent["id"].as_str().unwrap_or("?"),
+                                agent["pane"].as_str().unwrap_or("?"),
+                                agent["workspace"].as_str().unwrap_or("?")
+                            )
                         })
                     },
                     |r| Message::Panel(PanelMsg::Done(r)),
@@ -1146,8 +1628,12 @@ impl Panel {
                 self.importing = None;
                 return Task::perform(
                     async move {
-                        actions::import_issue(&api, &issue, &root)
-                            .map(|id| format!("Imported {} as task #{id}", issue.trim()))
+                        actions::import_issue(&api, &issue, &root).map(|id| {
+                            format!(
+                                "Imported issue {} as task #{id}.",
+                                issue.trim().trim_start_matches('#')
+                            )
+                        })
                     },
                     |r| Message::Panel(PanelMsg::Done(r)),
                 );
@@ -1185,7 +1671,7 @@ impl Panel {
                 };
                 let title = form.title.trim().to_owned();
                 if title.is_empty() {
-                    self.notice = "A task needs a title.".into();
+                    self.notice = crate::ui::invalid("A task needs a title.");
                     return Task::none();
                 }
                 let description = form.description.text().trim().to_owned();
@@ -1198,7 +1684,7 @@ impl Panel {
                         match editing {
                             None => {
                                 actions::create_task(&api, &root, &title, &description, &criteria)
-                                    .map(|id| format!("Created task #{id}"))
+                                    .map(|id| format!("Created task #{id}."))
                             }
                             Some(id) => actions::update_task(
                                 &api,
@@ -1231,14 +1717,34 @@ impl Panel {
                 return Task::perform(
                     async move {
                         actions::kill_and_clean_agent(&api, &id)
-                            .map(|_| format!("Agent {} cleaned", id))
+                            .map(|_| format!("Closed {id}. Its worktree and snapshots stay."))
                     },
                     |r| Message::Panel(PanelMsg::Done(r)),
                 );
             }
             PanelMsg::ResumeAgents => {
+                let idle: Vec<String> = ctx
+                    .data
+                    .agents
+                    .iter()
+                    .filter(|a| a.state == "idle")
+                    .map(|a| a.id.clone())
+                    .collect();
+                if idle.is_empty() {
+                    self.notice = crate::ui::info("No idle agents to resume.");
+                    return Task::none();
+                }
                 return Task::perform(
-                    async move { actions::resume_agents(&api).map(|_| "Resumed idle agents".into()) },
+                    async move {
+                        actions::resume_agents(&api).map(|_| {
+                            format!(
+                                "Resumed {} idle agent{}: {}.",
+                                idle.len(),
+                                if idle.len() == 1 { "" } else { "s" },
+                                idle.join(", ")
+                            )
+                        })
+                    },
                     |r| Message::Panel(PanelMsg::Done(r)),
                 );
             }
@@ -1246,8 +1752,12 @@ impl Panel {
                 let root = ctx.data.root.display().to_string();
                 return Task::perform(
                     async move {
-                        actions::assign_agent_task(&api, &agent_id, task_id, &root)
-                            .map(|_| format!("Agent {} task updated", agent_id))
+                        actions::assign_agent_task(&api, &agent_id, task_id, &root).map(|_| {
+                            match task_id {
+                                Some(t) => format!("Moved {agent_id} to task #{t}."),
+                                None => format!("Moved {agent_id} to no task."),
+                            }
+                        })
                     },
                     |r| Message::Panel(PanelMsg::Done(r)),
                 );
@@ -1286,6 +1796,7 @@ impl Panel {
 
     pub fn on_data(&mut self, ctx: &Ctx<'_>) -> Task<Message> {
         self.cfg.set_api(&ctx.api);
+        self.refresh_run_graph(ctx);
         if let Some(id) = std::env::var("SHEPHERD_NATIVE_TASKFORM")
             .ok()
             .and_then(|v| v.strip_prefix("edit:").and_then(|n| n.parse::<u32>().ok()))
@@ -1303,6 +1814,9 @@ impl Panel {
         }
         if self.tab == Tab::Snapshots {
             return self.snap_show(ctx);
+        }
+        if self.tab == Tab::Agents {
+            return self.load_outputs(ctx);
         }
         if self.tab == Tab::Patterns && self.pattern_sel.is_none() {
             if let Some(first) = ctx.data.patterns.first().map(|p| p.name.clone()) {
@@ -1334,148 +1848,233 @@ impl Panel {
     fn arm_button<'a>(
         &self,
         key: Armed,
-        label: &'a str,
-        armed_label: &'a str,
+        label: impl ToString,
+        armed_label: impl ToString,
     ) -> Element<'a, Message> {
         let armed = self.armed.as_ref() == Some(&key);
+        let approving = matches!(key, Armed::ApproveGate(..));
         let msg = if armed {
             PanelMsg::Confirm
         } else {
             PanelMsg::Arm(key)
         };
-        let btn_label = if armed { armed_label } else { label };
+        let btn_label = if armed {
+            armed_label.to_string()
+        } else {
+            label.to_string()
+        };
         let content = btn_body(btn_label);
         if armed {
+            // the bar along the bottom edge drains over `ARM_SECS`, then the button disarms
+            let left = self.armed_at.map_or(0.0, |t| {
+                (1.0 - t.elapsed().as_secs_f32() / ARM_SECS).clamp(0.0, 1.0)
+            });
+            let portion = (left * 1000.0) as u16;
+            let bar = row![
+                container(text(""))
+                    .width(Length::FillPortion(portion.max(1)))
+                    .height(3)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(theme::BG)),
+                        ..container::Style::default()
+                    }),
+                container(text(""))
+                    .width(Length::FillPortion(1000 - portion.min(999)))
+                    .height(3),
+            ];
+            return iced::widget::stack![
+                button(content)
+                    .padding([0, 12])
+                    .height(32)
+                    .style(danger_button_style())
+                    .on_press(Message::Panel(msg)),
+                container(bar).align_bottom(Length::Fill).padding([0, 1]),
+            ]
+            .into();
+        } else if approving {
             button(content)
                 .padding([0, 12])
-                .height(34)
-                .style(danger_button_style())
+                .height(32)
+                .style(primary_button_style())
         } else {
             button(content)
                 .padding([0, 12])
-                .height(34)
-                .style(theme::outline_button_style(false))
+                .height(32)
+                .style(theme::destructive_button_style())
         }
         .on_press(Message::Panel(msg))
         .into()
     }
 
-    /// Section tabs (`.tabs`): a pixel-font group label, then its tabs; a count badge turns orange
-    /// when something in that section needs the user.
-    fn section_tabs<'a>(&self, ctx: &Ctx<'a>) -> Element<'a, Message> {
-        let runs_warn = ctx.data.runs.iter().any(|r| {
-            matches!(
-                r.run.state,
-                PatternRunState::Stalled | PatternRunState::Degraded | PatternRunState::Failed
-            )
-        });
-        let agents_warn = ctx
-            .data
-            .agents
-            .iter()
-            .any(|a| a.state == "blocked" || !a.notice.is_empty());
+    /// The navigation of the sidebar (`ORCHESTRATE` and `INSPECT`): a square bullet, the name, a count (orange
+    /// when something in that view needs the user) and the shortcut.
+    pub fn nav<'a>(
+        &self,
+        ctx: &Ctx<'a>,
+        active: bool,
+        collapsed: [bool; 2],
+    ) -> Element<'a, Message> {
+        // the Runs badge turns orange only while a gate waits for the human
+        let runs_warn = !ctx.data.gates.is_empty();
+        let agents_warn = false;
         let counts = self.cfg.counts();
-        let tab_button = |tab: Tab, name: &'static str| {
+        let item = |tab: Tab, name: &'static str, key: &'static str| {
             let (count, warn) = match tab {
                 Tab::Runs => (Some(ctx.data.runs.len()), runs_warn),
                 Tab::Agents => (Some(ctx.data.agents.len()), agents_warn),
-                Tab::Tasks => (Some(ctx.data.tasks.len()), false),
+                Tab::Tasks => (
+                    Some(
+                        ctx.data
+                            .tasks
+                            .iter()
+                            .filter(|t| {
+                                !matches!(
+                                    t.status.state.as_str(),
+                                    "done" | "completed" | "archived" | "cancelled"
+                                )
+                            })
+                            .count(),
+                    ),
+                    false,
+                ),
                 Tab::Patterns => (Some(ctx.data.patterns.len()), false),
                 Tab::Skills => (Some(counts.0), false),
+                Tab::Git => (self.cfg.git_count(), false),
                 Tab::Events => (Some(counts.1), false),
                 Tab::Models => (Some(counts.2), false),
                 Tab::Snapshots => (Some(ctx.data.snapshots.len()), false),
                 _ => (None, false),
             };
-            let selected = self.tab == tab;
-            let mut content = row![text(name).size(13)]
-                .spacing(8)
-                .align_y(iced::Alignment::Center);
+            let selected = active && self.tab == tab;
+            let mut r = row![
+                container(text(""))
+                    .width(6)
+                    .height(6)
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(if selected {
+                            ACCENT
+                        } else {
+                            theme::LINE2
+                        })),
+                        border: iced::Border {
+                            radius: 1.0.into(),
+                            ..iced::Border::default()
+                        },
+                        ..container::Style::default()
+                    }),
+                text(name)
+                    .size(12.5)
+                    .color(if selected { theme::HI } else { FG }),
+                container(text("")).width(Length::Fill),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center);
             if let Some(count) = count {
-                content = content.push(
-                    container(text(count.to_string()).size(10.5))
-                        .padding([0, 5])
-                        .style(move |_| theme::count_style(selected, warn)),
+                r = r.push(
+                    container(text(count.to_string()).size(10.5).color(if warn {
+                        theme::BG
+                    } else {
+                        DIM
+                    }))
+                    .padding([0, 5])
+                    .height(18)
+                    .center_y(18)
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(if warn {
+                            WARN
+                        } else {
+                            theme::SURFACE
+                        })),
+                        border: iced::Border {
+                            radius: 3.0.into(),
+                            ..iced::Border::default()
+                        },
+                        ..container::Style::default()
+                    }),
                 );
             }
-            let tab_btn = button(container(content).padding([0, 4]).center_y(Length::Fill))
-                .padding([0, 4])
-                .height(34)
+            // the shortcut column is always there (empty for Models and Snapshots), so the badges line up
+            r = r.push(
+                text(key)
+                    .size(10)
+                    .color(theme::FAINT)
+                    .width(Length::Fixed(44.0)),
+            );
+            button(container(r).center_y(Length::Fill))
+                .width(Length::Fill)
+                .height(30)
+                .padding([0, 10])
                 .style(item_style(selected))
-                .on_press(Message::Panel(PanelMsg::Tab(tab)));
-            if selected {
-                // the underline is a layer over the tab, so it takes the tab's width instead of widening it
-                iced::widget::stack![
-                    tab_btn,
-                    container(
-                        Canvas::new(Prism {
-                            preset: Preset::TABBAR,
-                            frame: ctx.frame,
-                        })
-                        .width(Length::Fill)
-                        .height(2)
-                    )
-                    .padding([0, 4])
-                    .align_bottom(Length::Fill),
+                .on_press(Message::Panel(PanelMsg::Tab(tab)))
+        };
+        // a group label is a button: it folds the group (chevron, then the spaced pixel label)
+        let label = |s: &'static str, index: u8, closed: bool| {
+            button(
+                container(
+                    row![
+                        text(if closed { "›" } else { "⌄" })
+                            .size(11)
+                            .color(theme::FAINT),
+                        text(crate::sidebar::spaced(s))
+                            .font(theme::PIXEL)
+                            .size(10)
+                            .color(DIM),
+                    ]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center),
+                )
+                .center_y(Length::Fill),
+            )
+            .padding([0, 8])
+            .height(16)
+            .width(Length::Fill)
+            .style(theme::ghost_button_style())
+            .on_press(Message::ToggleNavGroup(index))
+        };
+        let group = |title: &'static str,
+                     index: u8,
+                     items: Vec<Element<'a, Message>>|
+         -> Element<'a, Message> {
+            let closed = collapsed[index as usize];
+            let mut col = column![label(title, index, closed)].spacing(1);
+            if !closed {
+                for item in items {
+                    col = col.push(item);
+                }
+            }
+            col.into()
+        };
+        column![
+            group(
+                "Orchestrate",
+                0,
+                vec![
+                    item(Tab::Overview, "Overview", "Ctrl+1").into(),
+                    item(Tab::Runs, "Runs", "Ctrl+2").into(),
+                    item(Tab::Agents, "Agents", "Ctrl+3").into(),
+                    item(Tab::Tasks, "Tasks", "Ctrl+4").into(),
+                    item(Tab::Patterns, "Patterns", "Ctrl+5").into(),
                 ]
-                .into()
-            } else {
-                Element::from(tab_btn)
-            }
-        };
-        let group = |name: &'static str, tabs: &[(Tab, &'static str)]| {
-            let mut r = row![container(theme::label(name)).padding(pad(0.0, 10.0, 0.0, 4.0))]
-                .spacing(2)
-                .align_y(iced::Alignment::Center);
-            for (tab, label) in tabs {
-                r = r.push(tab_button(*tab, label));
-            }
-            r
-        };
-        let separator =
-            container(text(""))
-                .width(1)
-                .height(22)
-                .style(|_| iced::widget::container::Style {
-                    background: Some(Background::Color(theme::LINE2)),
-                    ..iced::widget::container::Style::default()
-                });
-        container(
-            row![
-                group(
-                    "WORKSPACE",
-                    &[
-                        (Tab::Overview, "Overview"),
-                        (Tab::Runs, "Runs"),
-                        (Tab::Agents, "Agents"),
-                        (Tab::Tasks, "Tasks"),
-                        (Tab::Patterns, "Patterns"),
-                    ]
-                ),
-                container(separator).padding([0, 12]),
-                group(
-                    "INSPECT",
-                    &[
-                        (Tab::Monitor, "Activity"),
-                        (Tab::Skills, "Skills"),
-                        (Tab::Git, "Git"),
-                        (Tab::Events, "Events"),
-                        (Tab::Models, "Models"),
-                        (Tab::Snapshots, "Snapshots"),
-                    ]
-                ),
-            ]
-            .align_y(iced::Alignment::Center)
-            .wrap(),
-        )
-        .padding([8, 14])
-        .width(Length::Fill)
-        .style(theme::bottom_line_style)
+            ),
+            group(
+                "Inspect",
+                1,
+                vec![
+                    item(Tab::Monitor, "Activity", "Ctrl+6").into(),
+                    item(Tab::Skills, "Skills", "Ctrl+7").into(),
+                    item(Tab::Git, "Git", "Ctrl+8").into(),
+                    item(Tab::Events, "Events", "Ctrl+9").into(),
+                    item(Tab::Models, "Models", "").into(),
+                    item(Tab::Snapshots, "Snapshots", "").into(),
+                ]
+            ),
+        ]
+        .spacing(14)
         .into()
     }
 
     pub fn view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
-        let tabs = self.section_tabs(ctx);
+        crate::ui::nav_reset();
         let body = match self.tab {
             Tab::Overview => self.overview_view(ctx),
             Tab::Runs => self.runs_view(ctx),
@@ -1483,13 +2082,264 @@ impl Panel {
             Tab::Tasks => self.tasks_view(ctx),
             Tab::Patterns => self.patterns_view(ctx),
             Tab::Monitor => self.monitor_view(ctx),
-            Tab::Skills => self.cfg.skills_view(),
+            Tab::Skills => self
+                .cfg
+                .skills_view(&self.filter, self.chip, &ctx.data.agents),
             Tab::Git => self.cfg.git_view(),
-            Tab::Events => self.cfg.events_view(ctx.frame),
+            Tab::Events => self.cfg.events_view(ctx.frame, &self.filter),
             Tab::Models => self.cfg.models_view(),
             Tab::Snapshots => self.snapshots_view(ctx),
         };
-        column![tabs, body].into()
+        if self.comm_open {
+            return self.comm_view(ctx);
+        }
+        column![self.header(ctx), body].into()
+    }
+
+    /// The view's header (`title`, one line saying what is in it, and its actions at the top right).
+    fn header<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        let d = ctx.data;
+        let waiting = d.gates.len();
+        let (title, sub, actions): (&'static str, String, Vec<Element<'a, Message>>) = match self
+            .tab
+        {
+            Tab::Overview => (
+                "Overview",
+                format!("Workspace in {}", d.root.display()),
+                vec![
+                    btn("+ New agent", PanelMsg::OpenSpawnAgent),
+                    btn("+ New task", PanelMsg::TaskNew),
+                    btn_primary("Run a pattern", PanelMsg::OpenLauncher(None)),
+                ],
+            ),
+            Tab::Runs => {
+                let running = d
+                    .runs
+                    .iter()
+                    .filter(|r| matches!(r.run.state, PatternRunState::Running))
+                    .count();
+                let mut s = format!(
+                    "{} runs: {running} running, {} finished.",
+                    d.runs.len(),
+                    d.runs
+                        .iter()
+                        .filter(|r| matches!(r.run.state, PatternRunState::Done))
+                        .count()
+                );
+                if waiting > 0 {
+                    s.push_str(&format!(" {waiting} gate waits for you."));
+                }
+                (
+                    "Runs",
+                    s,
+                    vec![
+                        self.arm_button(
+                            Armed::CleanRuns,
+                            "Clean finished",
+                            format!(
+                                "Confirm: forget {} finished",
+                                d.runs
+                                    .iter()
+                                    .filter(|r| matches!(
+                                        r.run.state,
+                                        PatternRunState::Done | PatternRunState::Stopped
+                                    ))
+                                    .count()
+                            ),
+                        ),
+                        btn_primary("Run a pattern", PanelMsg::OpenLauncher(None)),
+                    ],
+                )
+            }
+            Tab::Agents => {
+                let working = d.agents.iter().filter(|a| a.state == "working").count();
+                let idle = d.agents.iter().filter(|a| a.state == "idle").count();
+                let blocked = d.agents.iter().filter(|a| a.state == "blocked").count();
+                (
+                    "Agents",
+                    format!(
+                        "{} agents: {working} working, {idle} idle, {blocked} blocked",
+                        d.agents.len()
+                    ),
+                    vec![
+                        self.arm_button(
+                            Armed::CleanRuns,
+                            "Clean finished",
+                            format!(
+                                "Confirm: forget {} finished",
+                                d.agents
+                                    .iter()
+                                    .filter(|a| matches!(a.state.as_str(), "done" | "failed"))
+                                    .count()
+                            ),
+                        ),
+                        btn("Resume idle", PanelMsg::ResumeAgents),
+                        btn_primary("+ New agent", PanelMsg::OpenSpawnAgent),
+                    ],
+                )
+            }
+            Tab::Tasks => {
+                let open = d
+                    .tasks
+                    .iter()
+                    .filter(|t| {
+                        !matches!(
+                            t.status.state.as_str(),
+                            "done" | "completed" | "archived" | "cancelled"
+                        )
+                    })
+                    .count();
+                let done = d
+                    .tasks
+                    .iter()
+                    .filter(|t| {
+                        matches!(t.status.state.as_str(), "done" | "completed" | "archived")
+                    })
+                    .count();
+                let waiting = d
+                    .tasks
+                    .iter()
+                    .flat_map(|t| t.status.subtasks.iter())
+                    .filter(|s| s.state == "awaiting-approval")
+                    .count();
+                let mut s = format!("{} tasks: {open} open, {done} done.", d.tasks.len());
+                if waiting > 0 {
+                    s.push_str(&format!(" {waiting} subtask waits for your approval."));
+                }
+                (
+                    "Tasks",
+                    s,
+                    vec![
+                        text_input("Filter by number or title", &self.filter)
+                            .on_input(|t| Message::Panel(PanelMsg::Filter(t)))
+                            .id(crate::ui::FILTER_ID)
+                            .style(theme::input_style)
+                            .padding([8, 10])
+                            .size(12)
+                            .width(240)
+                            .into(),
+                        btn("Import issue", PanelMsg::ImportOpen),
+                        btn_primary("+ New task", PanelMsg::TaskNew),
+                    ],
+                )
+            }
+            Tab::Patterns => (
+                "Patterns",
+                "Teams of agents and the topics they talk on. Stored as YAML.".to_owned(),
+                vec![btn_primary("+ New pattern", PanelMsg::NewPattern)],
+            ),
+            Tab::Monitor => {
+                let chip = |label: &'static str, i: usize| {
+                    button(text(label).size(11.5))
+                        .padding([4, 12])
+                        .style(theme::chip_style(self.activity_window == i))
+                        .on_press(Message::Panel(PanelMsg::ActivityWindow(i)))
+                        .into()
+                };
+                (
+                    "Activity",
+                    "What every agent did over time, and how far each reader is behind on the bus"
+                        .to_owned(),
+                    vec![
+                        chip("5 min", 0),
+                        chip("30 min", 1),
+                        chip("2 h", 2),
+                        text("● live").size(11.5).color(ACCENT).into(),
+                    ],
+                )
+            }
+            Tab::Skills => (
+                "Skills",
+                "Agents load a skill when its description fits the work.".to_owned(),
+                vec![
+                    btn_quiet(
+                        "Refresh",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::RefreshSkills),
+                    ),
+                    btn_primary(
+                        "+ New skill",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::SkillNewOpen),
+                    ),
+                ],
+            ),
+            Tab::Git => (
+                "Git",
+                format!("Worktrees of {}", d.root.display()),
+                vec![
+                    btn_quiet(
+                        "Refresh",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::Refresh),
+                    ),
+                    btn(
+                        "+ Branch",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::GitFormOpen(false)),
+                    ),
+                    btn_primary(
+                        "+ Worktree",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::GitFormOpen(true)),
+                    ),
+                ],
+            ),
+            Tab::Events => (
+                "Events",
+                "The bus: topics, partitions and the messages on them".to_owned(),
+                vec![
+                    btn_quiet(
+                        "Refresh",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::RefreshEvents),
+                    ),
+                    btn(
+                        "Send message",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::TopicFormOpen(true)),
+                    ),
+                    btn_primary(
+                        "+ New topic",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::TopicFormOpen(false)),
+                    ),
+                ],
+            ),
+            Tab::Models => (
+                "Models",
+                "Which command runs each vendor, and which vendor and model each role uses."
+                    .to_owned(),
+                vec![
+                    btn(
+                        "+ Vendor",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::NewVendor),
+                    ),
+                    btn(
+                        "+ Role",
+                        PanelMsg::Cfg(crate::config_panel::CfgMsg::NewRole),
+                    ),
+                ],
+            ),
+            Tab::Snapshots => {
+                let agents: Vec<String> = d.agents.iter().map(|a| a.id.clone()).collect();
+                let current = self.capture_agent(ctx);
+                let mut actions: Vec<Element<'a, Message>> =
+                    vec![text("Capture").size(12).color(DIM).into()];
+                actions.push(
+                    pick_list(agents, current.clone(), |a| {
+                        Message::Panel(PanelMsg::SnapAgent(a))
+                    })
+                    .text_size(12)
+                    .padding([8, 10])
+                    .into(),
+                );
+                if let Some(agent) = current {
+                    actions.push(btn_primary("Capture now", PanelMsg::SnapCapture(agent)));
+                }
+                (
+                    "Snapshots",
+                    format!(
+                        "{} saved copies of agent worktrees, newest first. Restore one to undo an agent's changes.",
+                        d.snapshots.len()
+                    ),
+                    actions,
+                )
+            }
+        };
+        crate::ui::page_header(title, sub, actions)
     }
 
     /// The window now looks at another session: forget what was picked and loaded from the previous one.
@@ -1537,10 +2387,10 @@ impl Panel {
         } else {
             self.cfg.notice.clone()
         };
-        let notice_color = if notice_text.contains("error")
-            || notice_text.contains("failed")
-            || notice_text.contains("✖")
-        {
+        let notice_text = notice_text
+            .trim_start_matches(crate::ui::INFO)
+            .replace('\n', " ");
+        let notice_color = if crate::ui::is_error(&notice_text) || notice_text.contains("✖") {
             BAD
         } else if notice_text.contains("Starting")
             || notice_text.contains("Loading")
@@ -1552,29 +2402,59 @@ impl Panel {
         } else {
             OK
         };
-        let notice: Element<'a, Message> = if notice_text.is_empty() {
-            text("Ready").size(11.5).color(DIM).into()
+        let shown = if notice_text.is_empty() {
+            "Ready".to_owned()
         } else {
-            container(
-                row![
-                    text(if notice_color == BAD { "✖" } else { "●" })
-                        .size(11)
-                        .color(notice_color),
-                    text(notice_text).size(11).color(notice_color),
-                ]
-                .spacing(7),
-            )
-            .into()
+            notice_text
         };
-        notice
+        let color = if shown == "Ready" { DIM } else { notice_color };
+        let mut line = row![
+            text("■").size(8).color(color),
+            container(
+                text(shown)
+                    .size(11)
+                    .color(color)
+                    .wrapping(iced::widget::text::Wrapping::None)
+            )
+            .max_width(620)
+            .clip(true),
+        ]
+        .spacing(7)
+        .align_y(iced::Alignment::Center);
+        if !self.history.is_empty() {
+            line = line.push(
+                text(format!("{} notices", self.history.len()))
+                    .size(11)
+                    .color(theme::FAINT),
+            );
+        }
+        line.into()
     }
 
-    fn list<'a>(
+    /// A list with the filter box and chips of the redesign above it.
+    fn filtered_list<'a>(
         &self,
+        placeholder: &'static str,
+        chips: &[(&'static str, usize)],
         items: Vec<Element<'a, Message>>,
         footer: Vec<Element<'a, Message>>,
     ) -> Element<'a, Message> {
-        list_box(items, footer)
+        let top = crate::ui::filter_bar(placeholder, &self.filter, chips, self.chip);
+        list_box_with(Some(top), items, footer)
+    }
+
+    #[cfg(test)]
+    fn update_filter_for_test(&mut self, t: &str) {
+        self.filter = t.into();
+    }
+
+    /// Does this text pass the filter box (case-insensitive, every word must appear)?
+    fn passes(&self, haystack: &str) -> bool {
+        let h = haystack.to_lowercase();
+        self.filter
+            .to_lowercase()
+            .split_whitespace()
+            .all(|w| h.contains(w))
     }
 
     fn detail<'a>(&self, content: Element<'a, Message>) -> Element<'a, Message> {
@@ -1596,71 +2476,85 @@ impl Panel {
                 )
             })
             .count();
-        let healthy = ctx
+        let finished_runs = ctx
             .data
             .runs
             .iter()
             .filter(|r| {
                 matches!(
                     r.run.state,
-                    PatternRunState::Running | PatternRunState::Done
+                    PatternRunState::Done | PatternRunState::Stopped
                 )
             })
             .count();
-        let attention = ctx
-            .data
-            .runs
-            .iter()
-            .filter(|r| {
-                matches!(
-                    r.run.state,
-                    PatternRunState::Stalled | PatternRunState::Degraded | PatternRunState::Failed
-                )
-            })
-            .count();
-        let summary = container(
-            row![
-                agent_metric("TOTAL", ctx.data.runs.len(), FG),
-                agent_metric_spark("ACTIVE", active, ACCENT, ctx.frame),
-                agent_metric("HEALTHY", healthy, OK),
-                agent_metric(
-                    "ATTENTION",
-                    attention,
-                    if attention > 0 { WARN } else { DIM }
-                ),
-            ]
-            .spacing(1),
-        )
-        .style(kpi_strip_style);
+        let chips = [
+            ("All", ctx.data.runs.len()),
+            ("Running", active),
+            ("Finished", finished_runs),
+        ];
         let items = ctx
             .data
             .runs
             .iter()
+            .filter(|r| {
+                let is_active = matches!(
+                    r.run.state,
+                    PatternRunState::Running
+                        | PatternRunState::Paused
+                        | PatternRunState::Stalled
+                        | PatternRunState::Degraded
+                );
+                let is_finished = matches!(
+                    r.run.state,
+                    PatternRunState::Done | PatternRunState::Stopped
+                );
+                let chip_ok = match self.chip {
+                    1 => is_active,
+                    2 => is_finished,
+                    _ => true,
+                };
+                chip_ok && self.passes(&format!("{} {} {}", r.run.pattern, r.run.id, r.run.task))
+            })
             .map(|r| {
                 let (label, color) = state_badge(r.run.state);
-                let body = column![
-                    text(format!(
-                        "{} · {}",
-                        r.run.pattern,
-                        r.run.id.trim_start_matches("run-")
-                    ))
-                    .size(13)
-                    .color(theme::HI),
-                    text(format!(
-                        "{label} · {}/{} agents",
-                        r.live_agents,
-                        r.run.agents.len()
-                    ))
-                    .size(11)
-                    .color(color),
-                    text(if r.run.task.is_empty() {
-                        "No objective".to_owned()
-                    } else {
-                        r.run.task.chars().take(56).collect()
+                let task_id = task_of_run(&r.run.task);
+                let waits = ctx.data.gates.iter().any(|g| Some(g.task_id) == task_id);
+                let mut body = column![
+                    row![
+                        text("■").size(9).color(color),
+                        text(r.run.pattern.clone())
+                            .font(theme::MONO_BOLD)
+                            .size(13)
+                            .color(theme::HI)
+                            .width(Length::Fill),
+                        text(label).size(11).color(color),
+                    ]
+                    .spacing(8)
+                    .align_y(iced::Alignment::Center),
+                    text(r.run.id.clone()).size(11).color(DIM),
+                    text(match task_id.and_then(|id| ctx.data.task(id)) {
+                        Some(t) => format!(
+                            "#{} {}   {} of {} agents live",
+                            t.status.id,
+                            t.status.title,
+                            r.live_agents,
+                            r.run.agents.len()
+                        ),
+                        None => format!("{} of {} agents live", r.live_agents, r.run.agents.len()),
                     })
-                    .size(10)
-                    .color(DIM)
-                ];
+                    .size(11)
+                    .color(DIM),
+                ]
+                .spacing(3);
+                if waits {
+                    body = body.push(
+                        row![
+                            text("■").size(9).color(WARN),
+                            text("gate waits for you").size(11).color(WARN)
+                        ]
+                        .spacing(6),
+                    );
+                }
                 button(body)
                     .width(Length::Fill)
                     .padding([4, 8])
@@ -1670,46 +2564,118 @@ impl Panel {
                             .or(ctx.data.runs.first().map(|f| f.run.id.as_str()))
                             == Some(r.run.id.as_str()),
                     ))
-                    .on_press(Message::Panel(PanelMsg::SelectRun(r.run.id.clone())))
+                    .on_press(crate::ui::nav(
+                        self.run
+                            .as_deref()
+                            .or(ctx.data.runs.first().map(|f| f.run.id.as_str()))
+                            == Some(r.run.id.as_str()),
+                        Message::Panel(PanelMsg::SelectRun(r.run.id.clone())),
+                    ))
                     .into()
             })
             .collect();
-        let footer = vec![
-            btn_link("+ Run pattern", PanelMsg::OpenLauncher(None)),
-            self.arm_button(
-                Armed::CleanRuns,
-                "Clean finished",
-                "Confirm: delete finished",
-            ),
-        ];
+        let footer: Vec<Element<'a, Message>> = vec![];
+        // the gate strip lives at the top of the run's own detail; the detail is the flexible region
         let detail = if self.launching {
-            self.launcher_view(ctx)
+            self.detail(self.launcher_view(ctx))
         } else {
-            self.run_detail(ctx)
+            let (this, ctx) = (self, ctx.clone());
+            crate::ui::flex(720.0, [22.0, 28.0], move || this.run_detail(&ctx))
         };
-        let mut page = column![summary].spacing(8);
-        for g in &ctx.data.gates {
-            let waiting = row![
-                text(format!(
-                    "Task #{} \"{}\" waits for you to approve {}",
-                    g.task_id,
-                    g.task_title,
-                    g.gate.label()
-                ))
-                .size(12)
-                .color(theme::HI)
-                .width(Length::Fill),
+        row![
+            self.filtered_list("Filter by pattern, run or task", &chips, items, footer),
+            detail
+        ]
+        .height(Length::Fill)
+        .into()
+    }
+
+    /// A gate that waits for the human (`Needs you`): what is being approved, who made it, and the buttons.
+    /// Approving publishes the branch and opens the pull request; rejecting sends the reason back.
+    fn gate_card<'a>(
+        &'a self,
+        ctx: &Ctx<'a>,
+        g: &'a shepherd_app_core::data::GateRow,
+    ) -> Element<'a, Message> {
+        let task = ctx.data.task(g.task_id);
+        let subtask = match (&g.gate, task) {
+            (Gate::PushPr(n), Some(t)) => t.status.subtasks.iter().find(|s| s.number == *n),
+            _ => None,
+        };
+        let run = ctx
+            .data
+            .runs
+            .iter()
+            .find(|r| task_of_run(&r.run.task) == Some(g.task_id));
+        let title = match (&g.gate, subtask) {
+            (Gate::PushPr(n), Some(s)) => {
+                format!("Publish subtask {n} of task #{}: {}", g.task_id, s.title)
+            }
+            (Gate::PushPr(n), None) => format!("Publish subtask {n} of task #{}", g.task_id),
+            (Gate::Plan, _) => format!("Approve the plan of task #{}: {}", g.task_id, g.task_title),
+        };
+        let what = match (&g.gate, subtask) {
+            (Gate::PushPr(_), Some(s)) if !s.branch.is_empty() => format!(
+                "Approving pushes branch {} and opens the pull request. Nothing is pushed until you approve.",
+                s.branch
+            ),
+            (Gate::PushPr(_), _) => {
+                "Approving pushes the branch and opens the pull request. Nothing is pushed until you approve."
+                    .to_owned()
+            }
+            (Gate::Plan, _) => "Approving lets the coders start on the plan.".to_owned(),
+        };
+        let mut head = row![
+            badge("awaiting-approval", WARN),
+            text(title).font(theme::MONO_BOLD).size(13).color(theme::HI),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center);
+        if let Some(r) = run {
+            head = head.push(text(format!("run {}", r.run.id)).size(12).color(ACCENT));
+        }
+        let mut body = column![head, text(what).size(12).color(DIM)].spacing(8);
+        if let Some((files, added, removed)) = g.change {
+            body = body.push(
+                row![
+                    text("changes").size(12).color(DIM),
+                    text(format!("{files} file{}", if files == 1 { "" } else { "s" }))
+                        .size(12)
+                        .color(FG),
+                    text(format!("+{added}")).size(12).color(OK),
+                    text(format!("-{removed}")).size(12).color(BAD),
+                ]
+                .spacing(10),
+            );
+        }
+        if let Some(s) = subtask {
+            let mut by = String::new();
+            if !s.coder.is_empty() {
+                by.push_str(&format!("by {}", s.coder));
+            }
+            if !s.reviewer.is_empty() {
+                by.push_str(&format!("   reviewed by {}", s.reviewer));
+            }
+            if let Some(note) = s.note.as_deref().filter(|n| !n.is_empty()) {
+                by.push_str(&format!("   {note}"));
+            }
+            if !by.is_empty() {
+                body = body.push(text(by).size(12).color(FG));
+            }
+        }
+        body = body.push(
+            row![
+                self.arm_button(
+                    Armed::ApproveGate(g.task_id, g.gate.clone()),
+                    "Approve and open PR",
+                    "Confirm: approve",
+                ),
                 text_input("Reason for rejecting (optional)", &self.reject_reason)
                     .on_input(|t| Message::Panel(PanelMsg::RejectReason(t)))
                     .style(theme::input_style)
-                    .padding([6, 8])
+                    .padding([8, 10])
                     .size(12)
-                    .width(Length::Fixed(280.0)),
-                self.arm_button(
-                    Armed::ApproveGate(g.task_id, g.gate.clone()),
-                    "Approve",
-                    "Confirm: approve",
-                ),
+                    .width(Length::Fill),
                 self.arm_button(
                     Armed::RejectGate(g.task_id, g.gate.clone()),
                     "Reject",
@@ -1717,16 +2683,105 @@ impl Panel {
                 ),
             ]
             .spacing(8)
-            .align_y(iced::Alignment::Center);
-            page = page.push(alert(waiting.into(), WARN));
-        }
-        page.push(row![self.list(items, footer), self.detail(detail)].height(Length::Fill))
-            .into()
+            .align_y(iced::Alignment::Center),
+        );
+        alert(body.into(), WARN)
     }
 
     fn overview_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
-        let running = ctx
-            .data
+        // one flexible region: the page keeps at least 1000 px and scrolls when the window is narrower
+        let (this, ctx) = (self, ctx.clone());
+        crate::ui::flex(1000.0, [20.0, 28.0], move || this.overview_page(&ctx))
+    }
+
+    /// The Recent runs table: fixed columns (180, 140, 120, 120, 220, 140).
+    fn recent_runs_table<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        let d = ctx.data;
+        let cell = |w: f32, e: Element<'a, Message>| container(e).width(w).clip(true);
+        let head = |s: &'static str, w: f32| cell(w, text(s).size(11.5).color(DIM).into());
+        let mut table = column![row![
+            head("Run", 180.0),
+            head("Pattern", 140.0),
+            head("State", 120.0),
+            head("Agents", 120.0),
+            head("Task", 220.0),
+            head("Started", 140.0),
+        ]
+        .spacing(0)]
+        .spacing(10);
+        for r in d.runs.iter().take(8) {
+            let (state, color) = state_badge(r.run.state);
+            let task = task_of_run(&r.run.task)
+                .and_then(|id| d.task(id))
+                .map(|t| format!("#{} {}", t.status.id, t.status.title))
+                .unwrap_or_else(|| "none".to_owned());
+            let task_id = task_of_run(&r.run.task);
+            table = table.push(
+                row![
+                    cell(
+                        180.0,
+                        button(text(r.run.id.clone()).size(12).color(ACCENT))
+                            .padding(0)
+                            .style(theme::link_button_style())
+                            .on_press(Message::Panel(PanelMsg::SelectRun(r.run.id.clone())))
+                            .into()
+                    ),
+                    cell(140.0, text(r.run.pattern.clone()).size(12).into()),
+                    cell(
+                        120.0,
+                        row![
+                            text("■").size(8).color(color),
+                            text(state).size(12).color(color)
+                        ]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center)
+                        .into()
+                    ),
+                    cell(
+                        120.0,
+                        text(format!("{} of {} live", r.live_agents, r.run.agents.len()))
+                            .size(12)
+                            .into()
+                    ),
+                    cell(
+                        220.0,
+                        match task_id {
+                            Some(id) => button(text(task).size(12).color(ACCENT))
+                                .padding(0)
+                                .style(theme::link_button_style())
+                                .on_press(Message::Panel(PanelMsg::SelectTask(id)))
+                                .into(),
+                            None => text(task).size(12).color(theme::FAINT).into(),
+                        }
+                    ),
+                    cell(
+                        140.0,
+                        text(
+                            r.run
+                                .created_at
+                                .chars()
+                                .skip(5)
+                                .take(11)
+                                .collect::<String>()
+                                .replace('T', " ")
+                        )
+                        .size(12)
+                        .color(DIM)
+                        .into()
+                    ),
+                ]
+                .align_y(iced::Alignment::Center),
+            );
+        }
+        if d.runs.is_empty() {
+            table = table.push(text("No runs yet.").size(12).color(DIM));
+        }
+        card("RECENT RUNS", None, table.into())
+    }
+
+    fn overview_page<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        let d = ctx.data;
+        let running = d
             .runs
             .iter()
             .filter(|r| {
@@ -1739,14 +2794,12 @@ impl Panel {
                 )
             })
             .count();
-        let active_agents = ctx
-            .data
+        let active_agents = d
             .agents
             .iter()
             .filter(|a| matches!(a.state.as_str(), "working" | "starting"))
             .count();
-        let attention_runs = ctx
-            .data
+        let attention_runs = d
             .runs
             .iter()
             .filter(|r| {
@@ -1756,89 +2809,171 @@ impl Panel {
                 )
             })
             .count();
-        let open_tasks = ctx
-            .data
-            .tasks
-            .iter()
-            .filter(|t| !matches!(t.status.state.as_str(), "done" | "completed" | "archived"))
-            .count();
-        let (subtasks_done, subtasks_total) =
-            ctx.data
-                .tasks
-                .iter()
-                .fold((0usize, 0usize), |(done, total), task| {
-                    let task_total = task.status.subtasks.len();
-                    let task_done = task
-                        .status
-                        .subtasks
-                        .iter()
-                        .filter(|subtask| matches!(subtask.state.as_str(), "done" | "completed"))
-                        .count();
-                    (done + task_done, total + task_total)
-                });
-        let progress_label = if subtasks_total == 0 {
-            "No subtasks tracked yet".to_owned()
-        } else {
-            format!("{subtasks_done}/{subtasks_total} subtasks complete")
-        };
-
-        let blocked: Vec<_> = ctx
-            .data
+        let is_done = |s: &str| matches!(s, "done" | "completed" | "archived");
+        let open_tasks = d.tasks.iter().filter(|t| !is_done(&t.status.state)).count();
+        let blocked: Vec<_> = d
             .agents
             .iter()
             .filter(|a| a.state == "blocked" || !a.notice.is_empty())
             .collect();
-        let attention_total = blocked.len() + attention_runs;
+        let idle: Vec<_> = d.agents.iter().filter(|a| a.state == "idle").collect();
+        let needs_total = d.gates.len() + blocked.len() + attention_runs;
+        // each number is a link to the view it counts
+        let link = |cell: Element<'a, Message>, tab: Tab| -> Element<'a, Message> {
+            button(cell)
+                .width(Length::FillPortion(1))
+                .padding(0)
+                .style(|_, status| button::Style {
+                    background: msg_hot(status).then_some(Background::Color(theme::SELECTED)),
+                    text_color: FG,
+                    ..button::Style::default()
+                })
+                .on_press(Message::Panel(PanelMsg::Tab(tab)))
+                .into()
+        };
+        // the agents' states as one segment per agent
+        let agent_bar: Element<'a, Message> = {
+            let mut seg = row![].spacing(2);
+            for a in &d.agents {
+                let c = status_color(agent_status(&a.state));
+                seg = seg.push(container(text("")).width(Length::Fill).height(3).style(
+                    move |_| container::Style {
+                        background: Some(Background::Color(c)),
+                        ..container::Style::default()
+                    },
+                ));
+            }
+            container(seg).padding([0, 16]).into()
+        };
         let kpis = container(
             row![
-                kpi_cell(
-                    "RUNS",
-                    running.to_string(),
-                    ACCENT,
-                    Some("active now".into())
+                link(
+                    kpi_cell(
+                        "ACTIVE RUN",
+                        running.to_string(),
+                        ACCENT,
+                        Some(format!("{} finished", d.runs.len() - running))
+                    ),
+                    Tab::Runs
                 ),
-                kpi_cell(
-                    "AGENTS",
-                    ctx.data.agents.len().to_string(),
-                    theme::HI,
-                    Some(format!(
-                        "{active_agents} working · {} blocked",
-                        blocked.len()
-                    ))
+                link(
+                    column![
+                        kpi_cell(
+                            "AGENTS",
+                            d.agents.len().to_string(),
+                            theme::HI,
+                            Some(format!(
+                                "{active_agents} working, {} idle, {} blocked",
+                                idle.len(),
+                                blocked.len()
+                            ))
+                        ),
+                        agent_bar
+                    ]
+                    .into(),
+                    Tab::Agents
                 ),
-                kpi_cell("TASKS", open_tasks.to_string(), WARN, Some("open".into())),
-                kpi_cell(
-                    "PATTERNS",
-                    ctx.data.patterns.len().to_string(),
-                    theme::HI,
-                    Some("available".into())
+                link(
+                    kpi_cell(
+                        "OPEN TASKS",
+                        open_tasks.to_string(),
+                        WARN,
+                        Some(if d.gates.is_empty() {
+                            "nothing waits for you".to_owned()
+                        } else {
+                            format!("{} waits for you", d.gates.len())
+                        })
+                    ),
+                    Tab::Tasks
+                ),
+                link(
+                    kpi_cell(
+                        "PATTERNS",
+                        d.patterns.len().to_string(),
+                        theme::HI,
+                        Some("ready to run".into())
+                    ),
+                    Tab::Patterns
                 ),
             ]
             .spacing(1),
         )
         .style(kpi_strip_style);
 
-        let attention_card = {
-            let right = if attention_total > 0 {
-                badge(format!("{} BLOCKED", blocked.len()), WARN)
+        let pulse = {
+            let hot = needs_total > 0;
+            let message: Element<'a, Message> = if hot {
+                text(format!("{needs_total} need you"))
+                    .size(12)
+                    .color(WARN)
+                    .into()
             } else {
-                badge("ALL CLEAR", OK)
+                text(format!("{active_agents} agents working"))
+                    .size(12)
+                    .color(ACCENT)
+                    .into()
             };
-            let mut body = column![].spacing(6);
+            container(iced::widget::stack![
+                Canvas::new(Prism {
+                    preset: Preset::pulse(hot),
+                    frame: ctx.frame,
+                })
+                .width(Length::Fill)
+                .height(Length::Fill),
+                container(
+                    container(
+                        column![theme::label("HERD PULSE"), message].align_x(iced::Alignment::End)
+                    )
+                    .padding([6, 10])
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(Color::from_rgba8(7, 7, 10, 0.8))),
+                        border: iced::Border {
+                            radius: 4.0.into(),
+                            ..iced::Border::default()
+                        },
+                        ..container::Style::default()
+                    }),
+                )
+                .align_right(Length::Fill)
+                .align_bottom(Length::Fill)
+                .padding([0, 16]),
+            ])
+            .height(90)
+            .width(Length::Fill)
+            .style(|_| container::Style {
+                border: iced::Border {
+                    color: LINE,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..container::Style::default()
+            })
+        };
+
+        // Needs you: gates first, then blocked agents and stalled runs, then idle agents
+        let needs_card = {
+            let right: Element<'a, Message> = text("Nothing is pushed until you approve it")
+                .size(11)
+                .color(DIM)
+                .into();
+            let mut body = column![].spacing(10);
+            for g in &d.gates {
+                body = body.push(self.gate_card(ctx, g));
+            }
             for a in &blocked {
                 body = body.push(
                     row![
                         agent_square(agent_status(&a.state)),
                         text(a.id.clone()).size(13),
                         text(if a.notice.is_empty() {
-                            a.state.clone()
+                            "is blocked".to_owned()
                         } else {
                             a.notice.clone()
                         })
                         .size(11)
-                        .color(DIM),
-                        container(text("")).width(Length::Fill),
-                        btn_link("Open →", PanelMsg::SelectAgent(a.id.clone())),
+                        .color(DIM)
+                        .width(Length::Fill),
+                        btn("Open", PanelMsg::SelectAgent(a.id.clone())),
                     ]
                     .spacing(10)
                     .align_y(iced::Alignment::Center),
@@ -1851,169 +2986,263 @@ impl Panel {
                         .color(WARN),
                 );
             }
-            if attention_total == 0 {
+            if !idle.is_empty() {
                 body = body.push(
-                    text("Nothing blocked. The flock keeps moving on its own.")
+                    row![
+                        text(format!(
+                            "{} agent(s) idle: {}",
+                            idle.len(),
+                            idle.iter()
+                                .map(|a| a.id.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ))
+                        .size(12)
+                        .color(DIM)
+                        .width(Length::Fill),
+                        btn("Resume idle agents", PanelMsg::ResumeAgents),
+                    ]
+                    .spacing(10)
+                    .align_y(iced::Alignment::Center),
+                );
+            }
+            if needs_total == 0 && idle.is_empty() {
+                body = body.push(
+                    text("All clear. The flock keeps moving on its own.")
                         .size(13)
                         .color(DIM),
                 );
             }
-            card("NEEDS ATTENTION", Some(right), body.into())
+            let count: Element<'a, Message> = if needs_total > 0 {
+                row![badge(needs_total, WARN), right].spacing(12).into()
+            } else {
+                badge("ALL CLEAR", OK)
+            };
+            card("NEEDS YOU", Some(count), body.into())
         };
-        let recent_card = {
-            let mut body = column![].spacing(10);
-            for run in ctx.data.runs.iter().take(5) {
-                let (state, color) = state_badge(run.run.state);
+
+        // Tasks: each with a segment per subtask coloured by its state
+        let tasks_card = {
+            let done_n = d.tasks.iter().filter(|t| is_done(&t.status.state)).count();
+            let mut body = column![].spacing(12);
+            for t in d.tasks.iter().take(5) {
+                let subs = &t.status.subtasks;
+                let mut seg = row![].spacing(3);
+                let n = subs.len().max(1);
+                for i in 0..n {
+                    let color = match subs.get(i).map(|s| s.state.as_str()) {
+                        Some("done" | "completed") => OK,
+                        Some("awaiting-approval") => WARN,
+                        Some("in_progress" | "in-progress" | "working" | "review") => ACCENT,
+                        Some(_) => theme::LINE2,
+                        None if is_done(&t.status.state) => OK,
+                        None => theme::LINE2,
+                    };
+                    seg = seg.push(container(text("")).width(Length::Fill).height(4).style(
+                        move |_| container::Style {
+                            background: Some(Background::Color(color)),
+                            ..container::Style::default()
+                        },
+                    ));
+                }
+                let waiting = subs
+                    .iter()
+                    .filter(|s| s.state == "awaiting-approval")
+                    .count();
+                let caption = if subs.is_empty() {
+                    if is_done(&t.status.state) {
+                        "Done".to_owned()
+                    } else {
+                        format!("Not started, {} acceptance criteria", t.criteria.len())
+                    }
+                } else if waiting > 0 {
+                    format!("{} subtasks, {waiting} waits for your approval", subs.len())
+                } else {
+                    format!(
+                        "{} of {} subtasks done",
+                        subs.iter()
+                            .filter(|s| matches!(s.state.as_str(), "done" | "completed"))
+                            .count(),
+                        subs.len()
+                    )
+                };
                 body = body.push(
                     button(
                         column![
                             row![
-                                text(run.run.pattern.clone()).size(13).color(theme::HI),
-                                text(run.run.id.trim_start_matches("run-").to_owned())
-                                    .size(12)
-                                    .color(DIM),
-                                container(text("")).width(Length::Fill),
-                                text(state).size(12).color(color),
-                            ]
-                            .spacing(10),
-                            text(format!(
-                                "created {} · {} agents · topics {}",
-                                run.run.created_at,
-                                run.run.agents.len(),
-                                run.run
-                                    .topics
-                                    .iter()
-                                    .map(|t| format!("#{t}"))
-                                    .collect::<Vec<_>>()
-                                    .join(" ")
-                            ))
-                            .size(11)
-                            .color(DIM),
+                                text(format!("#{} {}", t.status.id, t.status.title))
+                                    .font(theme::MONO_BOLD)
+                                    .size(12.5)
+                                    .color(theme::HI)
+                                    .width(Length::Fill),
+                                text(t.status.state.clone())
+                                    .size(11)
+                                    .color(task_state_color(&t.status.state)),
+                            ],
+                            seg,
+                            text(caption).size(11).color(DIM),
                         ]
-                        .spacing(4),
+                        .spacing(6),
                     )
                     .width(Length::Fill)
-                    .padding([4, 6])
+                    .padding([6, 4])
                     .style(item_style(false))
-                    .on_press(Message::Panel(PanelMsg::SelectRun(run.run.id.clone()))),
+                    .on_press(Message::Panel(PanelMsg::SelectTask(t.status.id))),
                 );
             }
-            if ctx.data.runs.is_empty() {
-                body = body.push(text("No runs yet.").size(13).color(DIM));
+            if d.tasks.is_empty() {
+                body = body.push(
+                    column![
+                        text("No tasks yet").size(13).color(theme::HI),
+                        text("A task says what to build; a run gives it to a team.")
+                            .size(12)
+                            .color(DIM),
+                        btn_primary("+ New task", PanelMsg::TaskNew),
+                    ]
+                    .spacing(8),
+                );
             }
-            card("RECENT RUNS", None, body.into())
+            let right: Element<'a, Message> = row![
+                text(format!("{done_n} of {} done", d.tasks.len()))
+                    .size(11)
+                    .color(DIM),
+                btn_link("Open tasks", PanelMsg::Tab(Tab::Tasks)),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center)
+            .into();
+            card("TASKS", Some(right), body.into())
         };
 
-        let pulse = {
-            let needs_you = !blocked.is_empty() || attention_runs > 0;
-            let message: Element<'a, Message> = if needs_you {
-                text(format!("{} agents need you", blocked.len()))
-                    .size(12)
-                    .color(WARN)
-                    .into()
-            } else {
-                text(format!("{active_agents} agents working"))
-                    .size(12)
-                    .color(ACCENT)
-                    .into()
+        // Active work: task -> run -> agents -> branches -> publish, one line per running run
+        let work_card = {
+            let col_head =
+                |s: &'static str, w: f32| container(text(s).size(11).color(DIM)).width(w);
+            let chip = |label: String, color: Color| {
+                container(text(label).size(12).color(FG))
+                    .padding([5, 10])
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(theme::SURFACE)),
+                        border: iced::Border {
+                            color,
+                            width: 1.0,
+                            radius: 5.0.into(),
+                        },
+                        ..container::Style::default()
+                    })
             };
-            container(iced::widget::stack![
-                Canvas::new(Prism {
-                    preset: Preset::pulse(needs_you),
-                    frame: ctx.frame,
-                })
-                .width(Length::Fill)
-                .height(Length::Fill),
-                container(
-                    container(
-                        column![theme::label("HERD PULSE"), message].align_x(iced::Alignment::End)
-                    )
-                    .padding([6, 10])
-                    .style(|_| iced::widget::container::Style {
-                        background: Some(Background::Color(Color::from_rgba8(7, 7, 10, 0.8))),
-                        border: iced::Border {
-                            radius: 4.0.into(),
-                            ..iced::Border::default()
-                        },
-                        ..iced::widget::container::Style::default()
-                    }),
-                )
-                .align_right(Length::Fill)
-                .align_bottom(Length::Fill)
-                .padding([0, 16]),
-            ])
-            .height(120)
-            .width(Length::Fill)
-            .style(|_| iced::widget::container::Style {
-                border: iced::Border {
-                    color: LINE,
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                ..iced::widget::container::Style::default()
-            })
-        };
-        let segments = subtasks_total.clamp(6, 24);
-        let mut seg = row![].spacing(4);
-        for i in 0..segments {
-            let done = i < subtasks_done;
-            seg = seg.push(
-                container(text(""))
-                    .width(Length::Fill)
-                    .height(10)
-                    .style(move |_| iced::widget::container::Style {
-                        background: Some(Background::Color(if done { OK } else { theme::LINE2 })),
-                        border: iced::Border {
-                            radius: 2.0.into(),
-                            ..iced::Border::default()
-                        },
-                        ..iced::widget::container::Style::default()
-                    }),
-            );
-        }
-        let progress_card = container(
-            column![
-                row![
-                    text("Task progress").size(13).color(theme::HI),
-                    text(progress_label.clone()).size(12).color(DIM),
-                ]
-                .spacing(10),
-                seg
+            let mut body = column![row![
+                col_head("Task", 130.0),
+                col_head("Run", 150.0),
+                col_head("Agents", 160.0),
+                col_head("Branches", 150.0),
+                col_head("Publish", 140.0),
             ]
-            .spacing(10),
-        )
-        .padding([12, 14])
-        .width(Length::Fill)
-        .style(card_style);
+            .spacing(8)]
+            .spacing(10);
+            let mut any = false;
+            for r in d.runs.iter().filter(|r| {
+                matches!(
+                    r.run.state,
+                    PatternRunState::Running
+                        | PatternRunState::Paused
+                        | PatternRunState::Stalled
+                        | PatternRunState::Degraded
+                )
+            }) {
+                any = true;
+                let task_id = task_of_run(&r.run.task);
+                let task_label = task_id
+                    .and_then(|id| d.task(id))
+                    .map(|t| format!("#{} {}", t.status.id, t.status.title))
+                    .unwrap_or_else(|| "no task".to_owned());
+                let agents: Vec<_> = d
+                    .agents
+                    .iter()
+                    .filter(|a| r.run.agents.iter().any(|ra| ra.id == a.id))
+                    .collect();
+                let mut agent_col = column![].spacing(4);
+                let mut branch_col = column![].spacing(4);
+                for a in &agents {
+                    let c = status_color(agent_status(&a.state));
+                    agent_col = agent_col.push(
+                        row![
+                            text(a.id.clone()).size(12).color(FG),
+                            text(a.state.clone()).size(11).color(c),
+                        ]
+                        .spacing(8),
+                    );
+                    branch_col = branch_col.push(
+                        text(if a.branch.is_empty() {
+                            "main".to_owned()
+                        } else {
+                            a.branch.clone()
+                        })
+                        .size(12)
+                        .color(DIM),
+                    );
+                }
+                let publish = match d.gates.iter().find(|g| Some(g.task_id) == task_id) {
+                    Some(_) => chip("awaiting-approval".to_owned(), WARN),
+                    None => chip("no publish step".to_owned(), theme::LINE2),
+                };
+                body = body.push(
+                    row![
+                        container(chip(task_label, theme::LINE2)).width(130),
+                        container(
+                            button(column![
+                                text(r.run.id.clone()).size(12).color(ACCENT),
+                                text(r.run.kind.clone()).size(11).color(DIM),
+                            ])
+                            .padding([5, 10])
+                            .style(item_style(false))
+                            .on_press(Message::Panel(PanelMsg::SelectRun(r.run.id.clone())))
+                        )
+                        .width(150),
+                        container(agent_col).width(160),
+                        container(branch_col).width(150),
+                        container(publish).width(140),
+                    ]
+                    .spacing(8)
+                    .align_y(iced::Alignment::Center),
+                );
+            }
+            if !any {
+                body = body.push(
+                    column![
+                        text("No run is working").size(13).color(theme::HI),
+                        text("A run is a team of agents working on one task with a pattern.")
+                            .size(12)
+                            .color(DIM),
+                        btn_primary("Run a pattern", PanelMsg::OpenLauncher(None)),
+                    ]
+                    .spacing(8),
+                );
+            }
+            card(
+                "ACTIVE WORK",
+                Some(
+                    text("How each running task reaches its agents, branches and pull requests")
+                        .size(11)
+                        .color(DIM)
+                        .into(),
+                ),
+                body.into(),
+            )
+        };
 
         column![
-            kpis,
-            scrollable(
-                column![
-                    row![
-                        text("Overview").size(26).color(theme::HI),
-                        badge("LIVE WORKSPACE", ACCENT),
-                        text(ctx.data.root.display().to_string())
-                            .size(13)
-                            .color(DIM),
-                    ]
-                    .spacing(10)
-                    .align_y(iced::Alignment::Center),
-                    pulse,
-                    row![attention_card, recent_card].spacing(16),
-                    progress_card,
-                    row![
-                        btn_primary("Run a pattern", PanelMsg::OpenLauncher(None)),
-                        btn("Manage agents", PanelMsg::Tab(Tab::Agents)),
-                        btn_ghost("Open patterns", PanelMsg::Tab(Tab::Patterns)),
-                    ]
-                    .spacing(10),
-                ]
-                .spacing(16)
-                .padding([22, 24]),
-            )
-            .height(Length::Fill),
+            // one card: the four numbers, each a link, and the herd pulse under them
+            card("AT A GLANCE", None, column![kpis, pulse].spacing(12).into()),
+            row![
+                container(needs_card).width(Length::FillPortion(155)),
+                container(tasks_card).width(Length::FillPortion(100))
+            ]
+            .spacing(20),
+            work_card,
+            self.recent_runs_table(ctx),
         ]
+        .spacing(20)
         .into()
     }
 
@@ -2057,12 +3286,12 @@ impl Panel {
             row![
                 button(container(text("Run pattern").size(13)).center_y(Length::Fill))
                     .padding([0, 16])
-                    .height(34)
+                    .height(32)
                     .style(primary_button_style())
                     .on_press(Message::Panel(PanelMsg::Launch)),
                 button(container(text("Cancel").size(13)).center_y(Length::Fill))
                     .padding([0, 14])
-                    .height(34)
+                    .height(32)
                     .style(theme::outline_button_style(false))
                     .on_press(Message::Panel(PanelMsg::CloseLauncher)),
             ]
@@ -2087,7 +3316,7 @@ impl Panel {
                         .color(DIM),
                     button(container(text("Run a pattern").size(13)).center_y(Length::Fill))
                         .padding([0, 12])
-                        .height(34)
+                        .height(32)
                         .style(primary_button_style())
                         .on_press(Message::Panel(PanelMsg::OpenLauncher(None))),
                 ]
@@ -2103,7 +3332,11 @@ impl Panel {
             run.state,
             PatternRunState::Running | PatternRunState::Stalled | PatternRunState::Degraded
         );
-        let mut controls = row![].spacing(8);
+        // order of the spec: Communication, Pause or Resume, a divider, then the dangerous ones
+        let linked_task = task_of_run(&run.task);
+        let mut controls = row![btn("Communication", PanelMsg::ShowMonitor(run.id.clone()))]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
         if live {
             controls = controls.push(btn(
                 "Pause",
@@ -2116,46 +3349,50 @@ impl Panel {
                 PanelMsg::Control(run.id.clone(), RunControl::Resume),
             ));
         }
+        controls =
+            controls.push(
+                container(text(""))
+                    .width(1)
+                    .height(22)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(theme::LINE2)),
+                        ..container::Style::default()
+                    }),
+            );
         if live || run.state == PatternRunState::Paused {
-            let armed = self.armed == Some(Armed::StopRun(run.id.clone()));
             controls = controls.push(self.arm_button(
                 Armed::StopRun(run.id.clone()),
                 "Stop",
-                if armed {
-                    "Confirm: stop and close agents"
-                } else {
-                    "Stop"
-                },
+                format!("Confirm: stop and close {} agents", r.live_agents),
             ));
+            if let Some(t) = linked_task.and_then(|id| ctx.data.task(id)) {
+                if has_run(&t.status.state) {
+                    controls = controls.push(self.arm_button(
+                        Armed::CancelRun(t.status.id),
+                        "Cancel task's run",
+                        format!("Confirm: cancel task #{}'s run", t.status.id),
+                    ));
+                }
+            }
         }
-        controls = controls.push(btn("Communication", PanelMsg::ShowMonitor(run.id.clone())));
         controls = controls.push(self.arm_button(
             Armed::DeleteRun(run.id.clone()),
             "Delete run",
-            if live || run.state == PatternRunState::Paused {
-                "Confirm: stop its agents and delete"
-            } else {
-                "Confirm: delete this run"
-            },
+            format!("Confirm: delete {}", run.id),
         ));
-        let mut col = column![
-            row![
-                text(format!("RUN: {}", run.pattern))
-                    .size(18)
-                    .color(theme::HI),
-                text(run.id.clone()).size(13).color(DIM),
-                badge(label.to_uppercase(), color),
-            ]
-            .spacing(10)
-            .align_y(iced::Alignment::Center),
-            text(format!(
-                "Topology {} · created {} · updated {}",
-                run.kind, run.created_at, run.updated_at
-            ))
-            .size(12)
-            .color(DIM),
-            controls,
-        ]
+        let mut col = column![detail_header(
+            text(run.pattern.clone())
+                .font(theme::MONO_BOLD)
+                .size(18)
+                .color(theme::HI)
+                .into(),
+            badge(label, color),
+            controls.into(),
+            format!(
+                "{}   topology {}   started {}   updated {}",
+                run.id, run.kind, run.created_at, run.updated_at
+            ),
+        )]
         .spacing(14);
         if let Some(reason) = run.stalled_reason.as_deref() {
             col = col.push(alert(
@@ -2172,6 +3409,16 @@ impl Panel {
                 BAD,
             ));
         }
+        for g in ctx
+            .data
+            .gates
+            .iter()
+            .filter(|g| Some(g.task_id) == linked_task)
+        {
+            col = col.push(self.gate_card(ctx, g));
+        }
+        col = col.push(self.run_chain(ctx, r));
+        col = col.push(self.topology_card(ctx, r));
         let mut objective = column![text(if run.task.is_empty() {
             "No objective.".to_owned()
         } else {
@@ -2195,7 +3442,31 @@ impl Panel {
                 PanelMsg::SelectTask(task),
             )
         });
-        col = col.push(card("OBJECTIVE", linked, objective.into()));
+        if let Some(t) = linked_task.and_then(|id| ctx.data.task(id)) {
+            for s in &t.status.subtasks {
+                let who = if s.coder.is_empty() {
+                    "queued".to_owned()
+                } else {
+                    s.coder.clone()
+                };
+                let c = match s.state.as_str() {
+                    "awaiting-approval" => WARN,
+                    "done" | "completed" => OK,
+                    "in_progress" | "in-progress" | "working" => ACCENT,
+                    _ => DIM,
+                };
+                objective = objective.push(
+                    row![
+                        text(s.number.to_string()).size(11).color(DIM).width(16),
+                        text(s.title.clone()).size(12).width(Length::Fill),
+                        text(who).size(11).color(DIM),
+                        text(s.state.clone()).size(11).color(c),
+                    ]
+                    .spacing(8),
+                );
+            }
+        }
+        let objective_card = card("OBJECTIVE", linked, objective.into());
         let mut agents = column![].spacing(6);
         for a in &run.agents {
             let status = agent_status(&a.state);
@@ -2217,8 +3488,177 @@ impl Panel {
                 .align_y(iced::Alignment::Center),
             );
         }
-        col = col.push(card("AGENTS", None, agents.into()));
-        container(col).max_width(980).into()
+        col = col.push(
+            row![
+                container(objective_card).width(Length::Fill),
+                container(card("AGENTS", None, agents.into())).width(Length::Fill),
+            ]
+            .spacing(14),
+        );
+        col.into()
+    }
+
+    /// The pills that follow one piece of work: task > run > agents > branches > publish.
+    fn run_chain<'a>(
+        &'a self,
+        ctx: &Ctx<'a>,
+        r: &'a shepherd_app_core::data::RunRow,
+    ) -> Element<'a, Message> {
+        let d = ctx.data;
+        let task_id = task_of_run(&r.run.task);
+        let agents: Vec<_> = d
+            .agents
+            .iter()
+            .filter(|a| r.run.agents.iter().any(|ra| ra.id == a.id))
+            .collect();
+        let mut branches: Vec<String> = vec![];
+        for a in &agents {
+            let b = if a.branch.is_empty() {
+                "main".to_owned()
+            } else {
+                a.branch.clone()
+            };
+            if !branches.contains(&b) {
+                branches.push(b);
+            }
+        }
+        let waits = d.gates.iter().any(|g| Some(g.task_id) == task_id);
+        let pill = |key: &'static str, value: String, color: Color, msg: Option<PanelMsg>| {
+            let body = row![
+                text(key).size(11).color(DIM),
+                text(value)
+                    .size(12)
+                    .color(color)
+                    .wrapping(iced::widget::text::Wrapping::None),
+            ]
+            .spacing(8);
+            let b = button(body).padding([4, 12]).style(move |_, status| {
+                let hot = msg_hot(status);
+                button::Style {
+                    background: hot.then_some(Background::Color(theme::SURFACE)),
+                    text_color: FG,
+                    border: iced::Border {
+                        color: if color == ACCENT {
+                            ACCENT
+                        } else {
+                            theme::LINE2
+                        },
+                        width: 1.0,
+                        radius: 14.0.into(),
+                    },
+                    ..button::Style::default()
+                }
+            });
+            match msg {
+                Some(m) => b.on_press(Message::Panel(m)),
+                None => b,
+            }
+        };
+        let arrow = || text("›").size(14).color(DIM);
+        let mut r_ = row![].spacing(8).align_y(iced::Alignment::Center);
+        if let Some(id) = task_id {
+            let title = d
+                .task(id)
+                .map(|t| t.status.title.clone())
+                .unwrap_or_default();
+            r_ = r_
+                .push(pill(
+                    "task",
+                    format!("#{id} {title}"),
+                    FG,
+                    Some(PanelMsg::SelectTask(id)),
+                ))
+                .push(arrow());
+        }
+        r_ = r_
+            .push(pill("run", r.run.id.clone(), ACCENT, None))
+            .push(arrow())
+            .push(pill(
+                "agents",
+                agents.len().max(r.run.agents.len()).to_string(),
+                FG,
+                Some(PanelMsg::Tab(Tab::Agents)),
+            ))
+            .push(arrow())
+            .push(pill(
+                "branches",
+                // a count keeps the row short; the names are in the Git view
+                branches.len().to_string(),
+                FG,
+                Some(PanelMsg::Tab(Tab::Git)),
+            ))
+            .push(arrow())
+            .push(pill(
+                "publish",
+                if waits {
+                    "waits for you".to_owned()
+                } else {
+                    "no publish step".to_owned()
+                },
+                if waits { WARN } else { DIM },
+                None,
+            ));
+        // the row never wraps: in a narrow detail it scrolls with the rest
+        r_.into()
+    }
+
+    /// `Live topology`: who publishes to which topic and who reads it.
+    fn topology_card<'a>(
+        &'a self,
+        ctx: &Ctx<'a>,
+        r: &'a shepherd_app_core::data::RunRow,
+    ) -> Element<'a, Message> {
+        let legend = |color: Color, name: &'static str| {
+            row![
+                text("■").size(10).color(color),
+                text(name).size(11).color(DIM)
+            ]
+            .spacing(4)
+        };
+        let right: Element<'a, Message> = row![
+            legend(ACCENT, "working"),
+            legend(theme::IDLE, "idle"),
+            legend(WARN, "blocked"),
+            legend(theme::VIOLET, "topic"),
+        ]
+        .spacing(12)
+        .into();
+        let body: Element<'a, Message> = match &self.run_graph {
+            Some((_, graph)) if !graph.nodes.is_empty() => {
+                let agents = r
+                    .run
+                    .agents
+                    .iter()
+                    .map(|a| {
+                        let live = ctx.data.agents.iter().find(|x| x.id == a.id);
+                        let state = live.map_or(a.state.as_str(), |x| x.state.as_str());
+                        let color = status_color(agent_status(state));
+                        let word = if state == "blocked" {
+                            "needs you"
+                        } else {
+                            state
+                        };
+                        (a.id.clone(), a.role.clone(), color, word.to_owned())
+                    })
+                    .collect();
+                Canvas::new(crate::graph_view::TopologyView {
+                    graph,
+                    agents,
+                    live: matches!(r.run.state, PatternRunState::Running),
+                    frame: ctx.frame,
+                })
+                .width(Length::Fill)
+                .height(graph.height + 40.0)
+                .into()
+            }
+            _ => text(
+                "The pattern of this run could not be loaded, so there is no topology to draw.",
+            )
+            .size(12)
+            .color(DIM)
+            .into(),
+        };
+        card("LIVE TOPOLOGY", Some(right), body)
     }
 
     fn agents_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
@@ -2246,59 +3686,152 @@ impl Panel {
             .and_then(|id| ctx.data.agents.iter().find(|a| a.id == id))
             .or_else(|| ctx.data.agents.first())
             .map(|a| a.id.clone());
-        let items = ctx
+        let idle = ctx.data.agents.iter().filter(|a| a.state == "idle").count();
+        let chips = [
+            ("All", ctx.data.agents.len()),
+            ("Working", working),
+            ("Idle", idle),
+            ("Blocked", needs_you),
+            ("Done", finished),
+        ];
+        let items: Vec<Element<'a, Message>> = ctx
             .data
             .agents
             .iter()
+            .filter(|a| {
+                let chip_ok = match self.chip {
+                    1 => matches!(a.state.as_str(), "working" | "starting"),
+                    2 => a.state == "idle",
+                    3 => a.state == "blocked" || !a.notice.is_empty(),
+                    4 => matches!(a.state.as_str(), "done" | "exited" | "killed" | "failed"),
+                    _ => true,
+                };
+                chip_ok && self.passes(&format!("{} {} {} {}", a.id, a.role, a.vendor, a.model))
+            })
             .map(|a| {
                 let status = agent_status(&a.state);
                 let needs_you = a.state == "blocked" || !a.notice.is_empty();
+                let (state_word, state_color) = if needs_you {
+                    ("needs you", WARN)
+                } else {
+                    (a.state.as_str(), status_color(status))
+                };
+                let selected_card = selected.as_deref() == Some(a.id.as_str());
+                let empty = tail_is_empty(&self.outputs, &a.pane);
+                let tail: String = self
+                    .outputs
+                    .get(&a.pane)
+                    .map(|t| {
+                        let lines: Vec<&str> = t.lines().filter(|l| !l.trim().is_empty()).collect();
+                        let from = lines.len().saturating_sub(3);
+                        lines[from..]
+                            .iter()
+                            .map(|l| l.chars().take(46).collect::<String>())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                let output = container(
+                    text(if empty {
+                        "No output yet".to_owned()
+                    } else {
+                        tail
+                    })
+                    .size(11)
+                    .color(if empty { DIM } else { FG }),
+                )
+                .padding([8, 10])
+                .width(Length::Fill)
+                .height(64)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(theme::BG)),
+                    border: iced::Border {
+                        color: LINE,
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..container::Style::default()
+                });
                 let body = column![
                     row![
                         agent_square(status),
-                        text(a.id.clone()).size(13).color(theme::HI)
+                        column![
+                            text(a.id.clone())
+                                .font(theme::MONO_BOLD)
+                                .size(13)
+                                .color(theme::HI),
+                            text(format!("{}, {} {}", a.role, a.vendor, a.model))
+                                .size(11)
+                                .color(DIM),
+                        ]
+                        .spacing(1)
+                        .width(Length::Fill),
+                        container(text(state_word).size(10.5).color(state_color))
+                            .padding([1, 7])
+                            .style(move |_| container::Style {
+                                border: iced::Border {
+                                    color: state_color,
+                                    width: 1.0,
+                                    radius: 3.0.into(),
+                                },
+                                ..container::Style::default()
+                            }),
                     ]
-                    .spacing(8)
+                    .spacing(10)
                     .align_y(iced::Alignment::Center),
-                    text(format!(
-                        "{} · {} {} · {}",
-                        a.role, a.vendor, a.model, a.state
-                    ))
-                    .size(11)
-                    .color(if needs_you { WARN } else { DIM }),
+                    text(if a.task_text.is_empty() {
+                        "No task".to_owned()
+                    } else {
+                        a.task_text.chars().take(52).collect()
+                    })
+                    .size(12)
+                    .color(FG),
+                    output,
+                    row![
+                        text(if a.branch.is_empty() {
+                            "main".to_owned()
+                        } else {
+                            a.branch.clone()
+                        })
+                        .size(11)
+                        .color(DIM)
+                        .width(Length::Fill),
+                        text(if a.pane.is_empty() {
+                            String::new()
+                        } else {
+                            format!("pane {}", a.pane)
+                        })
+                        .size(11)
+                        .color(DIM),
+                    ],
                 ]
-                .spacing(1);
+                .spacing(8);
                 button(body)
-                    .width(Length::Fill)
-                    .padding([8, 10])
-                    .style(item_style(selected.as_deref() == Some(a.id.as_str())))
+                    .width(300)
+                    .height(Length::Shrink)
+                    .padding([12, 12])
+                    .style(move |_, status| {
+                        let hot = msg_hot(status);
+                        button::Style {
+                            background: Some(Background::Color(if selected_card || hot {
+                                theme::SELECTED
+                            } else {
+                                theme::SURFACE
+                            })),
+                            text_color: FG,
+                            border: iced::Border {
+                                color: if selected_card { ACCENT } else { LINE },
+                                width: 1.0,
+                                radius: 6.0.into(),
+                            },
+                            ..button::Style::default()
+                        }
+                    })
                     .on_press(Message::Panel(PanelMsg::SelectAgent(a.id.clone())))
                     .into()
             })
             .collect();
-        let footer = vec![
-            btn_link("+ New agent", PanelMsg::OpenSpawnAgent),
-            btn_ghost("Resume idle", PanelMsg::ResumeAgents),
-            self.arm_button(
-                Armed::CleanRuns,
-                "Clean finished",
-                "Confirm: delete finished",
-            ),
-        ];
-        let summary = container(
-            row![
-                agent_metric("TOTAL", ctx.data.agents.len(), FG),
-                agent_metric_spark("WORKING", working, ACCENT, ctx.frame),
-                agent_metric(
-                    "NEEDS YOU",
-                    needs_you,
-                    if needs_you > 0 { WARN } else { OK }
-                ),
-                agent_metric("FINISHED", finished, DIM),
-            ]
-            .spacing(1),
-        )
-        .style(kpi_strip_style);
+        let footer: Vec<Element<'a, Message>> = vec![];
         let detail: Element<'a, Message> = if self.spawning_agent {
             self.spawn_agent_view(ctx)
         } else {
@@ -2314,10 +3847,34 @@ impl Panel {
                 Some(a) => self.agent_detail(ctx, a),
             }
         };
-        column![
-            summary,
-            row![self.list(items, footer), self.detail(detail)].height(Length::Fill),
+        // cards on the left (two per row), the selected agent on the right
+        let grid = row(items).spacing(14).wrap().vertical_spacing(14);
+        let left = column![
+            crate::ui::filter_bar(
+                "Filter by name, role, vendor or task",
+                &self.filter,
+                &chips,
+                self.chip
+            ),
+            crate::theme::scroll(container(grid).padding([4, 12])).height(Length::Fill),
         ]
+        .width(Length::Fill);
+        let _ = footer;
+        column![row![
+            left,
+            container(text(""))
+                .width(1)
+                .height(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(LINE)),
+                    ..container::Style::default()
+                }),
+            container(self.detail(detail))
+                .width(460)
+                .height(Length::Fill)
+                .style(theme::inspector_style),
+        ]
+        .height(Length::Fill),]
         .spacing(8)
         .into()
     }
@@ -2342,7 +3899,7 @@ impl Panel {
         let action = |label: &'static str, msg: Message, primary: bool| -> Element<'a, Message> {
             button(container(text(label).size(13)).center_y(Length::Fill))
                 .padding([0, 12])
-                .height(34)
+                .height(32)
                 .style(if primary {
                     Box::new(primary_button_style())
                         as Box<dyn Fn(&iced::Theme, button::Status) -> button::Style>
@@ -2352,48 +3909,45 @@ impl Panel {
                 .on_press(msg)
                 .into()
         };
-        let mut actions = row![].spacing(8);
+        let mut actions = row![].spacing(8).align_y(iced::Alignment::Center);
         if !a.pane.is_empty() {
-            actions = actions.push(action("Terminal", Message::GoToPane(a.pane.clone()), true));
+            actions = actions.push(action(
+                "Open terminal",
+                Message::GoToPane(a.pane.clone()),
+                true,
+            ));
         }
         actions = actions.push(action(
-            "Focus agent",
+            "Focus",
             Message::Act(Action::FocusAgent(a.id.clone())),
             false,
         ));
-        if !a.workspace.is_empty() {
-            actions = actions.push(action(
-                "Workspace",
-                Message::Act(Action::FocusSpace(a.workspace.clone())),
-                false,
-            ));
-        }
         if !a.worktree.is_empty() || !a.branch.is_empty() {
-            actions = actions.push(btn("Git", PanelMsg::Tab(Tab::Git)));
+            actions = actions.push(btn("Worktree", PanelMsg::Tab(Tab::Git)));
         }
         if !["done", "exited", "killed", "failed"]
             .iter()
             .any(|s| a.state == *s)
         {
-            actions = actions.push(
-                button(container(text("Close agent").size(13)).center_y(Length::Fill))
-                    .padding([0, 12])
-                    .height(34)
-                    .style(danger_button_style())
-                    .on_press(Message::Panel(PanelMsg::KillAgent(a.id.clone()))),
-            );
+            actions = actions.push(container(text("")).width(Length::Fill));
+            actions = actions.push(self.arm_button(
+                Armed::CloseAgent(a.id.clone()),
+                "Close agent",
+                format!("Confirm: close {}", a.id),
+            ));
         }
+        let actions: Element<'a, Message> = container(actions).width(Length::Fill).into();
         let mut col = column![
             row![
                 text(a.id.clone()).size(18).color(theme::HI),
-                text(sub).size(12).color(DIM),
                 badge(a.state.to_uppercase(), status_color(status)),
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center),
+            text(sub).size(11.5).color(DIM),
             actions,
         ]
-        .spacing(14);
+        .spacing(10);
 
         // Live output: the latest messages of this agent (the terminal itself lives in its pane).
         let mut output = column![].spacing(6);
@@ -2624,12 +4178,12 @@ impl Panel {
             row![
                 button(container(text("Launch").size(13)).center_y(Length::Fill))
                     .padding([0, 16])
-                    .height(34)
+                    .height(32)
                     .style(primary_button_style())
                     .on_press(Message::Panel(PanelMsg::SpawnAgent)),
                 button(container(text("Cancel").size(13)).center_y(Length::Fill))
                     .padding([0, 14])
-                    .height(34)
+                    .height(32)
                     .style(theme::outline_button_style(false))
                     .on_press(Message::Panel(PanelMsg::CloseSpawnAgent)),
             ]
@@ -2639,232 +4193,452 @@ impl Panel {
         .into()
     }
 
-    fn tasks_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+    /// The board of Tasks: New, In run and Done share the width (at least 220 each), Cancelled is 128 wide.
+    fn tasks_board<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        let d = ctx.data;
         let is_done = |state: &str| matches!(state, "done" | "completed" | "archived");
-        let open = ctx
-            .data
-            .tasks
-            .iter()
-            .filter(|t| !is_done(&t.status.state))
-            .count();
-        let in_run = ctx
-            .data
-            .tasks
-            .iter()
-            .filter(|t| {
-                ctx.data
-                    .runs
-                    .iter()
-                    .any(|r| task_of_run(&r.run.task) == Some(t.status.id))
-            })
-            .count();
-        let (sub_done, sub_total) = ctx.data.tasks.iter().fold((0, 0), |(d, n), t| {
-            (
-                d + t
-                    .status
-                    .subtasks
-                    .iter()
-                    .filter(|s| matches!(s.state.as_str(), "done" | "completed"))
-                    .count(),
-                n + t.status.subtasks.len(),
-            )
-        });
-        let summary = container(
-            row![
-                kpi_cell("OPEN", open.to_string(), WARN, None),
-                kpi_cell("IN RUN", in_run.to_string(), ACCENT, None),
-                kpi_cell(
-                    "SUBTASKS DONE",
-                    format!("{sub_done}/{sub_total}"),
-                    theme::HI,
-                    None
-                ),
-                kpi_cell(
-                    "DONE",
-                    ctx.data
-                        .tasks
-                        .iter()
-                        .filter(|t| is_done(&t.status.state))
-                        .count()
-                        .to_string(),
-                    OK,
-                    None
-                ),
-            ]
-            .spacing(1),
-        )
-        .style(kpi_strip_style);
         let selected = self
             .task
-            .and_then(|id| ctx.data.task(id))
-            .or_else(|| ctx.data.tasks.first())
+            .and_then(|id| d.task(id))
+            .or_else(|| d.tasks.first())
             .map(|t| t.status.id);
-        let items = ctx
-            .data
-            .tasks
-            .iter()
-            .map(|t| {
-                let in_run = ctx
-                    .data
-                    .runs
-                    .iter()
-                    .find(|r| task_of_run(&r.run.task) == Some(t.status.id));
-                let body = column![
-                    text(format!("#{} {}", t.status.id, t.status.title))
-                        .size(13)
-                        .color(theme::HI),
-                    text(match in_run {
-                        Some(r) => format!("{} · run {}", t.status.state, r.run.pattern),
-                        None => t.status.state.clone(),
-                    })
-                    .size(11)
-                    .color(task_state_color(&t.status.state)),
-                ]
-                .spacing(1);
-                button(body)
-                    .width(Length::Fill)
-                    .padding([8, 10])
-                    .style(item_style(selected == Some(t.status.id)))
-                    .on_press(Message::Panel(PanelMsg::SelectTask(t.status.id)))
-                    .into()
-            })
-            .collect();
-        let footer = vec![
-            btn_link("+ Task", PanelMsg::TaskNew),
-            btn_link("Import issue", PanelMsg::ImportOpen),
-            self.arm_button(Armed::ArchiveDone, "Archive done", "Confirm: archive done"),
-        ];
-        let detail: Element<'a, Message> = match ctx
-            .data
-            .tasks
-            .iter()
-            .find(|t| Some(t.status.id) == selected)
-        {
-            None => text(format!("No tasks in {}.", ctx.data.root.display()))
-                .color(DIM)
-                .into(),
-            Some(t) => {
-                let runs: Vec<_> = ctx
-                    .data
-                    .runs
-                    .iter()
-                    .filter(|r| task_of_run(&r.run.task) == Some(t.status.id))
-                    .collect();
-                let state_color = task_state_color(&t.status.state);
-                let mut col = column![
+        let met = |t: &shepherd_app_core::data::TaskRow| {
+            t.criteria
+                .iter()
+                .filter(|c| c.trim_start().starts_with("- [x]"))
+                .count()
+        };
+        // one card per task: its subtasks as segments, how many criteria are met, what waits, its run
+        let card_of = |t: &'a shepherd_app_core::data::TaskRow| -> Element<'a, Message> {
+            let subs = &t.status.subtasks;
+            let sel = selected == Some(t.status.id);
+            let mut body = column![row![
+                text(format!("#{}", t.status.id)).size(11).color(DIM),
+                text(t.status.title.clone())
+                    .font(theme::MONO_BOLD)
+                    .size(13)
+                    .color(theme::HI),
+            ]
+            .spacing(8)]
+            .spacing(8);
+            if !subs.is_empty() {
+                let mut seg = row![].spacing(3);
+                for s in subs {
+                    let color = match s.state.as_str() {
+                        "done" | "completed" => OK,
+                        "awaiting-approval" => WARN,
+                        "in_progress" | "in-progress" | "working" | "review" => ACCENT,
+                        _ => theme::LINE2,
+                    };
+                    seg = seg.push(container(text("")).width(Length::Fill).height(3).style(
+                        move |_| container::Style {
+                            background: Some(Background::Color(color)),
+                            ..container::Style::default()
+                        },
+                    ));
+                }
+                body = body.push(seg);
+            }
+            let crit = format!("{} of {} criteria met", met(t), t.criteria.len());
+            body = body.push(
+                text(if subs.is_empty() {
+                    crit
+                } else {
+                    format!("{} subtasks, {crit}", subs.len())
+                })
+                .size(11)
+                .color(DIM),
+            );
+            let waiting = subs
+                .iter()
+                .filter(|s| s.state == "awaiting-approval")
+                .count();
+            if waiting > 0 {
+                body = body.push(
                     row![
-                        text(format!("Task #{} · {}", t.status.id, t.status.title))
-                            .size(18)
-                            .color(theme::HI),
-                        badge(t.status.state.to_uppercase(), state_color),
+                        text("■").size(9).color(WARN),
+                        text(format!("{waiting} subtask waits for you"))
+                            .size(11)
+                            .color(WARN)
                     ]
-                    .spacing(10)
-                    .align_y(iced::Alignment::Center),
-                    text(format!(
-                        "branch {}",
-                        if t.status.branch.is_empty() {
-                            "none"
+                    .spacing(6),
+                );
+            }
+            if let Some(r) = d
+                .runs
+                .iter()
+                .find(|r| task_of_run(&r.run.task) == Some(t.status.id))
+            {
+                body = body.push(text(format!("run {}", r.run.id)).size(11).color(ACCENT));
+            }
+            button(body)
+                .width(Length::Fill)
+                .padding([10, 12])
+                .style(move |_, status| {
+                    let hot = msg_hot(status);
+                    button::Style {
+                        background: Some(Background::Color(if sel || hot {
+                            theme::SELECTED
                         } else {
-                            &t.status.branch
-                        }
+                            theme::SURFACE
+                        })),
+                        text_color: FG,
+                        border: iced::Border {
+                            color: if sel { ACCENT } else { LINE },
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        },
+                        ..button::Style::default()
+                    }
+                })
+                .on_press(crate::ui::nav(
+                    sel,
+                    Message::Panel(PanelMsg::SelectTask(t.status.id)),
+                ))
+                .into()
+        };
+        let column_of = |title: &'static str,
+                         color: Color,
+                         tasks: Vec<&'a shepherd_app_core::data::TaskRow>,
+                         extra: Option<Element<'a, Message>>|
+         -> Element<'a, Message> {
+            let mut head = row![
+                text("■").size(10).color(color),
+                text(title)
+                    .font(theme::MONO_BOLD)
+                    .size(12.5)
+                    .color(theme::HI),
+                text(tasks.len().to_string()).size(11).color(DIM),
+                container(text("")).width(Length::Fill),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
+            if let Some(e) = extra {
+                head = head.push(e);
+            }
+            let mut cards = column![].spacing(8);
+            if tasks.is_empty() {
+                cards = cards.push(text("None.").size(12).color(DIM));
+            }
+            for t in tasks {
+                cards = cards.push(card_of(t));
+            }
+            container(column![head, crate::theme::scroll(cards).height(Length::Fill)].spacing(10))
+                .padding(12)
+                .width(if title == "Cancelled" {
+                    Length::Fixed(128.0)
+                } else {
+                    Length::FillPortion(1)
+                })
+                .height(Length::Fill)
+                .style(card_style)
+                .into()
+        };
+        let shown = |t: &&shepherd_app_core::data::TaskRow| {
+            self.passes(&format!("#{} {}", t.status.id, t.status.title))
+        };
+        let linked = |t: &&shepherd_app_core::data::TaskRow| {
+            d.runs
+                .iter()
+                .any(|r| task_of_run(&r.run.task) == Some(t.status.id))
+        };
+        let in_run = |t: &&shepherd_app_core::data::TaskRow| {
+            has_run(&t.status.state) || (t.status.state == "new" && linked(t))
+        };
+        let new_tasks: Vec<_> = d
+            .tasks
+            .iter()
+            .filter(|t| t.status.state == "new" && !linked(t))
+            .filter(shown)
+            .collect();
+        let running: Vec<_> = d
+            .tasks
+            .iter()
+            .filter(|t| in_run(t) && t.status.state != "cancelled")
+            .filter(shown)
+            .collect();
+        let done: Vec<_> = d
+            .tasks
+            .iter()
+            .filter(|t| is_done(&t.status.state))
+            .filter(shown)
+            .collect();
+        let cancelled: Vec<_> = d
+            .tasks
+            .iter()
+            .filter(|t| t.status.state == "cancelled")
+            .filter(shown)
+            .collect();
+        row![
+            column_of("New", theme::IDLE, new_tasks, None),
+            column_of("In run", ACCENT, running, None),
+            column_of(
+                "Done",
+                OK,
+                done,
+                Some(self.arm_button(Armed::ArchiveDone, "Archive", "Confirm: archive"))
+            ),
+            column_of("Cancelled", BAD, cancelled, None),
+        ]
+        .spacing(14)
+        .height(Length::Fixed(520.0))
+        .into()
+    }
+
+    fn tasks_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        let d = ctx.data;
+        let selected = self
+            .task
+            .and_then(|id| d.task(id))
+            .or_else(|| d.tasks.first())
+            .map(|t| t.status.id);
+        let met = |t: &shepherd_app_core::data::TaskRow| {
+            t.criteria
+                .iter()
+                .filter(|c| c.trim_start().starts_with("- [x]"))
+                .count()
+        };
+        let board = crate::ui::flex(762.0, [16.0, 28.0], {
+            let (this, ctx) = (self, ctx.clone());
+            move || this.tasks_board(&ctx)
+        });
+        let detail: Element<'a, Message> =
+            match d.tasks.iter().find(|t| Some(t.status.id) == selected) {
+                None => column![
+                    text("No task selected").size(13).color(theme::HI),
+                    text(format!(
+                        "Tasks of {} show up on the board.",
+                        d.root.display()
                     ))
                     .size(12)
                     .color(DIM),
+                    btn_primary("+ New task", PanelMsg::TaskNew),
                 ]
-                .spacing(14);
-                if !t.description.is_empty() {
-                    col = col.push(text(t.description.clone()).size(13));
-                }
-                if !t.criteria.is_empty() {
-                    let mut rows = column![].spacing(8);
-                    for c in &t.criteria {
-                        let text_of = c
-                            .trim_start_matches("- [ ] ")
-                            .trim_start_matches("- [x] ")
-                            .trim_start_matches("- ")
-                            .to_owned();
-                        rows = rows.push(
-                            row![
-                                container(text("")).width(18).height(18).style(|_| {
-                                    iced::widget::container::Style {
-                                        border: iced::Border {
-                                            color: theme::LINE2,
-                                            width: 1.0,
-                                            radius: 3.0.into(),
-                                        },
-                                        ..iced::widget::container::Style::default()
-                                    }
-                                }),
-                                text(text_of).size(13).width(Length::Fill),
-                            ]
-                            .spacing(10),
-                        );
+                .spacing(8)
+                .into(),
+                Some(t) => {
+                    let runs: Vec<_> = d
+                        .runs
+                        .iter()
+                        .filter(|r| task_of_run(&r.run.task) == Some(t.status.id))
+                        .collect();
+                    let state_color = task_state_color(&t.status.state);
+                    let mut col = column![].spacing(14);
+                    let mut actions = row![].spacing(8).align_y(iced::Alignment::Center);
+                    match runs.first() {
+                        Some(r) => {
+                            actions = actions.push(btn_primary(
+                                "Open run",
+                                PanelMsg::SelectRun(r.run.id.clone()),
+                            ))
+                        }
+                        None => {
+                            actions = actions.push(btn_primary(
+                                "Run with an agent",
+                                PanelMsg::RunTaskWithAgent(t.status.id),
+                            ))
+                        }
                     }
-                    col = col.push(card("ACCEPTANCE CRITERIA", None, rows.into()));
-                }
-                if !t.status.subtasks.is_empty() {
-                    let mut rows = column![].spacing(6);
-                    for subtask in &t.status.subtasks {
-                        let state = subtask.state.as_str();
-                        let note = subtask
-                            .note
-                            .as_deref()
-                            .filter(|note| !note.is_empty())
-                            .map(|note| format!(" · {note}"))
-                            .unwrap_or_default();
-                        rows = rows.push(
+                    if !runs.is_empty() {
+                        actions = actions.push(btn(
+                            "Run with an agent",
+                            PanelMsg::RunTaskWithAgent(t.status.id),
+                        ));
+                    }
+                    actions = actions
+                        .push(btn(
+                            "Run with a pattern",
+                            PanelMsg::OpenLauncher(Some(t.status.id)),
+                        ))
+                        .push(btn("Edit", PanelMsg::TaskEditOpen(t.status.id)));
+                    if has_run(&t.status.state) {
+                        actions = actions.push(self.arm_button(
+                            Armed::CancelRun(t.status.id),
+                            "Cancel run",
+                            "Confirm: cancel the run",
+                        ));
+                    }
+                    actions = actions.push(self.arm_button(
+                        Armed::DeleteTask(t.status.id),
+                        "Delete",
+                        "Confirm: delete for good",
+                    ));
+                    // the drawer is fixed (it only scrolls vertically): its action bar wraps instead
+                    col = col.push(
+                        column![
                             row![
-                                agent_square(agent_status(state)),
-                                text(subtask.title.clone()).size(13).color(theme::HI),
-                                text(format!("{state}{note}")).size(11).color(DIM),
+                                text(t.status.title.clone())
+                                    .font(theme::MONO_BOLD)
+                                    .size(18)
+                                    .color(theme::HI),
+                                badge(t.status.state.clone(), state_color),
                             ]
                             .spacing(10)
                             .align_y(iced::Alignment::Center),
+                            text(format!(
+                                "#{}   {}",
+                                t.status.id,
+                                if runs.is_empty() {
+                                    "no run yet".to_owned()
+                                } else {
+                                    format!("run {}", runs[0].run.id)
+                                }
+                            ))
+                            .size(11.5)
+                            .color(DIM),
+                            actions.wrap(),
+                        ]
+                        .spacing(10),
+                    );
+                    if !t.description.is_empty() {
+                        col = col.push(
+                            column![
+                                theme::label("SPECIFICATION"),
+                                text(t.description.clone()).size(13)
+                            ]
+                            .spacing(8),
                         );
                     }
-                    col = col.push(card("SUBTASKS", None, rows.into()));
+                    if !t.criteria.is_empty() {
+                        let mut rows = column![row![
+                            theme::label("ACCEPTANCE CRITERIA"),
+                            text(format!("{} of {} met", met(t), t.criteria.len()))
+                                .size(11)
+                                .color(DIM)
+                        ]
+                        .spacing(10)]
+                        .spacing(8);
+                        for c in &t.criteria {
+                            let ok = c.trim_start().starts_with("- [x]");
+                            let text_of = c
+                                .trim_start_matches("- [ ] ")
+                                .trim_start_matches("- [x] ")
+                                .trim_start_matches("- ")
+                                .to_owned();
+                            rows = rows.push(
+                                row![
+                                    container(
+                                        text(if ok { "✓" } else { "" }).size(11).color(theme::BG)
+                                    )
+                                    .width(16)
+                                    .height(16)
+                                    .center_x(16)
+                                    .center_y(16)
+                                    .style(move |_| {
+                                        container::Style {
+                                            background: ok.then_some(Background::Color(OK)),
+                                            border: iced::Border {
+                                                color: if ok { OK } else { theme::LINE2 },
+                                                width: 1.0,
+                                                radius: 3.0.into(),
+                                            },
+                                            ..container::Style::default()
+                                        }
+                                    }),
+                                    text(text_of).size(13).width(Length::Fill),
+                                ]
+                                .spacing(10),
+                            );
+                        }
+                        col = col.push(rows);
+                    }
+                    if !t.status.subtasks.is_empty() {
+                        let mut rows = column![theme::label("SUBTASKS")].spacing(0);
+                        for s in &t.status.subtasks {
+                            let state = s.state.as_str();
+                            let color = match state {
+                                "awaiting-approval" => WARN,
+                                "done" | "completed" => OK,
+                                "in_progress" | "in-progress" | "working" => ACCENT,
+                                _ => DIM,
+                            };
+                            let mut line = row![
+                                text(s.number.to_string()).size(11).color(DIM).width(18),
+                                text(s.title.clone())
+                                    .size(12.5)
+                                    .color(theme::HI)
+                                    .width(Length::Fill),
+                            ]
+                            .spacing(8)
+                            .align_y(iced::Alignment::Center);
+                            if state == "awaiting-approval" {
+                                if let Some(r) = runs.first() {
+                                    line = line.push(btn_link(
+                                        "Review gate",
+                                        PanelMsg::SelectRun(r.run.id.clone()),
+                                    ));
+                                }
+                            }
+                            line = line.push(text(state.to_owned()).size(11).color(color));
+                            rows = rows.push(container(line).padding([8, 12]).width(Length::Fill));
+                        }
+                        col = col.push(
+                            container(rows)
+                                .padding(pad(10.0, 0.0, 4.0, 0.0))
+                                .style(card_style),
+                        );
+                    }
+                    // where the work lives: run, agents, branches, source
+                    let mut lives = column![theme::label("WHERE IT LIVES")].spacing(6);
+                    let kv = |k: &'static str, v: String| {
+                        row![
+                            text(k).size(11.5).color(DIM).width(70),
+                            text(v).size(12).color(FG)
+                        ]
+                        .spacing(8)
+                    };
+                    if let Some(r) = runs.first() {
+                        lives = lives.push(kv(
+                            "run",
+                            format!("{} ({})", r.run.id, state_badge(r.run.state).0),
+                        ));
+                        let ids: Vec<_> = r.run.agents.iter().map(|a| a.id.clone()).collect();
+                        lives = lives.push(kv("agents", ids.join(", ")));
+                        let mut branches: Vec<String> = vec![];
+                        for a in d.agents.iter().filter(|a| ids.contains(&a.id)) {
+                            let b = if a.branch.is_empty() {
+                                "main".to_owned()
+                            } else {
+                                a.branch.clone()
+                            };
+                            if !branches.contains(&b) {
+                                branches.push(b);
+                            }
+                        }
+                        lives = lives.push(kv("branches", branches.join(", ")));
+                    } else if !t.status.branch.is_empty() {
+                        lives = lives.push(kv("branches", t.status.branch.clone()));
+                    } else {
+                        lives = lives.push(
+                            text("Not started: no run, agent or branch yet.")
+                                .size(12)
+                                .color(DIM),
+                        );
+                    }
+                    col = col.push(lives);
+                    col.into()
                 }
-                let mut actions = row![].spacing(10);
-                for r in runs {
-                    actions = actions.push(btn(
-                        format!("Open run {}", r.run.pattern),
-                        PanelMsg::SelectRun(r.run.id.clone()),
-                    ));
-                }
-                actions = actions
-                    .push(btn_primary(
-                        "Run with an agent",
-                        PanelMsg::RunTaskWithAgent(t.status.id),
-                    ))
-                    .push(btn(
-                        "Run with a pattern",
-                        PanelMsg::OpenLauncher(Some(t.status.id)),
-                    ))
-                    .push(btn("Edit", PanelMsg::TaskEditOpen(t.status.id)));
-                if has_run(&t.status.state) {
-                    actions = actions.push(self.arm_button(
-                        Armed::CancelRun(t.status.id),
-                        "Cancel run",
-                        "Confirm: cancel the run and close its agents",
-                    ));
-                }
-                actions = actions.push(self.arm_button(
-                    Armed::DeleteTask(t.status.id),
-                    "Delete",
-                    "Confirm: delete this task for good",
-                ));
-                col.push(actions).max_width(900).into()
-            }
-        };
+            };
         let detail = match (&self.task_form, &self.importing) {
             (Some(form), _) => self.task_form_view(form),
             (None, Some(issue)) => self.import_view(issue),
             (None, None) => detail,
         };
-        column![
-            summary,
-            row![self.list(items, footer), self.detail(detail)].height(Length::Fill),
+        row![
+            board,
+            container(text(""))
+                .width(1)
+                .height(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(LINE)),
+                    ..container::Style::default()
+                }),
+            container(self.detail(detail))
+                .width(430)
+                .height(Length::Fill)
+                .style(theme::inspector_style),
         ]
+        .height(Length::Fill)
         .into()
     }
 
@@ -2927,7 +4701,9 @@ impl Panel {
                 text_input("What has to be done", &form.title)
                     .on_input(|t| Message::Panel(PanelMsg::TaskTitle(t)))
                     .on_submit(Message::Panel(PanelMsg::TaskSave))
-                    .style(theme::input_style)
+                    .style(theme::input_style_marked(
+                        crate::ui::is_invalid(&self.notice) && form.title.trim().is_empty(),
+                    ))
                     .padding([8, 10])
                     .size(13),
             ]
@@ -2957,41 +4733,43 @@ impl Panel {
     }
 
     fn patterns_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
-        let total_agents: usize = ctx.data.patterns.iter().map(|p| p.agents_count).sum();
-        let total_topics: usize = ctx.data.patterns.iter().map(|p| p.topics_count).sum();
-        let summary = container(
-            row![
-                agent_metric("PATTERNS", ctx.data.patterns.len(), FG),
-                agent_metric("AGENTS", total_agents, ACCENT),
-                agent_metric("TOPICS", total_topics, OK),
+        use shepherd_app_core::shepherd_core::patterns::PatternSource;
+        let entry = |p: &'a shepherd_app_core::shepherd_core::patterns::PatternSummary| -> Element<'a, Message> {
+            let body = column![
+                text(p.name.clone()).font(theme::MONO_BOLD).size(13).color(theme::HI),
+                text(format!("{:?}", p.kind).to_lowercase()).size(11).color(DIM),
+                text(format!("{} agents, {} topics", p.agents_count, p.topics_count)).size(11).color(DIM),
             ]
-            .spacing(1),
-        )
-        .style(kpi_strip_style);
-        let items = ctx
+            .spacing(3);
+            button(body)
+                .width(Length::Fill)
+                .padding([8, 10])
+                .style(item_style(self.pattern_sel.as_deref() == Some(p.name.as_str())))
+                .on_press(crate::ui::nav(
+                    self.pattern_sel.as_deref() == Some(p.name.as_str()),
+                    Message::Panel(PanelMsg::SelectPattern(p.name.clone())),
+                ))
+                .into()
+        };
+        let heading = |s: &'static str| {
+            container(text(s).size(11.5).color(DIM)).padding(pad(10.0, 4.0, 4.0, 4.0))
+        };
+        let (mine, builtin): (Vec<_>, Vec<_>) = ctx
             .data
             .patterns
             .iter()
-            .map(|p| {
-                let body = column![
-                    text(p.name.clone()).size(13),
-                    text(format!(
-                        "{:?} · {} agents · {} topics",
-                        p.kind, p.agents_count, p.topics_count
-                    ))
-                    .size(11)
-                    .color(DIM)
-                ];
-                button(body)
-                    .width(Length::Fill)
-                    .padding([4, 8])
-                    .style(item_style(
-                        self.pattern_sel.as_deref() == Some(p.name.as_str()),
-                    ))
-                    .on_press(Message::Panel(PanelMsg::SelectPattern(p.name.clone())))
-                    .into()
-            })
-            .collect();
+            .filter(|p| self.passes(&format!("{} {:?}", p.name, p.kind)))
+            .partition(|p| !matches!(p.source, PatternSource::Builtin));
+        let mut items: Vec<Element<'a, Message>> = vec![];
+        if !mine.is_empty() {
+            items.push(heading("Yours in this project").into());
+            items.extend(mine.into_iter().map(entry));
+        }
+        if !builtin.is_empty() {
+            items.push(heading("Built in").into());
+            items.extend(builtin.into_iter().map(entry));
+        }
+        let top = crate::ui::filter_bar("Filter patterns", &self.filter, &[], 0);
         let detail: Element<'a, Message> = match &self.edit {
             None => {
                 let message = if ctx.data.patterns.is_empty() {
@@ -3017,118 +4795,650 @@ impl Panel {
                 .style(card_style)
                 .into()
             }
-            Some(edit) => column![edit.view(ctx.frame),].spacing(10).into(),
+            Some(edit) => column![edit
+                .view(self.armed == Some(Armed::DeletePattern(edit.editor.pattern.name.clone()))),]
+            .spacing(10)
+            .into(),
         };
-        column![
-            summary,
-            row![
-                self.list(items, vec![]),
-                container(detail)
-                    .padding([20, 24])
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-            ]
-            .height(Length::Fill),
+        row![
+            list_box_sized(240.0, Some(top), items, vec![]),
+            container(detail)
+                .padding([16, 20])
+                .width(Length::Fill)
+                .height(Length::Fill),
         ]
-        .spacing(8)
+        .height(Length::Fill)
         .into()
     }
 
+    /// Every notice of this session, oldest first (the status bar shows them in a list).
+    pub fn history(&self) -> &[(String, String)] {
+        &self.history
+    }
+
+    /// Forgets the notices kept.
+    pub fn clear_history(&mut self) {
+        self.history.clear();
+    }
+
+    /// Esc: clears the filter box of the current list.
+    pub fn clear_filter(&mut self) {
+        self.filter.clear();
+    }
+
+    /// Esc: an armed button goes back to normal.
+    pub fn disarm(&mut self) {
+        self.armed = None;
+        self.armed_at = None;
+    }
+
+    /// An armed button goes back to normal after `ARM_SECS` (called on every tick).
+    pub fn expire_armed(&mut self) {
+        self.toasts.retain(|t| !t.expired());
+        if self.armed.is_some()
+            && self
+                .armed_at
+                .is_none_or(|t| t.elapsed().as_secs_f32() >= ARM_SECS)
+        {
+            self.armed = None;
+            self.armed_at = None;
+        }
+    }
+
+    /// Whether the communication screen of a run is open (it reads the bus again on every change).
+    pub fn comm_open(&self) -> bool {
+        self.comm_open
+    }
+
+    /// The least width the main area keeps: the fixed panes of the view plus a flexible region of 360 px.
+    /// Narrower than this, the main area scrolls sideways instead of squashing anything.
+    pub fn min_main_width(&self) -> f32 {
+        const FLEX: f32 = 360.0;
+        match self.tab {
+            Tab::Overview | Tab::Git | Tab::Monitor => 1000.0,
+            Tab::Runs | Tab::Skills => 320.0 + 1.0 + FLEX,
+            Tab::Agents => 460.0 + 1.0 + FLEX,
+            Tab::Tasks => 430.0 + 1.0 + FLEX,
+            // library 240, inspector 280 and an editor of at least 680
+            Tab::Patterns => 240.0 + 280.0 + 2.0 + 680.0,
+            Tab::Events => 250.0 + 1.0 + FLEX,
+            Tab::Models => 230.0 + 1.0 + FLEX,
+            Tab::Snapshots => 400.0 + 1.0 + FLEX,
+        }
+    }
+
+    /// The seconds the Activity window covers.
+    fn activity_secs(&self) -> u64 {
+        [300, 1800, 7200][self.activity_window.min(2)]
+    }
+
+    /// Activity: what every agent did over the window, and how far each reader is behind on the bus.
     fn monitor_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
-        let mut items: Vec<Element<'a, Message>> = vec![button(text("All agents").size(13))
-            .width(Length::Fill)
-            .padding([4, 8])
-            .style(item_style(self.monitor.is_none()))
-            .on_press(Message::Panel(PanelMsg::ShowMonitor(String::new())))
-            .into()];
-        for r in &ctx.data.runs {
-            items.push(
+        // one flexible region: the page keeps at least 900 px and scrolls both ways when narrower
+        let (this, ctx) = (self, ctx.clone());
+        crate::ui::flex(900.0, [20.0, 28.0], move || this.activity_page(&ctx))
+    }
+
+    fn activity_page<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        use shepherd_app_core::timeline;
+        let d = ctx.data;
+        let secs = self.activity_secs();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |t| t.as_secs());
+        let from = now.saturating_sub(secs);
+        let state_color = |s: &str| match s {
+            "working" | "starting" => ACCENT,
+            "blocked" => WARN,
+            "done" => OK,
+            "failed" | "killed" => BAD,
+            timeline::UNKNOWN => theme::LINE,
+            _ => theme::LINE2,
+        };
+        let legend = |c: Color, n: &'static str| {
+            row![text("■").size(10).color(c), text(n).size(11).color(DIM)].spacing(4)
+        };
+        let mut rows = column![].spacing(14);
+        if d.agents.is_empty() {
+            rows = rows.push(
+                text("No agents yet. Their timelines appear here once they start.")
+                    .size(12)
+                    .color(DIM),
+            );
+        }
+        for a in &d.agents {
+            let segs = timeline::segments(&d.state_log, &a.id, &a.state, from, now);
+            let mut bar = row![].spacing(0).height(10);
+            for (state, dur) in &segs {
+                let c = state_color(state);
+                let portion = Length::FillPortion((*dur).clamp(1, 65_000) as u16);
+                if state == timeline::UNKNOWN {
+                    // before the app was recording: a hatched stretch
+                    bar = bar.push(
+                        container(text("╱".repeat(400)).size(9).color(theme::LINE2))
+                            .width(portion)
+                            .height(10)
+                            .clip(true),
+                    );
+                    continue;
+                }
+                bar = bar.push(
+                    container(text(""))
+                        .width(portion)
+                        .height(10)
+                        .style(move |_| container::Style {
+                            background: Some(Background::Color(c)),
+                            ..container::Style::default()
+                        }),
+                );
+            }
+            let status = agent_status(&a.state);
+            let word = if a.state == "blocked" {
+                "needs you"
+            } else {
+                a.state.as_str()
+            };
+            // columns: 170 (state, id, word) | lane (flexible, 400 at least) | 250 (current task); the row opens the agent
+            rows = rows.push(
                 button(
-                    text(format!(
-                        "{} · {}",
-                        r.run.pattern,
-                        r.run.id.trim_start_matches("run-")
-                    ))
-                    .size(13),
+                    container(
+                        row![
+                            row![
+                                text("■").size(10).color(status_color(status)),
+                                text(a.id.clone())
+                                    .font(theme::MONO_BOLD)
+                                    .size(12.5)
+                                    .color(theme::HI),
+                                text(word).size(11).color(status_color(status)),
+                            ]
+                            .spacing(8)
+                            .width(170),
+                            container(bar)
+                                .padding([2, 2])
+                                .width(Length::Fill)
+                                .style(|_| container::Style {
+                                    background: Some(Background::Color(Color::from_rgb8(8, 8, 11))),
+                                    border: iced::Border {
+                                        color: Color::from_rgb8(0x15, 0x15, 0x1C),
+                                        width: 1.0,
+                                        radius: 3.0.into(),
+                                    },
+                                    ..container::Style::default()
+                                }),
+                            container(
+                                text(if a.task_text.is_empty() {
+                                    String::new()
+                                } else {
+                                    a.task_text.chars().take(32).collect()
+                                })
+                                .size(11.5)
+                                .color(DIM)
+                            )
+                            .width(250)
+                            .clip(true),
+                        ]
+                        .spacing(16)
+                        .align_y(iced::Alignment::Center),
+                    )
+                    .center_y(Length::Fill),
                 )
                 .width(Length::Fill)
-                .padding([4, 8])
-                .style(item_style(
-                    self.monitor.as_deref() == Some(r.run.id.as_str()),
-                ))
-                .on_press(Message::Panel(PanelMsg::ShowMonitor(r.run.id.clone())))
-                .into(),
+                .height(38)
+                .padding([0, 4])
+                .style(item_style(false))
+                .on_press(Message::Panel(PanelMsg::SelectAgent(a.id.clone()))),
             );
         }
-        let key = if self.armed == Some(Armed::CleanBusForce) {
-            Armed::CleanBusForce
-        } else {
-            Armed::CleanBus
+        // time axis: a tick every minute (5 min), 5 minutes (30 min) or 20 minutes (2 h); the end reads "now"
+        let step: u64 = match secs {
+            s if s <= 300 => 60,
+            s if s <= 1800 => 300,
+            _ => 1200,
         };
-        let force = key == Armed::CleanBusForce;
-        let footer = vec![self.arm_button(
-            key,
-            "Clean communication",
-            if force {
-                "Live agents: force clean"
-            } else {
-                "Confirm: delete messages"
-            },
-        )];
-        let summary = container(
-            row![
-                agent_metric("RUNS", ctx.data.runs.len(), FG),
-                agent_metric_spark("MESSAGES", self.feed.len(), ACCENT, ctx.frame),
-                agent_metric(
-                    "SCOPE",
-                    if self.monitor.is_some() {
-                        1
-                    } else {
-                        ctx.data.agents.len()
-                    },
-                    OK,
-                ),
-            ]
-            .spacing(1),
-        )
-        .style(kpi_strip_style);
-        let mut feed = column![row![
-            theme::label("COMMUNICATION"),
-            text(format!("{} messages", self.feed.len()))
-                .size(12)
-                .color(ACCENT),
+        let mut axis = row![container(text("")).width(170)].spacing(16);
+        let mut marks = row![].width(Length::Fill);
+        let mut at = from;
+        let mut t = from.div_ceil(step) * step;
+        if t > from {
+            marks = marks
+                .push(container(text("")).width(Length::FillPortion((t - from).max(1) as u16)));
+            at = t;
+        }
+        // leave the last tenth to "now"
+        while t < now.saturating_sub(secs / 10) {
+            let next = (t + step).min(now);
+            let width = Length::FillPortion((next - at).max(1) as u16);
+            marks = marks.push(container(text(clock(t)).size(10.5).color(DIM)).width(width));
+            at = next;
+            t += step;
+        }
+        let marks: Element<'a, Message> = iced::widget::stack![
+            marks,
+            container(text("now").size(10.5).color(DIM))
+                .width(Length::Fill)
+                .align_x(iced::alignment::Horizontal::Right)
         ]
-        .spacing(8)]
+        .width(Length::Fill)
+        .into();
+        axis = axis.push(marks).push(container(text("")).width(250));
+        let timelines = card(
+            "AGENT TIMELINES",
+            Some(
+                row![
+                    legend(ACCENT, "working"),
+                    legend(theme::LINE2, "idle"),
+                    legend(WARN, "blocked"),
+                    legend(OK, "done"),
+                    row![
+                        text("╱╱").size(10).color(theme::LINE2),
+                        text("before the app opened").size(11).color(DIM)
+                    ]
+                    .spacing(4)
+                ]
+                .spacing(12)
+                .into(),
+            ),
+            column![rows, axis].spacing(14).into(),
+        );
+
+        // reader lag: per topic and consumer group
+        let mut lag_rows = column![].spacing(14);
+        let topics = self.cfg.topic_rows();
+        let max_lag = topics
+            .iter()
+            .flat_map(|t| t.groups.iter())
+            .map(|g| g.lag_by_partition.values().sum::<u64>())
+            .max()
+            .unwrap_or(0)
+            .max(1);
+        let mut any = false;
+        for t in topics {
+            for (k, g) in t.groups.iter().enumerate() {
+                any = true;
+                let lag: u64 = g.lag_by_partition.values().sum();
+                let mut parts: Vec<(u32, u64)> =
+                    g.lag_by_partition.iter().map(|(p, l)| (*p, *l)).collect();
+                parts.sort_unstable();
+                let detail = if parts.is_empty() {
+                    "p0 0".to_owned()
+                } else {
+                    parts
+                        .iter()
+                        .map(|(p, l)| format!("p{p} {l}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let reach = 0.08 + 0.9 * lag as f64 / max_lag as f64;
+                // columns: 120 (#topic) | 220 (group, members) | lag bar (flexible) | 150 (lag, per partition);
+                // the row opens the topic in Events
+                lag_rows = lag_rows.push(
+                    button(
+                        row![
+                            text(format!("#{}", t.name))
+                                .size(12.5)
+                                .color(theme::VIOLET)
+                                .width(120),
+                            container(
+                                row![
+                                    text(g.group.clone())
+                                        .font(theme::MONO_BOLD)
+                                        .size(12.5)
+                                        .color(theme::HI),
+                                    text(g.members.join(", ")).size(11).color(DIM),
+                                ]
+                                .spacing(8)
+                            )
+                            .width(220)
+                            .clip(true),
+                            Canvas::new(Prism {
+                                preset: Preset::lag(reach, (k as f64) * 7.0),
+                                frame: ctx.frame.wrapping_add(k as u32 * 3),
+                            })
+                            .width(Length::Fill)
+                            .height(16),
+                            container(
+                                row![
+                                    if lag == 0 {
+                                        text("caught up").size(12).color(OK)
+                                    } else {
+                                        text(format!("lag {lag}")).size(12).color(if lag > 1 {
+                                            WARN
+                                        } else {
+                                            FG
+                                        })
+                                    },
+                                    text(detail).size(11).color(theme::FAINT),
+                                ]
+                                .spacing(8)
+                            )
+                            .width(150)
+                            .clip(true),
+                        ]
+                        .spacing(16)
+                        .align_y(iced::Alignment::Center),
+                    )
+                    .width(Length::Fill)
+                    .padding([6, 4])
+                    .style(item_style(false))
+                    .on_press(Message::Panel(PanelMsg::OpenTopic(t.name.clone()))),
+                );
+            }
+        }
+        if !any {
+            lag_rows = lag_rows.push(
+                text("No reader has joined a topic yet.")
+                    .size(12)
+                    .color(DIM),
+            );
+        }
+        let lag = card(
+            "READER LAG",
+            Some(btn_link("Open events", PanelMsg::Tab(Tab::Events))),
+            column![
+                text("Messages each consumer group has not read yet, per topic. A longer prism means more waiting.")
+                    .size(11.5)
+                    .color(DIM),
+                lag_rows
+            ]
+            .spacing(12)
+            .into(),
+        );
+        crate::theme::scroll(
+            container(column![timelines, lag].spacing(16))
+                .padding([20, 28])
+                .width(Length::Fill),
+        )
+        .height(Length::Fill)
+        .into()
+    }
+
+    /// The communication of a run: who said what to whom, filtered by sender and topic, with a box to write to
+    /// the team as the human.
+    fn comm_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        let d = ctx.data;
+        let run = self
+            .monitor
+            .as_deref()
+            .and_then(|id| d.runs.iter().find(|r| r.run.id == id));
+        let topics: Vec<String> = run.map(|r| r.run.topics.clone()).unwrap_or_default();
+        let chip = |label: String, on: bool, t: Option<String>| {
+            button(text(label).size(11.5))
+                .padding([3, 10])
+                .style(theme::chip_style(on))
+                .on_press(Message::Panel(PanelMsg::CommTopic(t)))
+        };
+        let mut chips = row![chip("All topics".into(), self.comm_topic.is_none(), None)].spacing(6);
+        for t in &topics {
+            chips = chips.push(chip(
+                format!("#{t}"),
+                self.comm_topic.as_deref() == Some(t.as_str()),
+                Some(t.clone()),
+            ));
+        }
+        let title = column![
+            row![
+                button(text("Runs").size(11.5).color(ACCENT))
+                    .padding(0)
+                    .style(theme::link_button_style())
+                    .on_press(Message::Panel(PanelMsg::CommClose)),
+                text("›").size(11.5).color(DIM),
+                text(
+                    run.map(|r| r.run.id.clone())
+                        .unwrap_or_else(|| "all agents".into())
+                )
+                .size(11.5)
+                .color(DIM),
+            ]
+            .spacing(6),
+            text("What the agents say to each other")
+                .font(theme::MONO_BOLD)
+                .size(20)
+                .color(theme::HI),
+        ]
         .spacing(6);
-        if self.feed.is_empty() {
+        let header = container(
+            row![
+                title,
+                container(text("")).width(Length::Fill),
+                chips.wrap(),
+                btn("Back to the run", PanelMsg::CommClose),
+            ]
+            .spacing(12)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding([14, 28])
+        .width(Length::Fill)
+        .style(theme::bottom_line_style);
+
+        // senders: the run's agents and the human
+        let mut senders = column![theme::label("SHOW MESSAGES FROM")].spacing(10);
+        let agents: Vec<String> = match run {
+            Some(r) => r.run.agents.iter().map(|a| a.id.clone()).collect(),
+            None => d.agents.iter().map(|a| a.id.clone()).collect(),
+        };
+        let mut names: Vec<(String, String, Color)> = agents
+            .iter()
+            .map(|id| {
+                let st = d
+                    .agents
+                    .iter()
+                    .find(|a| &a.id == id)
+                    .map_or("", |a| a.state.as_str());
+                let word = if st == "blocked" { "needs you" } else { st };
+                (id.clone(), word.to_owned(), status_color(agent_status(st)))
+            })
+            .collect();
+        names.push(("user".into(), "human".into(), theme::VIOLET));
+        for (id, word, color) in names {
+            let shown = !self.comm_hidden.contains(&id);
+            let key = id.clone();
+            senders = senders.push(
+                row![
+                    checkbox(shown)
+                        .on_toggle(move |_| Message::Panel(PanelMsg::CommToggle(key.clone())))
+                        .size(14),
+                    text("■").size(9).color(color),
+                    text(id.clone()).size(12.5).width(Length::Fill),
+                    text(word).size(11).color(color),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            );
+        }
+        let side = container(senders)
+            .padding(16)
+            .width(240)
+            .height(Length::Fill);
+
+        // messages
+        let mut feed = column![].spacing(0);
+        let visible: Vec<&BusMessage> = self
+            .feed
+            .iter()
+            .filter(|m| !self.comm_hidden.contains(&m.from))
+            .filter(|m| self.comm_topic.as_deref().is_none_or(|t| t == m.topic))
+            .collect();
+        if visible.is_empty() {
+            feed = feed.push(
+                column![
+                    text("No communication yet").size(14).color(theme::HI),
+                    text("Messages appear here as the agents publish to this run's topics.")
+                        .size(12)
+                        .color(DIM),
+                ]
+                .spacing(6),
+            );
+        }
+        for m in visible {
+            let time: String = m.ts.chars().skip(11).take(8).collect();
+            let who_color = theme::emitter_color(&m.from);
+            let system = m.from.is_empty() || m.kind == "event" || m.kind == "system";
+            if system {
+                feed = feed.push(
+                    container(row![
+                        text(time).size(11.5).color(DIM).width(80),
+                        text(m.content.clone()).size(12).color(DIM),
+                    ])
+                    .padding([6, 0]),
+                );
+                continue;
+            }
+            let letter: String = m
+                .from
+                .chars()
+                .next()
+                .map(|c| c.to_uppercase().to_string())
+                .unwrap_or_default();
+            let mut head = row![text(m.from.clone())
+                .font(theme::MONO_BOLD)
+                .size(12.5)
+                .color(theme::HI)]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
+            if !m.to.is_empty() {
+                head = head
+                    .push(text("to").size(11.5).color(DIM))
+                    .push(text(m.to.clone()).size(12).color(FG));
+            }
+            if !m.topic.is_empty() {
+                head = head.push(text("to").size(11.5).color(DIM)).push(
+                    container(
+                        text(format!("#{} p{}", m.topic, m.partition))
+                            .size(11)
+                            .color(theme::VIOLET),
+                    )
+                    .padding([0, 6])
+                    .style(|_| container::Style {
+                        border: iced::Border {
+                            color: theme::VIOLET,
+                            width: 1.0,
+                            radius: 3.0.into(),
+                        },
+                        ..container::Style::default()
+                    }),
+                );
+            }
             feed = feed.push(
                 container(
-                    column![
-                        text("No communication yet").size(15),
-                        text("Messages will appear here as agents publish to the selected scope.")
-                            .size(12)
-                            .color(DIM),
+                    row![
+                        text(time).size(11.5).color(DIM).width(80),
+                        container(
+                            text(letter)
+                                .size(11)
+                                .font(theme::MONO_BOLD)
+                                .color(theme::BG)
+                        )
+                        .width(22)
+                        .height(22)
+                        .center_x(22)
+                        .center_y(22)
+                        .style(move |_| container::Style {
+                            background: Some(Background::Color(who_color)),
+                            border: iced::Border {
+                                radius: 4.0.into(),
+                                ..iced::Border::default()
+                            },
+                            ..container::Style::default()
+                        }),
+                        column![head, text(m.content.clone()).size(13).color(theme::FG)].spacing(3),
                     ]
-                    .spacing(8),
+                    .spacing(12),
                 )
-                .padding(16)
-                .style(card_style),
+                .padding([9, 0]),
             );
         }
-        for m in &self.feed {
-            feed = feed.push(message_row(m, false));
+        // a gate that waits for the human closes the feed
+        let task_id = run.and_then(|r| task_of_run(&r.run.task));
+        if let Some(g) = d.gates.iter().find(|g| Some(g.task_id) == task_id) {
+            feed = feed.push(alert(
+                row![
+                    text(format!(
+                        "{} waits for a human. Nothing is pushed until you approve.",
+                        g.gate.label()
+                    ))
+                    .size(12.5)
+                    .width(Length::Fill),
+                    btn("Decide in the run", PanelMsg::CommClose),
+                ]
+                .spacing(12)
+                .align_y(iced::Alignment::Center)
+                .into(),
+                WARN,
+            ));
         }
+        let target = self.comm_topic.clone().or_else(|| topics.first().cloned());
+        let composer = container(
+            row![
+                text(match &target {
+                    Some(t) => format!("to #{t}"),
+                    None => "no topic".into(),
+                })
+                .size(12)
+                .color(DIM),
+                text_input("Tell the team something, sent as you", &self.comm_text)
+                    .on_input(|t| Message::Panel(PanelMsg::CommText(t)))
+                    .on_submit(Message::Panel(PanelMsg::CommSend))
+                    .style(theme::input_style)
+                    .padding([9, 12])
+                    .size(12.5)
+                    .width(Length::Fill),
+                btn_primary("Send", PanelMsg::CommSend),
+            ]
+            .spacing(12)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding([0, 28])
+        .width(Length::Fill)
+        .height(64)
+        .align_y(iced::alignment::Vertical::Center)
+        .style(theme::top_line_style);
         column![
-            summary,
-            row![self.list(items, footer), self.detail(feed.into())].height(Length::Fill),
+            header,
+            row![
+                side,
+                container(text(""))
+                    .width(1)
+                    .height(Length::Fill)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(LINE)),
+                        ..container::Style::default()
+                    }),
+                crate::theme::scroll(container(feed).padding([8, 28]).width(Length::Fill))
+                    .height(Length::Fill),
+            ]
+            .height(Length::Fill),
+            composer,
         ]
-        .spacing(8)
         .into()
     }
 }
 
+/// `HH:MM` (UTC) of a unix time, for the Activity axis.
+fn clock(t: u64) -> String {
+    format!("{:02}:{:02}", (t / 3600) % 24, (t / 60) % 60)
+}
+
 /// `.list`: 300 px column with a 1 px line on its right, items on top and the footer buttons below.
 pub fn list_box<'a>(
+    items: Vec<Element<'a, Message>>,
+    footer: Vec<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    list_box_with(None, items, footer)
+}
+
+/// `list_box` with something (the filter) above the items.
+pub fn list_box_with<'a>(
+    top: Option<Element<'a, Message>>,
+    items: Vec<Element<'a, Message>>,
+    footer: Vec<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    list_box_sized(320.0, top, items, footer)
+}
+
+/// A fixed list pane `width` wide (320 for Runs and Skills, 250 for Events, 260 for Patterns, ...).
+pub fn list_box_sized<'a>(
+    width: f32,
+    top: Option<Element<'a, Message>>,
     items: Vec<Element<'a, Message>>,
     footer: Vec<Element<'a, Message>>,
 ) -> Element<'a, Message> {
@@ -3141,15 +5451,19 @@ pub fn list_box<'a>(
                 ..container::Style::default()
             })
     };
-    let list = scrollable(column(items).spacing(2).padding(8)).height(Length::Fill);
+    let list = crate::theme::scroll(column(items).spacing(2).padding(8)).height(Length::Fill);
+    let mut col = column![];
+    if let Some(top) = top {
+        col = col.push(top);
+    }
+    col = col.push(list);
+    if !footer.is_empty() {
+        col = col
+            .push(line())
+            .push(container(row(footer).spacing(4).wrap()).padding(8));
+    }
     row![
-        container(column![
-            list,
-            line(),
-            container(row(footer).spacing(4).wrap()).padding(8)
-        ])
-        .width(300)
-        .height(Length::Fill),
+        container(col).width(width).height(Length::Fill),
         container(text(""))
             .width(1)
             .height(Length::Fill)
@@ -3163,8 +5477,31 @@ pub fn list_box<'a>(
 }
 
 /// `.detail`: the rest of the width, padded, no card.
+/// The header of a detail (spec 3.8): row 1 holds the title and the state pill on the left and the action bar on
+/// the right; row 2, under both, the id and the meta. The bar does not wrap: it scrolls with the detail.
+pub(crate) fn detail_header<'a>(
+    title: Element<'a, Message>,
+    pill: Element<'a, Message>,
+    actions: Element<'a, Message>,
+    meta: String,
+) -> Element<'a, Message> {
+    column![
+        row![
+            title,
+            pill,
+            container(text("")).width(Length::Fill),
+            actions
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center),
+        text(meta).size(11.5).color(DIM),
+    ]
+    .spacing(6)
+    .into()
+}
+
 pub fn detail_box<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
-    container(scrollable(
+    container(crate::theme::scroll(
         container(content).padding([20, 24]).width(Length::Fill),
     ))
     .width(Length::Fill)
@@ -3477,5 +5814,151 @@ mod tests {
         assert_eq!(panel.reject_reason, "split it");
         let _ = panel.update(PanelMsg::Confirm, &ctx);
         assert_eq!(panel.reject_reason, "");
+    }
+
+    #[test]
+    fn a_new_notice_becomes_a_toast_a_refusal_stays_and_the_filter_needs_every_word() {
+        let mut panel = Panel {
+            notice: "Saved task #1".into(),
+            ..Panel::default()
+        };
+        panel.sync_toast();
+        assert!(panel.toasts().last().is_some_and(|(_, t)| !t.error));
+        panel.notice = "error: refused: cannot remove".into();
+        panel.sync_toast();
+        let toast = panel
+            .toasts()
+            .last()
+            .map(|(_, t)| *t)
+            .expect("a refusal stays");
+        assert!(toast.error && !toast.expired());
+        for n in 0..5 {
+            panel.notice = format!("Saved {n}");
+            panel.sync_toast();
+        }
+        assert_eq!(panel.toasts().len(), 3, "at most three at a time");
+        assert_eq!(panel.history.len(), 7, "every notice is kept");
+        panel.update_filter_for_test("api team");
+        assert!(!panel.passes("api only 231"));
+        assert!(panel.passes("api team 231"));
+        assert!(panel.passes("TEAM api"));
+    }
+
+    #[test]
+    fn the_snapshot_filters_pick_an_agent_and_a_reason_and_the_view_builds_with_them() {
+        let data = Data {
+            snapshots: vec![
+                snap("coder-1/2", 200),
+                snap("coder-2/1", 150),
+                snap("coder-1/1", 100),
+            ],
+            ..Data::default()
+        };
+        let snapshot = Snapshot::default();
+        let ctx = ctx_of(&data, &snapshot);
+        let mut panel = Panel {
+            tab: Tab::Snapshots,
+            ..Panel::default()
+        };
+        // with no agent alive the Capture box falls back to the shown snapshot's agent
+        assert_eq!(panel.capture_agent(&ctx).as_deref(), Some("coder-1"));
+        let _ = panel.update(PanelMsg::SnapFilterAgent(Some("coder-2".into())), &ctx);
+        let _ = panel.update(PanelMsg::SnapFilterReason(Some("idle".into())), &ctx);
+        assert_eq!(panel.snap_agent_filter.as_deref(), Some("coder-2"));
+        let _ = panel.snapshots_view(&ctx);
+        let _ = panel.header(&ctx);
+        let _ = panel.update(PanelMsg::SnapFilterAgent(None), &ctx);
+        assert!(panel.snap_agent_filter.is_none());
+    }
+
+    #[test]
+    fn a_new_pattern_opens_the_editor_on_something_to_save_and_deleting_needs_two_clicks() {
+        let data = Data::default();
+        let snapshot = Snapshot::default();
+        let ctx = ctx_of(&data, &snapshot);
+        let mut panel = Panel::default();
+        let _ = panel.update(PanelMsg::NewPattern, &ctx);
+        let edit = panel.edit.as_ref().expect("the editor opens");
+        assert_eq!(edit.editor.pattern.name, "new-pattern");
+        assert_eq!(
+            edit.editor.pattern.kind,
+            shepherd_app_core::shepherd_core::patterns::PatternKind::OrchestratorWorker
+        );
+        assert!(edit.editor.dirty, "a new pattern has something to save");
+        assert!(panel
+            .notice
+            .starts_with("New pattern new-pattern from the orchestrator-worker template"));
+        let _ = panel.patterns_view(&ctx);
+        let delete = Armed::DeletePattern("new-pattern".into());
+        let _ = panel.update(PanelMsg::Arm(delete.clone()), &ctx);
+        assert_eq!(panel.armed, Some(delete));
+    }
+
+    #[test]
+    fn the_communication_screen_opens_from_a_run_hides_senders_and_refuses_an_empty_send() {
+        let data = Data::default();
+        let snapshot = Snapshot::default();
+        let ctx = ctx_of(&data, &snapshot);
+        let mut panel = Panel::default();
+        let _ = panel.update(PanelMsg::ShowMonitor("run-x".into()), &ctx);
+        assert!(panel.comm_open());
+        assert_eq!(panel.monitor.as_deref(), Some("run-x"));
+        let _ = panel.update(PanelMsg::CommToggle("coder-1".into()), &ctx);
+        assert!(panel.comm_hidden.contains("coder-1"));
+        let _ = panel.update(PanelMsg::CommToggle("coder-1".into()), &ctx);
+        assert!(panel.comm_hidden.is_empty());
+        let _ = panel.view(&ctx);
+        // no topic and no text: nothing is sent, the reason is a notice
+        let _ = panel.update(PanelMsg::CommSend, &ctx);
+        assert!(crate::ui::is_error(&panel.notice), "{}", panel.notice);
+        // any view closes the screen again
+        let _ = panel.update(PanelMsg::Tab(Tab::Agents), &ctx);
+        assert!(!panel.comm_open());
+        let _ = panel.update(PanelMsg::Tab(Tab::Monitor), &ctx);
+        let _ = panel.view(&ctx);
+    }
+
+    #[test]
+    fn a_refusal_carries_what_was_being_done_above_the_servers_words() {
+        let data = Data::default();
+        let snapshot = Snapshot::default();
+        let ctx = ctx_of(&data, &snapshot);
+        let mut panel = Panel::default();
+        let _ = panel.update(PanelMsg::Arm(Armed::DeleteTask(4)), &ctx);
+        let _ = panel.update(PanelMsg::Confirm, &ctx);
+        let _ = panel.update(PanelMsg::Done(Err("task 4 is in a run".into())), &ctx);
+        assert_eq!(panel.notice, "Not deleted.\ntask 4 is in a run");
+        assert!(crate::ui::is_error(&panel.notice));
+    }
+
+    #[test]
+    fn a_lost_connection_toast_stays_until_it_is_dropped() {
+        let mut panel = Panel::default();
+        panel.notify(crate::ui::invalid(
+            "Lost the connection to the server. Reconnecting…",
+        ));
+        assert!(panel.toasts().iter().all(|(_, t)| t.error));
+        assert_eq!(panel.toasts().len(), 1);
+        panel.drop_toasts_saying("Lost the connection to the server. Reconnecting…");
+        assert!(panel.toasts().is_empty());
+        panel.notify(crate::ui::info("Reconnected."));
+        assert!(panel.toasts().iter().all(|(_, t)| t.info));
+    }
+
+    #[test]
+    fn an_armed_button_disarms_after_its_time_or_on_esc() {
+        let data = Data::default();
+        let snapshot = Snapshot::default();
+        let ctx = ctx_of(&data, &snapshot);
+        let mut panel = Panel::default();
+        let _ = panel.update(PanelMsg::Arm(Armed::CleanRuns), &ctx);
+        panel.expire_armed();
+        assert!(panel.armed.is_some(), "still within its seconds");
+        panel.armed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(5));
+        panel.expire_armed();
+        assert!(panel.armed.is_none(), "its time is up");
+        let _ = panel.update(PanelMsg::Arm(Armed::CleanRuns), &ctx);
+        panel.disarm();
+        assert!(panel.armed.is_none() && panel.armed_at.is_none());
     }
 }

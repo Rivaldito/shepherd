@@ -7,17 +7,20 @@ mod editor;
 mod graph_view;
 mod grid;
 mod keys;
+mod logo;
 mod palette;
 mod panel;
 mod pattern_editor;
 mod prism;
 mod sessions;
+mod sidebar;
 mod theme;
+mod ui;
 
 use iced::keyboard;
 use iced::widget::canvas::Canvas;
 use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, text, text_input, tooltip,
+    button, column, container, mouse_area, row, scrollable, text, text_input, tooltip, Space,
 };
 use iced::{Background, Border, Color, Element, Length, Size, Subscription, Task, Theme};
 use shepherd_app_core::api;
@@ -30,16 +33,20 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use theme::{
-    item_style, mini_button_style, pad, primary_button_style, status_color, status_name, ACCENT,
-    BG, DIM, LINE, PANEL,
+    item_style, mini_button_style, pad, primary_button_style, status_color, status_name, BG, DIM,
+    LINE, PANEL,
 };
 
 const SIDEBAR_W: f32 = 232.0;
-const SIDEBAR_COLLAPSED_W: f32 = 48.0;
-const TABBAR_H: f32 = 42.0;
-const STATUS_H: f32 = 30.0;
-const TOPBAR_H: f32 = 46.0;
-const STRIP_H: f32 = 6.0;
+/// The least height of the main area: below it the area scrolls.
+const MAIN_MIN_H: f32 = 600.0;
+/// The height of a terminal row, which the pane headers take.
+const CELL_ROW: f32 = grid::CELL_H;
+const TABBAR_H: f32 = 44.0;
+const STATUS_H: f32 = 28.0;
+/// The top bar is 48 high in all: the 4 px prism strip and the items under it.
+const TOPBAR_H: f32 = 44.0;
+const STRIP_H: f32 = 4.0;
 /// Margin between the terminal and what surrounds it, and the 1 px border of its frame (both sides).
 const TERM_PAD: f32 = 8.0;
 const TERM_FRAME: f32 = 2.0 * TERM_PAD + 2.0;
@@ -56,6 +63,15 @@ fn start_size() -> Size {
         .unwrap_or(START)
 }
 
+/// The window's icon: the app icon (`assets/shepherd-icon.svg`, a flock of pixels) as 256 x 256 RGBA pixels.
+fn window_icon() -> Option<iced::window::Icon> {
+    iced::window::icon::from_rgba(include_bytes!("../assets/icon-256.rgba").to_vec(), 256, 256).ok()
+}
+
+/// The name a desktop knows the app by: `shepherd-native.desktop` and the icon of that name (`make native-desktop`)
+/// are what the dock shows under Wayland, where a window cannot set its own icon.
+pub const APP_ID: &str = "shepherd-native";
+
 fn main() -> iced::Result {
     iced::application(App::boot, App::update, App::view)
         .title("Shepherd")
@@ -66,13 +82,24 @@ fn main() -> iced::Result {
         .default_font(theme::MONO)
         .subscription(App::subscription)
         .theme(App::theme)
-        .window_size(start_size())
+        .window(iced::window::Settings {
+            size: start_size(),
+            icon: window_icon(),
+            platform_specific: iced::window::settings::PlatformSpecific {
+                application_id: APP_ID.to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
         .run()
 }
 
 /// The session the app was switched to (see `Message::SwitchSession`); the connection thread reads it on every
 /// (re)connect, so a switch is: set this, close the current connection, and let the reader reconnect.
 static SOCKET_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// The summary of the toast that stays while the server cannot be reached.
+const LOST: &str = "Lost the connection to the server. Reconnecting…";
+static MENU_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CLOSE_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static NEW_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SWITCH_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -133,7 +160,6 @@ pub(crate) enum Action {
     FocusAgent(String),
     FocusPane(String),
     NewTab(String),
-    NewSpace,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +194,18 @@ enum Message {
     NewSessionInput(String),
     NewSessionSubmit,
     NewSessionCancel,
+    NewSpaceOpen,
+    NewSpaceFolder(String),
+    NewSpaceName(String),
+    NewSpaceSubmit,
+    NewSpaceCancel,
+    SelectWorkspace(String),
+    CloseWorkspace(String),
+    PickTab(String, String),
+    NewTerminal(String),
+    ToggleSidebar,
+    /// Folds or unfolds a group of the views nav: 0 Orchestrate, 1 Inspect.
+    ToggleNavGroup(u8),
     /// A started session answered (its client socket), or why it did not.
     SessionStarted(Result<PathBuf, String>),
     /// The `×` of a session: the first click warns, the second one stops it (or deletes it when it is stopped).
@@ -184,6 +222,17 @@ enum Message {
     SetMode(Mode),
     StateChanged,
     TogglePalette,
+    ToggleMotion,
+    /// The list of notices opened from the status bar.
+    ToggleHistory,
+    /// Shows a view of the Shepherd panel (from whichever mode the window is in).
+    GoTo(panel::Tab),
+    /// Opens or closes a workspace in the sidebar.
+    ToggleWorkspace(String),
+    /// From the Shepherd panel: back to the terminal, on this workspace.
+    ClearHistory,
+    /// A pane of the terminal: open its agent in the Shepherd panel.
+    OpenInShepherd(String),
     PaletteQuery(String),
     PaletteMove(isize),
     PaletteRun,
@@ -192,9 +241,10 @@ enum Message {
     /// One frame of the demo film: its number and the picture.
     FilmShot(u32, iced::window::Screenshot),
     ArmClose(PendingClose),
-    ToggleSidebar,
     ContextMenuOpened(ContextMenuTarget),
     ContextMenuClosed,
+    /// A destructive item of the context menu: the first click arms it, the second sends `then`.
+    MenuItem(&'static str, Box<Message>),
     RenameStarted(String),
     RenameInput(String),
     RenameSubmitted,
@@ -266,8 +316,28 @@ impl Mode {
 /// Target of a context menu (for rename).
 #[derive(Debug, Clone)]
 enum ContextMenuTarget {
-    Tab { tab_id: String, label: String },
-    Workspace { workspace_id: String, label: String },
+    Tab {
+        tab_id: String,
+        label: String,
+    },
+    Workspace {
+        workspace_id: String,
+        label: String,
+    },
+    /// A session tab of the top bar: running or stopped, and whether it is the default one.
+    Session {
+        name: String,
+        running: bool,
+        default: bool,
+    },
+}
+
+/// The New workspace popover: the folder, an optional name and what is wrong with the folder.
+#[derive(Debug, Clone, Default)]
+struct NewSpace {
+    folder: String,
+    name: String,
+    error: Option<String>,
 }
 
 /// Active rename state.
@@ -286,8 +356,9 @@ struct App {
     surface: Option<PaneSurface>,
     snapshot: Snapshot,
     status: String,
+    /// The connection was lost and has not come back yet (one toast per outage).
+    was_lost: bool,
     pending_close: Option<PendingClose>,
-    sidebar_collapsed: bool,
     /// Animation step of the prism canvases.
     frame: u32,
     /// Demo recording (`SHEPHERD_NATIVE_FILM=<dir>`), see [`Film`].
@@ -303,10 +374,25 @@ struct App {
     sent: Option<(u16, u16)>,
     api_socket: PathBuf,
     context_menu: Option<(iced::Point, ContextMenuTarget)>,
+    /// The folder typed in the New workspace popover, while it is open.
+    new_space: Option<NewSpace>,
+    /// The sidebar column is shown (Ctrl+B hides it; the main area then takes the full width).
+    sidebar_visible: bool,
+    /// Which groups of the views nav are folded (Orchestrate, Inspect).
+    nav_collapsed: [bool; 2],
+    /// The destructive item of the context menu that waits for its second click.
+    menu_armed: Option<&'static str>,
     rename: Option<RenameState>,
     mouse_position: iced::Point,
     /// Whether a data load is running, and whether another was asked for meanwhile.
     reloads: shepherd_app_core::reload::Coalesce,
+    /// The prism stands still (reduced motion), by choice in the status bar or `SHEPHERD_REDUCE_MOTION`.
+    still: bool,
+    history_open: bool,
+    /// Which workspaces are open in the sidebar (the focused one is, until the user says otherwise).
+    expanded: std::collections::HashMap<String, bool>,
+    /// Counts every tick, even while the prism stands still: timers use it, not `frame`.
+    clock: u32,
 }
 
 /// Terminal cells that fit in the window once the sidebar, tab bar and status line are taken out.
@@ -336,15 +422,23 @@ impl App {
             surface: None,
             snapshot: Snapshot::default(),
             status: "connecting…".into(),
+            was_lost: false,
             pending_close: None,
-            sidebar_collapsed: std::env::var_os("SHEPHERD_NATIVE_SIDEBAR_COLLAPSED").is_some(),
             window: start_size(),
             sent: None,
             api_socket: api::api_socket_for(&client_socket()),
             context_menu: None,
+            menu_armed: None,
+            new_space: None,
+            sidebar_visible: true,
+            nav_collapsed: [false, false],
             rename: None,
             mouse_position: iced::Point::ORIGIN,
             reloads: shepherd_app_core::reload::Coalesce::running(), // the first load starts below
+            still: std::env::var_os("SHEPHERD_REDUCE_MOTION").is_some(),
+            clock: 0,
+            history_open: false,
+            expanded: Default::default(),
             frame: 0,
             film: std::env::var_os("SHEPHERD_NATIVE_FILM").map(|dir| Film {
                 dir: PathBuf::from(dir),
@@ -402,12 +496,10 @@ impl App {
     }
 
     fn geometry(&self) -> Geometry {
-        let sidebar_width = if self.sidebar_collapsed {
-            SIDEBAR_COLLAPSED_W
-        } else {
-            SIDEBAR_W
-        };
-        let (cols, rows) = terminal_cells(self.window, sidebar_width);
+        let (cols, rows) = terminal_cells(
+            self.window,
+            if self.sidebar_visible { SIDEBAR_W } else { 0.0 },
+        );
         Geometry {
             cols,
             rows,
@@ -461,7 +553,27 @@ impl App {
                 self.sender = Some(sender);
                 self.sent = None;
                 self.status = "connected".into();
+                if std::mem::take(&mut self.was_lost) {
+                    self.panel.drop_toasts_saying(LOST);
+                    self.panel.notify(ui::info("Reconnected."));
+                }
                 self.sync_size();
+                // verification aid: `SHEPHERD_NATIVE_FOLD=1` starts with the Inspect group folded
+                if std::env::var_os("SHEPHERD_NATIVE_FOLD").is_some() {
+                    self.nav_collapsed[1] = true;
+                }
+                // verification aid: `SHEPHERD_NATIVE_HIDESIDEBAR=1` starts with the sidebar hidden
+                if std::env::var_os("SHEPHERD_NATIVE_HIDESIDEBAR").is_some() {
+                    self.sidebar_visible = false;
+                }
+                // verification aid: `SHEPHERD_NATIVE_NEWSPACE=1` opens the New workspace popover once
+                static SPACE_DONE: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if std::env::var_os("SHEPHERD_NATIVE_NEWSPACE").is_some()
+                    && !SPACE_DONE.swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    self.new_space = Some(NewSpace::default());
+                }
                 // verification aid: `SHEPHERD_NATIVE_NEWSESSION=<name>` types that name in the `+` box and submits it
                 if let Some(name) = std::env::var_os("SHEPHERD_NATIVE_NEWSESSION") {
                     if !NEW_DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -492,6 +604,10 @@ impl App {
             Message::Lost(why) => {
                 self.sender = None;
                 self.status = format!("disconnected ({why}); reconnecting…");
+                // one persistent error toast per outage
+                if !std::mem::replace(&mut self.was_lost, true) {
+                    self.panel.notify(ui::invalid(LOST));
+                }
             }
             Message::Snapshot(snapshot) => {
                 let before = self.folder();
@@ -517,6 +633,11 @@ impl App {
             },
             Message::Key(event) => {
                 if let keyboard::Event::KeyPressed { key, modifiers, .. } = &event {
+                    if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
+                        self.panel.disarm();
+                        self.panel.clear_filter();
+                        self.pending_close = None;
+                    }
                     let is_p =
                         matches!(key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("p"));
                     if is_p && modifiers.control() && modifiers.shift() {
@@ -527,12 +648,31 @@ impl App {
                     if is_s && modifiers.control() && modifiers.shift() {
                         return Task::done(Message::SetMode(self.mode.other()));
                     }
-                    let is_b = matches!(
-                        key,
-                        keyboard::Key::Character(c) if c.eq_ignore_ascii_case("b")
-                    );
-                    if is_b && modifiers.control() {
+                    // Ctrl+B hides or shows the sidebar, from anywhere (before the terminal gets the key)
+                    if modifiers.control()
+                        && !modifiers.shift()
+                        && matches!(key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("b"))
+                    {
                         return Task::done(Message::ToggleSidebar);
+                    }
+                    // Tab and Shift+Tab move between the text fields of the view (iced focuses fields, not buttons)
+                    if self.mode == Mode::Shepherd
+                        && self.palette.is_none()
+                        && matches!(key, keyboard::Key::Named(keyboard::key::Named::Tab))
+                    {
+                        return if modifiers.shift() {
+                            iced::widget::operation::focus_previous()
+                        } else {
+                            iced::widget::operation::focus_next()
+                        };
+                    }
+                    // `/` jumps to the filter of the list (a focused input has already taken the key)
+                    if self.mode == Mode::Shepherd
+                        && self.palette.is_none()
+                        && !modifiers.control()
+                        && matches!(key, keyboard::Key::Character(c) if c.as_str() == "/")
+                    {
+                        return iced::widget::operation::focus(ui::FILTER_ID);
                     }
                     if self.mode == Mode::Shepherd && modifiers.control() {
                         let tab = match key {
@@ -543,9 +683,9 @@ impl App {
                                 "4" => Some(panel::Tab::Tasks),
                                 "5" => Some(panel::Tab::Patterns),
                                 "6" => Some(panel::Tab::Monitor),
-                                "7" => Some(panel::Tab::Git),
-                                "8" => Some(panel::Tab::Events),
-                                "9" => Some(panel::Tab::Models),
+                                "7" => Some(panel::Tab::Skills),
+                                "8" => Some(panel::Tab::Git),
+                                "9" => Some(panel::Tab::Events),
                                 _ => None,
                             },
                             _ => None,
@@ -554,10 +694,39 @@ impl App {
                             return Task::done(Message::Panel(panel::PanelMsg::Tab(tab)));
                         }
                     }
+                    if self.mode == Mode::Shepherd
+                        && self.panel.comm_open()
+                        && self.palette.is_none()
+                        && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
+                    {
+                        return Task::done(Message::Panel(panel::PanelMsg::CommClose));
+                    }
                     if self.new_session.is_some()
                         && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
                     {
                         return Task::done(Message::NewSessionCancel);
+                    }
+                    if self.new_space.is_some()
+                        && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
+                    {
+                        return Task::done(Message::NewSpaceCancel);
+                    }
+                    // Up and Down walk the list on screen (not while a text field is being typed in)
+                    if self.mode == Mode::Shepherd
+                        && self.palette.is_none()
+                        && !self.panel.comm_open()
+                        && !modifiers.control()
+                    {
+                        let step = match key {
+                            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => 1,
+                            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => -1,
+                            _ => 0,
+                        };
+                        if step != 0 {
+                            if let Some(message) = ui::nav_step(step) {
+                                return Task::done(message);
+                            }
+                        }
                     }
                     if self.palette.is_some() {
                         return match key {
@@ -596,19 +765,23 @@ impl App {
                 }
             }
             Message::Tick => {
-                self.frame = self.frame.wrapping_add(1);
+                self.clock = self.clock.wrapping_add(1);
+                self.panel.expire_armed();
+                if !self.still {
+                    self.frame = self.frame.wrapping_add(1);
+                }
                 if let Some(task) = self.film_tick() {
                     return task;
                 }
                 // an unconfirmed `×` goes back to normal after ~5 s
                 if let Some((_, since)) = &self.closing {
-                    if self.frame.wrapping_sub(*since) > 60 {
+                    if self.clock.wrapping_sub(*since) > 60 {
                         self.closing = None;
                         self.session_note = None;
                     }
                 }
                 // sessions start and stop outside the app: look again every ~8 s while the window is open
-                if self.frame.is_multiple_of(100) {
+                if self.clock.is_multiple_of(100) {
                     return refresh_sessions();
                 }
             }
@@ -619,6 +792,65 @@ impl App {
             }
             Message::NewSessionInput(text) => self.new_session = Some((text, None)),
             Message::NewSessionCancel => self.new_session = None,
+            Message::NewSpaceOpen => self.new_space = Some(NewSpace::default()),
+            Message::NewSpaceFolder(text) => {
+                if let Some(space) = self.new_space.as_mut() {
+                    space.folder = text;
+                    space.error = None;
+                }
+            }
+            Message::NewSpaceName(text) => {
+                if let Some(space) = self.new_space.as_mut() {
+                    space.name = text;
+                }
+            }
+            Message::NewSpaceCancel => self.new_space = None,
+            Message::NewSpaceSubmit => {
+                let Some(space) = self.new_space.clone() else {
+                    return Task::none();
+                };
+                let folder = space.folder.trim().to_owned();
+                let folder = match folder.strip_prefix('~') {
+                    Some(rest) => std::env::var("HOME")
+                        .map(|h| format!("{h}{rest}"))
+                        .unwrap_or(folder),
+                    None => folder,
+                };
+                // the popover stays open so the folder can be fixed
+                let problem = if folder.is_empty() {
+                    Some("Say which folder to open.".to_owned())
+                } else if !std::path::Path::new(&folder).is_dir() {
+                    Some(format!("{folder} is not a folder."))
+                } else {
+                    None
+                };
+                if let Some(problem) = problem {
+                    if let Some(s) = self.new_space.as_mut() {
+                        s.error = Some(problem);
+                    }
+                    return Task::none();
+                }
+                self.new_space = None;
+                let name = space.name.trim().to_owned();
+                let shown = if name.is_empty() {
+                    std::path::Path::new(&folder)
+                        .file_name()
+                        .map_or(folder.clone(), |n| n.to_string_lossy().into_owned())
+                } else {
+                    name.clone()
+                };
+                let mut params = serde_json::json!({ "focus": true, "cwd": folder });
+                if !name.is_empty() {
+                    params["label"] = serde_json::json!(name);
+                }
+                self.panel
+                    .notify(format!("Opened workspace {shown} in {folder}."));
+                let socket = self.api_socket.clone();
+                return Task::perform(
+                    async move { api::call(&socket, "workspace.create", params).map(|_| ()) },
+                    Message::Acted,
+                );
+            }
             Message::NewSessionSubmit => {
                 let Some((name, _)) = self.new_session.take() else {
                     return Task::none();
@@ -653,7 +885,7 @@ impl App {
                     let current = session.client_socket() == client_socket();
                     self.session_note =
                         Some((sessions::close_hint(&session, current), theme::WARN));
-                    self.closing = Some((name, self.frame));
+                    self.closing = Some((name, self.clock));
                     return Task::none();
                 }
                 self.closing = None;
@@ -679,6 +911,33 @@ impl App {
             }
             Message::Sessions(Ok(list)) => {
                 self.sessions = list;
+                // verification aid: `SHEPHERD_NATIVE_MENU=session|workspace[:arm]` opens that right-click menu once
+                if let Some(spec) = std::env::var_os("SHEPHERD_NATIVE_MENU") {
+                    if !MENU_DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                        let spec = spec.to_string_lossy().into_owned();
+                        let target = if spec.starts_with("session") {
+                            self.sessions.first().map(|s| ContextMenuTarget::Session {
+                                name: s.name.clone(),
+                                running: s.running,
+                                default: s.default,
+                            })
+                        } else {
+                            self.snapshot
+                                .workspaces
+                                .last()
+                                .map(|w| ContextMenuTarget::Workspace {
+                                    workspace_id: w.workspace_id.clone(),
+                                    label: w.label.clone(),
+                                })
+                        };
+                        if let Some(target) = target {
+                            self.context_menu = Some((iced::Point::new(260.0, 80.0), target));
+                            if spec.ends_with(":arm") {
+                                self.menu_armed = Some("close");
+                            }
+                        }
+                    }
+                }
                 // verification aid: `SHEPHERD_NATIVE_CLOSE=<name>` clicks that session's `×` twice, `<name>:arm` once
                 if let Some(spec) = std::env::var_os("SHEPHERD_NATIVE_CLOSE") {
                     if !CLOSE_DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -729,6 +988,18 @@ impl App {
             }
             Message::Act(action) => {
                 self.pending_close = None;
+                if let Action::FocusAgent(id) = &action {
+                    let pane = self
+                        .snapshot
+                        .agents
+                        .iter()
+                        .find(|a| a.display_name() == *id || a.pane_id == *id)
+                        .map(|a| a.pane_id.clone())
+                        .unwrap_or_default();
+                    self.panel.notify(ui::info(&format!(
+                        "Focused {id} (pane {pane}) in Terminal mode."
+                    )));
+                }
                 let (method, params) = match action {
                     Action::FocusSpace(id) => {
                         ("workspace.focus", serde_json::json!({ "workspace_id": id }))
@@ -748,7 +1019,6 @@ impl App {
                         "tab.create",
                         serde_json::json!({ "workspace_id": workspace, "focus": true }),
                     ),
-                    Action::NewSpace => ("workspace.create", serde_json::json!({ "focus": true })),
                 };
                 let socket = self.api_socket.clone();
                 return Task::perform(
@@ -760,16 +1030,26 @@ impl App {
                 self.pending_close = Some(pending);
                 self.status = "Press close again to confirm closing the group.".into();
             }
-            Message::ToggleSidebar => {
-                self.sidebar_collapsed = !self.sidebar_collapsed;
-                self.sent = None;
-                self.sync_size();
-            }
             Message::ContextMenuOpened(target) => {
+                self.menu_armed = None;
                 self.context_menu = Some((self.mouse_position, target));
             }
             Message::ContextMenuClosed => {
                 self.context_menu = None;
+                self.menu_armed = None;
+            }
+            Message::MenuItem(key, then) => {
+                if self.menu_armed != Some(key) {
+                    self.menu_armed = Some(key);
+                    return Task::none();
+                }
+                self.menu_armed = None;
+                self.context_menu = None;
+                // the menu's two clicks are the confirmation; the session close asks only once more
+                if let Message::CloseSession(name) = &*then {
+                    self.closing = Some((name.clone(), self.clock));
+                }
+                return Task::done(*then);
             }
             Message::RenameStarted(label) => {
                 if let Some((_, target)) = self.context_menu.take() {
@@ -804,6 +1084,7 @@ impl App {
                         "workspace.rename",
                         serde_json::json!({ "workspace_id": workspace_id, "label": new_label }),
                     ),
+                    ContextMenuTarget::Session { .. } => return Task::none(),
                 };
                 let socket = self.api_socket.clone();
                 return Task::perform(
@@ -828,8 +1109,19 @@ impl App {
                     snapshot: &self.snapshot,
                     frame: self.frame,
                 };
+                if self.mode == Mode::Shepherd && self.panel.comm_open() {
+                    return Task::batch([
+                        again,
+                        self.panel.on_data(&ctx),
+                        self.panel.load_feed(&ctx),
+                    ]);
+                }
                 if self.mode == Mode::Shepherd && self.panel.tab == panel::Tab::Monitor {
-                    return Task::batch([again, self.panel.load_feed(&ctx)]);
+                    return Task::batch([
+                        again,
+                        self.panel.on_data(&ctx),
+                        self.panel.refresh_events(),
+                    ]);
                 }
                 if self.mode == Mode::Shepherd && self.panel.tab == panel::Tab::Events {
                     return Task::batch([
@@ -854,6 +1146,114 @@ impl App {
                 };
                 return self.panel.update(msg, &ctx);
             }
+            Message::ToggleMotion => self.still = !self.still,
+            Message::ToggleHistory => self.history_open = !self.history_open,
+            Message::GoTo(tab) => {
+                return Task::batch([
+                    Task::done(Message::SetMode(Mode::Shepherd)),
+                    Task::done(Message::Panel(panel::PanelMsg::Tab(tab))),
+                ]);
+            }
+            Message::ToggleWorkspace(id) => {
+                let now = self.expanded.get(&id).copied().unwrap_or_else(|| {
+                    self.snapshot
+                        .workspaces
+                        .iter()
+                        .any(|w| w.workspace_id == id && w.focused)
+                });
+                self.expanded.insert(id, !now);
+            }
+            Message::SelectWorkspace(id) => {
+                // it becomes current and open; the mode and the view stay as they are
+                self.expanded.insert(id.clone(), true);
+                return Task::done(Message::Act(Action::FocusSpace(id)));
+            }
+            Message::PickTab(ws, tab) => {
+                self.mode = Mode::Terminal;
+                self.expanded.insert(ws, true);
+                return Task::done(Message::Act(Action::FocusTab(tab)));
+            }
+            Message::NewTerminal(id) => {
+                let name = self
+                    .snapshot
+                    .workspaces
+                    .iter()
+                    .find(|w| w.workspace_id == id)
+                    .map_or(id.clone(), |w| w.label.clone());
+                let tab = self.snapshot.tabs_of(&id).count() + 1;
+                self.mode = Mode::Terminal;
+                self.expanded.insert(id.clone(), true);
+                self.panel
+                    .notify(ui::info(&format!("Opened a shell in {name}, tab {tab}.")));
+                return Task::done(Message::Act(Action::NewTab(id)));
+            }
+            Message::CloseWorkspace(id) => {
+                let Some(workspace) = self
+                    .snapshot
+                    .workspaces
+                    .iter()
+                    .find(|w| w.workspace_id == id)
+                else {
+                    return Task::none();
+                };
+                let name = workspace.label.clone();
+                let agents = self
+                    .snapshot
+                    .agents
+                    .iter()
+                    .filter(|a| a.workspace_id == id)
+                    .count();
+                let panes = self
+                    .snapshot
+                    .panes
+                    .iter()
+                    .filter(|p| p.workspace_id == id)
+                    .count();
+                match sidebar::close_rule(&name, agents, panes) {
+                    // refused here: no server text to show under the line
+                    sidebar::CloseRule::Refused(text) => {
+                        self.pending_close = None;
+                        self.panel.notify(ui::invalid(&text));
+                    }
+                    sidebar::CloseRule::Confirm(_) => {
+                        let pending = PendingClose::Workspace(id.clone());
+                        if self.pending_close.as_ref() == Some(&pending) {
+                            self.pending_close = None;
+                            self.panel.notify(format!("Closed workspace {name}."));
+                            return Task::done(Message::Act(Action::CloseSpace(id, true)));
+                        }
+                        self.pending_close = Some(pending);
+                    }
+                    sidebar::CloseRule::Now => {
+                        self.panel.notify(format!("Closed workspace {name}."));
+                        return Task::done(Message::Act(Action::CloseSpace(id, false)));
+                    }
+                }
+            }
+            Message::ToggleNavGroup(i) => {
+                if let Some(c) = self.nav_collapsed.get_mut(usize::from(i)) {
+                    *c = !*c;
+                }
+            }
+            Message::ToggleSidebar => {
+                self.sidebar_visible = !self.sidebar_visible;
+                if !self.sidebar_visible {
+                    self.panel
+                        .notify("Sidebar hidden. Press Ctrl+B to bring it back.".into());
+                }
+                self.sent = None;
+                self.sync_size();
+            }
+            Message::ClearHistory => {
+                self.panel.clear_history();
+                self.history_open = false;
+            }
+            Message::OpenInShepherd(agent) => {
+                return Task::batch([
+                    Task::done(Message::SetMode(Mode::Shepherd)),
+                    Task::done(Message::Panel(panel::PanelMsg::SelectAgent(agent))),
+                ]);
+            }
             Message::TogglePalette => {
                 if self.palette.take().is_none() {
                     self.palette = Some(Palette {
@@ -873,7 +1273,10 @@ impl App {
                 let hits = self
                     .palette
                     .as_ref()
-                    .map(|p| commands::filter(&commands::build(&self.snapshot), &p.query).len())
+                    .map(|p| {
+                        commands::filter(&commands::build(&self.snapshot, &self.data), &p.query)
+                            .len()
+                    })
                     .unwrap_or(0);
                 if let (Some(palette), true) = (self.palette.as_mut(), hits > 0) {
                     palette.selected =
@@ -884,7 +1287,7 @@ impl App {
                 let Some(palette) = self.palette.take() else {
                     return Task::none();
                 };
-                let all = commands::build(&self.snapshot);
+                let all = commands::build(&self.snapshot, &self.data);
                 let run = commands::filter(&all, &palette.query)
                     .get(palette.selected)
                     .map(|c| c.run.clone());
@@ -982,15 +1385,39 @@ impl App {
 
     fn view(&self) -> Element<'_, Message> {
         let body: Element<'_, Message> = match self.mode {
-            Mode::Shepherd => {
+            Mode::Shepherd => iced::widget::responsive(move |size| {
                 let ctx = panel::Ctx {
                     api: self.api_socket.clone(),
                     data: &self.data,
                     snapshot: &self.snapshot,
                     frame: self.frame,
                 };
-                self.panel.view(&ctx)
-            }
+                let body = self.panel.view(&ctx);
+                // fixed sizes, scroll instead of squash: when the fixed panes and a flexible region of at
+                // least 360 px do not fit, the whole main area scrolls (section 1.3 of the spec)
+                let (min_w, min_h) = (self.panel.min_main_width(), MAIN_MIN_H);
+                if size.width >= min_w && size.height >= min_h {
+                    body
+                } else {
+                    theme::scroll(
+                        container(body)
+                            .width(Length::Fixed(size.width.max(min_w)))
+                            .height(Length::Fixed(size.height.max(min_h))),
+                    )
+                    .direction(iced::widget::scrollable::Direction::Both {
+                        vertical: iced::widget::scrollable::Scrollbar::new()
+                            .width(8)
+                            .scroller_width(8),
+                        horizontal: iced::widget::scrollable::Scrollbar::new()
+                            .width(8)
+                            .scroller_width(8),
+                    })
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+                }
+            })
+            .into(),
             Mode::Terminal => self.terminal_pane(),
         };
         let status_color_val = if self.status.starts_with("connected") {
@@ -1004,18 +1431,187 @@ impl App {
             DIM
         };
         let base = self.app_window(body, status_color_val);
+        let base: Element<'_, Message> = if self.history_open {
+            iced::widget::stack![base, self.history_view()].into()
+        } else {
+            base
+        };
+        let toasts = self.panel.toasts();
+        let base: Element<'_, Message> = if toasts.is_empty() {
+            base
+        } else {
+            iced::widget::stack![base, ui::toasts_view(toasts)].into()
+        };
         let content: Element<'_, Message> = match &self.palette {
             Some(palette) => iced::widget::stack![base, self.palette_view(palette)].into(),
             None => base,
         };
         // Overlay: rename dialog takes precedence, then context menu
-        if self.rename.is_some() {
+        if let Some(space) = &self.new_space {
+            iced::widget::stack![content, self.new_space_view(space)].into()
+        } else if self.rename.is_some() {
             iced::widget::stack![content, self.rename_view()].into()
         } else if self.context_menu.is_some() {
             iced::widget::stack![content, self.context_menu_view()].into()
         } else {
             content
         }
+    }
+
+    /// The notices of this session, newest first (at most 30), over the bottom left corner: 480 wide, 280 tall at
+    /// most, opened from the status bar.
+    fn history_view(&self) -> Element<'_, Message> {
+        let notices = self.panel.history();
+        let mut list = column![row![
+            text("Notices")
+                .font(theme::MONO_BOLD)
+                .size(13)
+                .color(theme::HI),
+            container(text("")).width(Length::Fill),
+            button(text("Clear").size(11.5))
+                .padding([2, 8])
+                .style(theme::link_button_style())
+                .on_press(Message::ClearHistory),
+            button(text("×").size(14))
+                .padding([0, 6])
+                .style(theme::close_button_style())
+                .on_press(Message::ToggleHistory),
+        ]
+        .align_y(iced::Alignment::Center)]
+        .spacing(8);
+        if notices.is_empty() {
+            list = list.push(
+                text("Nothing yet. Every notice of this session is kept here.")
+                    .size(12)
+                    .color(DIM),
+            );
+        }
+        for (time, n) in notices.iter().rev() {
+            let bad = ui::is_error(n);
+            let color = if bad { theme::BAD } else { theme::OK };
+            list = list.push(
+                row![
+                    text(time.clone()).size(11).color(theme::FAINT).width(62),
+                    text("■").size(8).color(color),
+                    text(n.clone())
+                        .size(12)
+                        .color(if bad { theme::BAD } else { theme::FG }),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            );
+        }
+        container(
+            container(theme::scroll(list).height(Length::Shrink))
+                .padding(14)
+                .width(480)
+                .max_height(280)
+                .style(theme::toast_style(theme::LINE2)),
+        )
+        .padding(pad(0.0, 0.0, 34.0, 12.0))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_bottom(Length::Fill)
+        .into()
+    }
+
+    /// The box in the top bar that opens the command palette.
+    fn search_box(&self) -> Element<'_, Message> {
+        button(
+            container(
+                row![
+                    text("⌕").size(14).color(DIM),
+                    text("Jump to a view, agent or task")
+                        .size(11.5)
+                        .color(DIM)
+                        .wrapping(iced::widget::text::Wrapping::None),
+                    container(text("")).width(Length::Fill),
+                    container(
+                        text("Ctrl+Shift+P")
+                            .size(10)
+                            .color(DIM)
+                            .wrapping(iced::widget::text::Wrapping::None)
+                    )
+                    .padding([1, 6])
+                    .width(Length::Shrink)
+                    .style(theme::kbd_style),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            )
+            .center_y(Length::Fill),
+        )
+        .width(Length::Fill)
+        .height(30)
+        .padding([0, 10])
+        .style(theme::outline_button_style(false))
+        .on_press(Message::TogglePalette)
+        .into()
+    }
+
+    /// What needs the human now: waiting gates and blocked agents. Orange pill; click goes to where it is decided.
+    fn needs_pill(&self) -> Element<'_, Message> {
+        let gates = self.data.gates.len();
+        let blocked = self
+            .data
+            .agents
+            .iter()
+            .filter(|a| a.state == "blocked" || !a.notice.is_empty())
+            .count();
+        let n = gates + blocked;
+        if n == 0 {
+            return button(
+                container(
+                    row![
+                        text("■").size(8).color(theme::OK),
+                        text("all clear").size(11.5).color(DIM)
+                    ]
+                    .spacing(7)
+                    .align_y(iced::Alignment::Center),
+                )
+                .center_y(Length::Fill),
+            )
+            .padding([0, 12])
+            .height(30)
+            .style(theme::link_button_style())
+            .on_press(Message::GoTo(panel::Tab::Overview))
+            .into();
+        }
+        let target = panel::Tab::Overview;
+        button(
+            row![
+                container(
+                    text(n.to_string())
+                        .size(10.5)
+                        .font(theme::MONO_BOLD)
+                        .color(theme::BG)
+                )
+                .padding([0, 6])
+                .style(theme::badge_style(theme::WARN)),
+                text("needs you").size(12).color(theme::WARN),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding([5, 12])
+        .style(|_, status| {
+            let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: Some(Background::Color(Color {
+                    a: if hot { 0.2 } else { 0.1 },
+                    ..theme::WARN
+                })),
+                text_color: theme::WARN,
+                border: Border {
+                    color: theme::WARN,
+                    width: 1.0,
+                    radius: 14.0.into(),
+                },
+                ..button::Style::default()
+            }
+        })
+        .on_press(Message::GoTo(target))
+        .into()
     }
 
     /// One button per session (`.sess`): a dot for running or stopped, the current one lifted. Only a running
@@ -1037,11 +1633,20 @@ impl App {
                 .padding([0, 10])
                 .height(30)
                 .style(item_style(here));
-            buttons = buttons.push(if session.running && !here {
-                session_button.on_press(Message::SwitchSession(session.client_socket()))
-            } else {
+            let session_button: Element<'_, Message> = if session.running && !here {
                 session_button
-            });
+                    .on_press(Message::SwitchSession(session.client_socket()))
+                    .into()
+            } else {
+                session_button.into()
+            };
+            buttons = buttons.push(mouse_area(session_button).on_right_press(
+                Message::ContextMenuOpened(ContextMenuTarget::Session {
+                    name: session.name.clone(),
+                    running: session.running,
+                    default: session.default,
+                }),
+            ));
             // `×`: stop it (running) or delete it (stopped); the default session cannot be deleted
             if session.running || !session.default {
                 let armed = self.closing.as_ref().map(|(n, _)| n) == Some(&session.name);
@@ -1108,17 +1713,17 @@ impl App {
             tooltip(
                 button(
                     container(
-                        row![text(glyph).size(12), text(label).size(13)]
-                            .spacing(8)
+                        row![text(glyph).size(12), text(label).size(12.5)]
+                            .spacing(7)
                             .align_y(iced::Alignment::Center),
                     )
                     .center_y(Length::Fill),
                 )
-                .padding([0, 14])
-                .height(30)
+                .padding([0, 12])
+                .height(26)
                 .style(item_style(self.mode == mode))
                 .on_press(Message::SetMode(mode)),
-                text("Ctrl+Shift+S").size(11),
+                text("Switch mode: Ctrl+Shift+S").size(11),
                 tooltip::Position::Bottom,
             )
         };
@@ -1131,11 +1736,10 @@ impl App {
         )
         .padding(2)
         .style(|_| container::Style {
-            background: Some(Background::Color(theme::SURFACE)),
             border: Border {
-                color: theme::LINE,
+                color: theme::LINE2,
                 width: 1.0,
-                radius: 6.0.into(),
+                radius: 7.0.into(),
             },
             ..container::Style::default()
         })
@@ -1145,10 +1749,17 @@ impl App {
     /// The terminal: the tabs of the workspace, and the screen in a thin frame with some margin.
     fn terminal_pane(&self) -> Element<'_, Message> {
         let screen: Element<'_, Message> = match &self.surface {
-            Some(surface) => Canvas::new(grid::Grid { surface })
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
+            Some(surface) => {
+                let canvas = Canvas::new(grid::Grid { surface })
+                    .width(Length::Fill)
+                    .height(Length::Fill);
+                let mut layers: Vec<Element<'_, Message>> = vec![canvas.into()];
+                layers.extend(self.pane_headers(surface));
+                iced::widget::stack(layers)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+            }
             None => container(text("waiting for the server…").color(DIM))
                 .center(Length::Fill)
                 .into(),
@@ -1177,6 +1788,111 @@ impl App {
         .into()
     }
 
+    /// A strip over the top row of every pane that holds an agent: its name, kind and state, and two buttons
+    /// (open it in the Shepherd panel, focus it). The row is the pane's own top border, which it covers.
+    fn pane_headers<'a>(&'a self, surface: &'a PaneSurface) -> Vec<Element<'a, Message>> {
+        let mut out = Vec::new();
+        let several = surface.panes.len() > 1;
+        for pane in &surface.panes {
+            let agent = self
+                .snapshot
+                .agents
+                .iter()
+                .find(|a| a.pane_id == pane.pane_id);
+            // a plain shell has no header: its first row is real content, not a border
+            if agent.is_none() {
+                continue;
+            }
+            let status = agent.map(|a| a.status());
+            let blocked = status == Some(shepherd_app_core::snapshot::Status::Blocked);
+            let color = status.map_or(DIM, status_color);
+            let name = agent.map_or_else(|| "shell".to_owned(), |a| a.display_name());
+            let word = match status {
+                Some(_) if blocked => "needs you",
+                Some(s) => status_name(s),
+                None => "",
+            };
+            let place = |x: u16, y: u16| {
+                pad(
+                    f32::from(y) * grid::CELL_H,
+                    0.0,
+                    0.0,
+                    f32::from(x) * grid::CELL_W,
+                )
+            };
+            // an outline: orange when the agent needs the human, cyan on the focused pane of several
+            let outline = if blocked {
+                Some(Color {
+                    a: 0.45,
+                    ..theme::WARN
+                })
+            } else if several && pane.focused {
+                Some(theme::ACCENT)
+            } else {
+                None
+            };
+            if let Some(color) = outline {
+                out.push(
+                    container(
+                        container(text(""))
+                            .width(f32::from(pane.rect.width) * grid::CELL_W)
+                            .height(f32::from(pane.rect.height) * grid::CELL_H)
+                            .style(move |_| container::Style {
+                                border: Border {
+                                    color,
+                                    width: 1.5,
+                                    radius: 0.0.into(),
+                                },
+                                ..container::Style::default()
+                            }),
+                    )
+                    .padding(place(pane.rect.x, pane.rect.y))
+                    .into(),
+                );
+            }
+            let mini = |label: &'static str, msg: Message| {
+                button(text(label).size(10.5))
+                    .padding([0, 7])
+                    .height(CELL_ROW)
+                    .style(theme::link_button_style())
+                    .on_press(msg)
+            };
+            let mut strip = row![
+                text("■").size(9).color(color),
+                text(name.clone())
+                    .font(theme::MONO_BOLD)
+                    .size(11)
+                    .color(theme::HI),
+                text(agent.and_then(|a| a.agent.clone()).unwrap_or_default())
+                    .size(10.5)
+                    .color(DIM),
+                text(word).size(10.5).color(color),
+                text(pane.pane_id.clone()).size(10.5).color(theme::FAINT),
+                container(text("")).width(Length::Fill),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
+            if agent.is_some() {
+                strip = strip.push(mini("Open in Shepherd", Message::OpenInShepherd(name)));
+            }
+            strip = strip.push(mini(
+                "Focus",
+                Message::Act(Action::FocusPane(pane.pane_id.clone())),
+            ));
+            let strip = container(strip)
+                .padding([0, 8])
+                .width(f32::from(pane.rect.width) * grid::CELL_W)
+                .height(CELL_ROW)
+                .style(theme::bar_style);
+            out.push(
+                container(strip)
+                    .padding(place(pane.rect.x, pane.rect.y))
+                    .into(),
+            );
+        }
+        out
+    }
+
     /// `workspace › tab` of what the terminal shows now.
     fn terminal_place(&self) -> String {
         let workspace = self.snapshot.workspaces.iter().find(|w| w.focused);
@@ -1200,6 +1916,25 @@ impl App {
         body: Element<'a, Message>,
         status_color_val: Color,
     ) -> Element<'a, Message> {
+        // without the server the views keep their last data, dimmed to about 60 % (the overlay lets clicks through)
+        let body: Element<'a, Message> = if self.was_lost {
+            iced::widget::stack![
+                body,
+                container(text(""))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(Color {
+                            a: 0.4,
+                            ..theme::BG
+                        })),
+                        ..container::Style::default()
+                    })
+            ]
+            .into()
+        } else {
+            body
+        };
         // the strip and the logo animate in both modes: they belong to the shared window
         let strip = Canvas::new(prism::Prism {
             preset: prism::Preset::STRIP,
@@ -1210,27 +1945,48 @@ impl App {
         let connected = self.status.starts_with("connected");
         let top_bar = container(
             row![
-                Canvas::new(prism::Prism {
-                    preset: prism::Preset::logo(theme::BAR),
-                    frame: self.frame + 3,
-                })
-                .width(34)
-                .height(20),
-                text("SHEPHERD")
-                    .font(theme::PIXEL_BOLD)
-                    .size(15)
-                    .color(theme::HI),
+                button(
+                    row![
+                        Canvas::new(logo::Flock).width(36).height(18),
+                        text("SHEPHERD")
+                            .font(theme::PIXEL_BOLD)
+                            .size(13)
+                            .color(theme::HI),
+                    ]
+                    .spacing(10)
+                    .align_y(iced::Alignment::Center)
+                )
+                .padding(0)
+                .style(theme::link_button_style())
+                .on_press(Message::GoTo(panel::Tab::Overview)),
                 self.mode_switch(),
                 self.session_buttons(),
-                container(text("")).width(Length::Fill),
+                // the search box gives way before anything else is cut off (up to 360 px)
+                container(container(self.search_box()).max_width(360))
+                    .width(Length::Fill)
+                    .align_x(iced::alignment::Horizontal::Right),
+                self.needs_pill(),
                 text("●").size(9).color(status_color_val),
                 text(if connected {
                     "connected".to_owned()
+                } else if self.status.contains("disconnected")
+                    || self.status.starts_with("could not")
+                {
+                    "disconnected".to_owned()
                 } else {
-                    self.status.clone()
+                    "reconnecting".to_owned()
                 })
-                .size(12)
-                .color(DIM),
+                .size(11.5)
+                .color(
+                    if connected
+                        || !(self.status.contains("disconnected")
+                            || self.status.starts_with("could not"))
+                    {
+                        DIM
+                    } else {
+                        theme::BAD
+                    }
+                ),
             ]
             .spacing(14)
             .align_y(iced::Alignment::Center),
@@ -1242,7 +1998,11 @@ impl App {
         .style(theme::bar_style);
         // left of the status bar: the panel's own notice, or where the terminal is and how big it is
         let left: Element<'a, Message> = match self.mode {
-            Mode::Shepherd => self.panel.notice(),
+            Mode::Shepherd => button(self.panel.notice())
+                .padding(0)
+                .style(theme::link_button_style())
+                .on_press(Message::ToggleHistory)
+                .into(),
             Mode::Terminal => {
                 let g = self.geometry();
                 row![
@@ -1265,6 +2025,18 @@ impl App {
                 .size(11.5)
                 .color(self.session_note.as_ref().map_or(DIM, |(_, color)| *color)),
                 container(text("")).width(Length::Fill),
+                button(
+                    text(if self.still {
+                        "Motion: off"
+                    } else {
+                        "Motion: on"
+                    })
+                    .size(11.5)
+                    .color(DIM)
+                )
+                .padding(0)
+                .style(theme::link_button_style())
+                .on_press(Message::ToggleMotion),
                 text(if connected {
                     "● connected"
                 } else {
@@ -1290,7 +2062,11 @@ impl App {
         container(column![
             strip,
             top_bar,
-            row![self.sidebar(), container(body).width(Length::Fill)].height(Length::Fill),
+            if self.sidebar_visible {
+                row![self.sidebar(), container(body).width(Length::Fill)].height(Length::Fill)
+            } else {
+                row![container(body).width(Length::Fill)].height(Length::Fill)
+            },
             status_bar,
         ])
         .style(|_| container::Style {
@@ -1300,38 +2076,205 @@ impl App {
         .into()
     }
 
-    /// The context menu overlay (right-click menu).
+    /// The popover of the sidebar's `+`: the folder the new workspace opens in (empty: the server's folder).
+    fn new_space_view<'a>(&'a self, space: &'a NewSpace) -> Element<'a, Message> {
+        let field = |label: &'static str,
+                     hint: &'static str,
+                     value: &'a str,
+                     on: fn(String) -> Message,
+                     bad: bool| {
+            column![
+                text(label).size(11).color(DIM),
+                text_input(hint, value)
+                    .on_input(on)
+                    .on_submit(Message::NewSpaceSubmit)
+                    .style(theme::input_style_marked(bad))
+                    .padding([8, 10])
+                    .size(12.5),
+            ]
+            .spacing(4)
+        };
+        let mut form = column![
+            text("New workspace")
+                .size(13)
+                .font(theme::MONO_BOLD)
+                .color(theme::HI),
+            text("Opens a workspace in a folder. Terminals and agents started in it work there.")
+                .size(11.5)
+                .color(DIM),
+            field(
+                "Folder",
+                "~/projects/…",
+                &space.folder,
+                Message::NewSpaceFolder,
+                space.error.is_some()
+            ),
+        ]
+        .spacing(10);
+        if let Some(error) = &space.error {
+            form = form.push(text(error.clone()).size(11).color(theme::BAD));
+        }
+        form = form
+            .push(field(
+                "Name",
+                "the folder name",
+                &space.name,
+                Message::NewSpaceName,
+                false,
+            ))
+            .push(
+                row![
+                    button(container(text("Open workspace").size(13)).center_y(Length::Fill))
+                        .padding([0, 12])
+                        .height(30)
+                        .style(theme::primary_button_style())
+                        .on_press(Message::NewSpaceSubmit),
+                    button(container(text("Cancel").size(13)).center_y(Length::Fill))
+                        .padding([0, 12])
+                        .height(30)
+                        .style(theme::ghost_button_style())
+                        .on_press(Message::NewSpaceCancel),
+                ]
+                .spacing(8),
+            );
+        let panel = container(form)
+            .padding(14)
+            .width(280)
+            .style(theme::toast_style(theme::LINE2));
+        let overlay = mouse_area(container(text("")).width(Length::Fill).height(Length::Fill))
+            .on_press(Message::NewSpaceCancel);
+        // anchored under the "+" of the sidebar header
+        iced::widget::stack![
+            overlay,
+            container(panel).padding(pad(STRIP_H + TOPBAR_H + 16.0 + 22.0 + 4.0, 0.0, 0.0, 10.0))
+        ]
+        .into()
+    }
+
+    /// The context menu overlay (right-click menu): Rename, and the destructive items with the two-click rule.
     fn context_menu_view(&self) -> Element<'_, Message> {
         let Some((position, target)) = &self.context_menu else {
             return container(text("")).into();
         };
-
-        let label = match target {
-            ContextMenuTarget::Tab { label, .. } => label.clone(),
-            ContextMenuTarget::Workspace { label, .. } => label.clone(),
-        };
-
-        let rename_btn = button(
-            container(text(format!("Rename \"{}\"", label)).size(12))
-                .padding([8, 16])
-                .width(Length::Fill),
-        )
-        .padding(0)
-        .width(180.0)
-        .style(item_style(false))
-        .on_press(Message::RenameStarted(label));
-
-        let menu_content = container(column![rename_btn].spacing(0))
-            .padding(4)
-            .style(|_| container::Style {
-                background: Some(Background::Color(PANEL)),
-                border: Border {
-                    color: Color { a: 0.5, ..LINE },
-                    width: 0.5,
-                    radius: 0.0.into(),
-                },
-                ..container::Style::default()
-            });
+        // (label, armed label, what it sends); a plain item has no armed label
+        let mut items: Vec<(String, Option<String>, Message)> = vec![];
+        match target {
+            ContextMenuTarget::Tab { tab_id, label } => {
+                items.push(("Rename".into(), None, Message::RenameStarted(label.clone())));
+                items.push((
+                    "Close".into(),
+                    Some(format!("Confirm: close {label}")),
+                    Message::Act(Action::CloseTab(tab_id.clone())),
+                ));
+            }
+            ContextMenuTarget::Workspace {
+                workspace_id,
+                label,
+            } => {
+                let agents = self
+                    .snapshot
+                    .agents
+                    .iter()
+                    .filter(|a| &a.workspace_id == workspace_id)
+                    .count();
+                items.push(("Rename".into(), None, Message::RenameStarted(label.clone())));
+                items.push((
+                    "New terminal".into(),
+                    None,
+                    Message::Act(Action::NewTab(workspace_id.clone())),
+                ));
+                if agents > 0 {
+                    // the server would refuse anyway: say it where the click is
+                    items.push((
+                        "Close".into(),
+                        None,
+                        Message::Panel(panel::PanelMsg::Notify(ui::invalid(&format!(
+                            "Workspace {label} still runs {agents} agents. Close them first, then the workspace."
+                        )))),
+                    ));
+                } else {
+                    items.push((
+                        "Close".into(),
+                        Some(format!("Confirm: close {label}")),
+                        Message::Act(Action::CloseSpace(workspace_id.clone(), false)),
+                    ));
+                }
+            }
+            ContextMenuTarget::Session {
+                name,
+                running,
+                default,
+            } => {
+                if *running {
+                    // `CloseSession` asks twice itself: the second message is the confirmation
+                    items.push((
+                        "Close".into(),
+                        Some(format!("Confirm: close {name}")),
+                        Message::CloseSession(name.clone()),
+                    ));
+                } else if !default {
+                    items.push((
+                        "Delete".into(),
+                        Some(format!("Confirm: delete {name}")),
+                        Message::CloseSession(name.clone()),
+                    ));
+                } else {
+                    // nothing to offer: say why instead of showing an empty menu
+                    items.push((
+                        "The default session cannot be deleted".into(),
+                        None,
+                        Message::ContextMenuClosed,
+                    ));
+                }
+            }
+        }
+        let mut list = column![].spacing(0);
+        for (label, armed_label, message) in items {
+            let key: &'static str = match label.as_str() {
+                "Close" => "close",
+                _ => "delete",
+            };
+            let armed = armed_label.is_some() && self.menu_armed == Some(key);
+            let shown = match (&armed_label, armed) {
+                (Some(text), true) => text.clone(),
+                _ => label.clone(),
+            };
+            let send = match (&armed_label, &target) {
+                (Some(_), _) => Message::MenuItem(key, Box::new(message)),
+                (None, _) => message,
+            };
+            list = list.push(
+                button(
+                    container(text(shown).size(12))
+                        .padding([8, 16])
+                        .width(Length::Fill),
+                )
+                .padding(0)
+                .width(240.0)
+                .style({
+                    let destructive = armed_label.is_some();
+                    move |theme, status| {
+                        if armed {
+                            theme::danger_button_style()(theme, status)
+                        } else if destructive {
+                            theme::destructive_button_style()(theme, status)
+                        } else {
+                            item_style(false)(theme, status)
+                        }
+                    }
+                })
+                .on_press(send),
+            );
+        }
+        let menu_content = container(list).padding(4).style(|_| container::Style {
+            background: Some(Background::Color(PANEL)),
+            border: Border {
+                color: Color { a: 0.5, ..LINE },
+                width: 0.5,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        });
 
         // Click overlay to close menu
         let overlay = mouse_area(container(text("")).width(Length::Fill).height(Length::Fill))
@@ -1355,62 +2298,99 @@ impl App {
     }
 
     /// The command palette, drawn over the window (not a separate window): a box to type in and the matches.
+    /// The command palette: a 640 wide panel 72 px from the top over a dimmed window; rows in groups, 34 high.
     fn palette_view<'a>(&'a self, palette: &'a Palette) -> Element<'a, Message> {
-        let all = commands::build(&self.snapshot);
+        let all = commands::build(&self.snapshot, &self.data);
         let hits = commands::filter(&all, &palette.query);
-        let mut list = column![].spacing(1);
-        for (index, hit) in hits.iter().take(12).enumerate() {
+        let mut list = column![].spacing(0);
+        let mut group = "";
+        for (index, hit) in hits.iter().take(60).enumerate() {
+            if hit.group != group {
+                group = hit.group;
+                list = list.push(
+                    container(text(group).size(11).color(DIM)).padding(pad(10.0, 14.0, 4.0, 14.0)),
+                );
+            }
+            let dot = hit.dot;
             list = list.push(
-                container(text(hit.label.clone()).size(12))
-                    .width(Length::Fill)
-                    .padding([4, 8])
-                    .style(move |_| container::Style {
-                        background: (index == palette.selected).then_some(Background::Color(
-                            iced::Color {
-                                a: 0.2,
-                                ..theme::ACCENT
-                            },
-                        )),
-                        ..container::Style::default()
-                    }),
+                container(
+                    row![
+                        text("■").size(8).color(dot),
+                        text(hit.label.clone()).size(13).width(Length::Fill),
+                        text(hit.hint.clone()).size(11).color(theme::FAINT),
+                    ]
+                    .spacing(10)
+                    .align_y(iced::Alignment::Center),
+                )
+                .width(Length::Fill)
+                .height(34)
+                .padding([0, 14])
+                .align_y(iced::alignment::Vertical::Center)
+                .style(move |_| container::Style {
+                    background: (index == palette.selected)
+                        .then_some(Background::Color(theme::SELECTED)),
+                    ..container::Style::default()
+                }),
             );
         }
         if hits.is_empty() {
             list = list
-                .push(container(text("No command matches.").size(12).color(DIM)).padding([4, 8]));
+                .push(container(text("No command matches.").size(12).color(DIM)).padding([10, 14]));
         }
-        let input = text_input("Type a command…", &palette.query)
-            .id(PALETTE_INPUT)
-            .on_input(Message::PaletteQuery)
-            .on_submit(Message::PaletteRun)
-            .padding(6)
-            .size(13);
-        let shortcuts = row![
-            text("↑↓ navigate").size(10).color(DIM),
-            text("Enter run").size(10).color(DIM),
-            text("Esc close").size(10).color(DIM),
-        ]
-        .spacing(10);
-        let view_shortcuts = text("Ctrl+1–5 workspace · Ctrl+6–9 inspect")
-            .size(10)
-            .color(DIM);
-        let boxed = container(column![input, list, shortcuts, view_shortcuts].spacing(4))
-            .width(480)
-            .padding(6)
-            .style(|_| container::Style {
-                background: Some(Background::Color(PANEL)),
-                border: Border {
-                    color: LINE,
-                    width: 0.5,
-                    radius: 0.0.into(),
-                },
-                ..container::Style::default()
-            });
+        let header = container(
+            row![
+                text("⌕").size(15).color(DIM),
+                text_input("Type a view, agent, task or command", &palette.query)
+                    .id(PALETTE_INPUT)
+                    .on_input(Message::PaletteQuery)
+                    .on_submit(Message::PaletteRun)
+                    .padding(6)
+                    .size(14),
+                text("Esc").size(10).color(theme::FAINT),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center),
+        )
+        .height(50)
+        .padding([0, 14])
+        .align_y(iced::alignment::Vertical::Center)
+        .style(theme::bottom_line_style);
+        let footer = container(
+            text("Enter to open · Up and down to move · Ctrl+Shift+P to open from anywhere")
+                .size(10.5)
+                .color(DIM),
+        )
+        .padding([8, 14])
+        .width(Length::Fill)
+        .style(theme::top_line_style);
+        let boxed = container(column![
+            header,
+            theme::scroll(list).height(Length::Shrink),
+            footer
+        ])
+        .width(640)
+        .max_height(560)
+        .style(|_| container::Style {
+            background: Some(Background::Color(PANEL)),
+            border: Border {
+                color: theme::LINE2,
+                width: 1.0,
+                radius: 10.0.into(),
+            },
+            ..container::Style::default()
+        });
+        // the backdrop dims the whole window
         container(boxed)
             .center_x(Length::Fill)
+            .width(Length::Fill)
+            .height(Length::Fill)
             .padding(iced::Padding {
-                top: 70.0,
+                top: 72.0,
                 ..iced::Padding::ZERO
+            })
+            .style(|_| container::Style {
+                background: Some(Background::Color(Color::from_rgba8(3, 3, 6, 0.72))),
+                ..container::Style::default()
             })
             .into()
     }
@@ -1425,13 +2405,28 @@ impl App {
                 .into();
         };
 
-        let mut tabs = row![].spacing(0);
+        let workspace_label = self
+            .snapshot
+            .workspaces
+            .iter()
+            .find(|w| w.workspace_id == workspace)
+            .map(|w| w.label.clone())
+            .unwrap_or_default();
+        let mut tabs = row![container(
+            text(workspace_label)
+                .font(theme::MONO_BOLD)
+                .size(13)
+                .color(theme::HI)
+        )
+        .padding([0, 12])
+        .center_y(Length::Fill)]
+        .spacing(0);
         for tab in self.snapshot.tabs_of(workspace) {
             let label = tab.label.clone();
             let tab_id = tab.tab_id.clone();
             let tab_content = row![
                 text(label.clone()).size(13),
-                button(text("✕").size(9))
+                button(container(text("✕").size(9)).center_y(Length::Fill))
                     .padding([2, 4])
                     .width(18.0)
                     .height(18.0)
@@ -1443,7 +2438,7 @@ impl App {
 
             let tab_button = button(container(tab_content).center_y(Length::Fill))
                 .padding([0, 12])
-                .height(34)
+                .height(32)
                 .style(item_style(tab.focused))
                 .on_press(Message::Act(Action::FocusTab(tab_id.clone())));
 
@@ -1457,16 +2452,35 @@ impl App {
         tabs = tabs.push(
             button(container(text("+").size(14)).center(Length::Fill))
                 .width(30)
-                .height(34)
+                .height(32)
                 .style(mini_button_style())
                 .on_press(Message::Act(Action::NewTab(workspace.to_owned()))),
         );
 
+        let panes = self.surface.as_ref().map_or(0, |s| s.panes.len());
+        let focused_tab = self
+            .snapshot
+            .tabs_of(workspace)
+            .find(|t| t.focused)
+            .map_or(1, |t| t.number);
         let content = row![
-            scrollable(tabs).direction(scrollable::Direction::Horizontal(
+            crate::theme::scroll(tabs).direction(scrollable::Direction::Horizontal(
                 scrollable::Scrollbar::new().width(0).scroller_width(0),
             )),
+            container(text("")).width(Length::Fill),
+            text(if self.window.width >= 1500.0 {
+                format!(
+                    "{panes} pane{} in tab {focused_tab}. Mouse and scrollback work as in your terminal. Ctrl+Shift+S goes to Shepherd.",
+                    if panes == 1 { "" } else { "s" }
+                )
+            } else {
+                format!("{panes} pane{} in tab {focused_tab}", if panes == 1 { "" } else { "s" })
+            })
+            .size(11)
+            .color(DIM)
+            .wrapping(iced::widget::text::Wrapping::None),
         ]
+        .align_y(iced::Alignment::Center)
         .width(Length::Fill);
 
         container(content)
@@ -1478,265 +2492,486 @@ impl App {
             .into()
     }
 
+    /// The sidebar (spec 4.2): the workspaces tree on top (the only part that scrolls), the views under it and the
+    /// "Hide sidebar" row. The same component in both modes; only the highlights change.
     fn sidebar(&self) -> Element<'_, Message> {
-        if self.sidebar_collapsed {
-            // Orca-style collapsed sidebar: icon-only, very narrow
-            let working = self
-                .snapshot
+        use shepherd_app_core::snapshot::Status;
+        let in_shepherd = self.mode == Mode::Shepherd;
+        let agent_state = |agent: &shepherd_app_core::snapshot::Agent| {
+            // Shepherd's own record of an agent says more than the terminal's guess, so it wins
+            self.data
                 .agents
                 .iter()
-                .filter(|agent| {
-                    matches!(agent.status(), shepherd_app_core::snapshot::Status::Working)
-                })
-                .count();
-            let _blocked = self
-                .snapshot
+                .find(|a| a.id == agent.display_name())
+                .map_or(agent.status(), |a| panel::agent_status(&a.state))
+        };
+        let needs_human = |agent: &shepherd_app_core::snapshot::Agent| {
+            self.data
                 .agents
                 .iter()
-                .filter(|agent| {
-                    matches!(agent.status(), shepherd_app_core::snapshot::Status::Blocked)
-                })
-                .count();
-
-            let mut items = column![].spacing(0).align_x(iced::Alignment::Center);
-
-            // Top section: Shepherd button
-            items = items.push(
-                container(
-                    column![tooltip(
-                        button(text("◆").size(15))
-                            .padding(6)
-                            .width(32.0)
-                            .height(32.0)
-                            .style(item_style(self.mode == Mode::Shepherd))
-                            .on_press(Message::SetMode(Mode::Shepherd)),
-                        text("Shepherd").size(11),
-                        tooltip::Position::Right,
-                    ),]
-                    .spacing(4),
-                )
-                .padding(pad(10.0, 0.0, 6.0, 0.0)),
-            );
-
-            items = items.push(
-                container(
-                    column![
-                        tooltip(
-                            button(text("⌂").size(15))
-                                .padding(6)
-                                .width(32.0)
-                                .height(32.0)
-                                .style(mini_button_style())
-                                .on_press(Message::ToggleSidebar),
-                            text("Workspaces").size(11),
-                            tooltip::Position::Right,
-                        ),
-                        tooltip(
-                            button(
-                                container(text("◉").size(11).color(if working > 0 {
-                                    ACCENT
-                                } else {
-                                    DIM
-                                }))
-                                .width(32.0)
-                                .align_x(iced::Alignment::Center)
-                                .height(32.0)
-                            )
-                            .padding(0)
-                            .width(32.0)
-                            .height(32.0)
-                            .style(mini_button_style())
-                            .on_press(Message::Panel(panel::PanelMsg::Tab(panel::Tab::Agents))),
-                            text(format!("Agents ({working})")).size(11),
-                            tooltip::Position::Right,
-                        ),
-                    ]
-                    .spacing(0),
-                )
-                .padding([6, 0]),
-            );
-
-            // Bottom: expand button
-            items = items.push(container(text("")).height(Length::Fill));
-            items = items.push(tooltip(
-                button(text("›").size(15))
-                    .padding(6)
-                    .width(32.0)
-                    .height(32.0)
-                    .style(mini_button_style())
-                    .on_press(Message::ToggleSidebar),
-                text("Expand sidebar").size(11),
-                tooltip::Position::Right,
-            ));
-
-            return container(items)
-                .width(SIDEBAR_COLLAPSED_W)
-                .height(Length::Fill)
-                .style(|_| container::Style {
-                    background: Some(Background::Color(PANEL)),
-                    ..container::Style::default()
-                })
-                .into();
-        }
-
-        // Rail (`.rail`): pixel-font section labels, square bullets, agents with a state square.
-        let bullet = |selected: bool| {
-            container(text(""))
-                .width(6)
-                .height(6)
-                .style(move |_| container::Style {
-                    background: Some(Background::Color(if selected {
-                        theme::ACCENT
-                    } else {
-                        theme::LINE2
-                    })),
-                    border: Border {
-                        radius: 1.0.into(),
-                        ..Border::default()
-                    },
-                    ..container::Style::default()
-                })
+                .any(|a| a.id == agent.display_name() && !a.notice.is_empty())
         };
-        let heading = |label: &'static str| {
-            container(theme::label(label))
-                .padding(pad(10.0, 8.0, 4.0, 8.0))
-                .width(Length::Fill)
-        };
+        let header = row![
+            container(text("Workspaces").font(theme::PIXEL).size(10).color(DIM))
+                .width(Length::Fill),
+            button(container(text("+").size(14).color(DIM)).center(Length::Fill))
+                .padding(0)
+                .width(22)
+                .height(22)
+                .style(theme::ghost_button_style())
+                .on_press(Message::NewSpaceOpen),
+        ]
+        .height(22)
+        .padding([0, 8])
+        .align_y(iced::Alignment::Center);
 
-        let mut spaces = column![heading("WORKSPACES")].spacing(6);
-        for workspace in &self.snapshot.workspaces {
-            let label = workspace.label.clone();
-            let workspace_id = workspace.workspace_id.clone();
-            let ws_btn_inner = button(
+        let mut blocks = column![].spacing(4).width(Length::Fill);
+        if self.snapshot.workspaces.is_empty() {
+            blocks = blocks.push(
                 container(
-                    row![
-                        bullet(workspace.focused),
-                        text(label.clone()).size(13).width(Length::Fill),
-                        text(
-                            self.snapshot
-                                .agents
-                                .iter()
-                                .filter(|a| a.workspace_id == workspace.workspace_id)
-                                .count()
-                                .to_string()
-                        )
+                    text("No workspace open. Use + to open a folder.")
                         .size(11)
                         .color(DIM),
-                    ]
-                    .align_y(iced::Alignment::Center)
-                    .spacing(10)
-                    .width(Length::Fill),
                 )
-                .center_y(Length::Fill),
-            )
-            .width(Length::Fill)
-            .height(36)
-            .padding([0, 8])
-            .style(item_style(workspace.focused))
-            .on_press(Message::Act(Action::FocusSpace(workspace_id.clone())));
-
-            // Wrap with mouse_area for right-click context menu
-            let ws_btn = mouse_area(ws_btn_inner).on_right_press(Message::ContextMenuOpened(
-                ContextMenuTarget::Workspace {
-                    workspace_id,
-                    label,
-                },
-            ));
-
-            let close_btn = button(text("✕").size(9))
-                .padding([2, 4])
-                .width(18.0)
-                .height(18.0)
-                .style(mini_button_style())
-                .on_press(self.close_workspace_message(workspace));
-
-            spaces = spaces.push(
-                row![ws_btn, close_btn]
-                    .align_y(iced::Alignment::Center)
-                    .spacing(2),
+                .padding([4, 8]),
             );
         }
-
-        spaces = spaces.push(
-            button(text("+ New workspace").size(13).color(theme::ACCENT))
-                .width(Length::Fill)
-                .padding([6, 8])
-                .style(mini_button_style())
-                .on_press(Message::Act(Action::NewSpace)),
-        );
-
-        let mut agents =
-            column![container(heading("AGENTS")).padding(pad(10.0, 0.0, 0.0, 0.0))].spacing(2);
-        if self.snapshot.agents.is_empty() {
-            agents = agents
-                .push(container(text("No agents running").size(11).color(DIM)).padding([6, 8]));
-        }
-        for (status, group) in self.snapshot.agents_by_state() {
-            let color = status_color(status);
-            for agent in group {
-                let square = container(
-                    text(theme::status_glyph(status))
-                        .size(10)
-                        .font(theme::MONO_BOLD)
-                        .color(BG),
+        for workspace in &self.snapshot.workspaces {
+            let id = workspace.workspace_id.clone();
+            let mine: Vec<&shepherd_app_core::snapshot::Agent> = self
+                .snapshot
+                .agents
+                .iter()
+                .filter(|a| a.workspace_id == id)
+                .collect();
+            let panes = self
+                .snapshot
+                .panes
+                .iter()
+                .filter(|p| p.workspace_id == id)
+                .count();
+            let shells = panes.saturating_sub(mine.len());
+            let panes_of_agents: Vec<sidebar::AgentPane> = mine
+                .iter()
+                .map(|a| sidebar::AgentPane {
+                    status: agent_state(a),
+                    needs_human: needs_human(a),
+                })
+                .collect();
+            let roll = sidebar::rollup(&panes_of_agents, shells);
+            let current = workspace.focused;
+            let open = self.expanded.get(&id).copied().unwrap_or(current);
+            let name =
+                sidebar::ellipsize(&workspace.label, sidebar::ws_name_max_chars(&roll.label));
+            let armed = matches!(
+                &self.pending_close,
+                Some(PendingClose::Workspace(w)) if *w == id
+            );
+            let chevron = button(
+                container(
+                    text(if open { "⌄" } else { "›" })
+                        .size(13)
+                        .color(theme::FAINT),
                 )
-                .width(18)
-                .height(18)
-                .center_x(18)
-                .center_y(18)
+                .center(Length::Fill),
+            )
+            .padding(0)
+            .width(22)
+            .height(30)
+            .style(theme::ghost_button_style())
+            .on_press(Message::ToggleWorkspace(id.clone()));
+            let ws_row: Element<'_, Message> = if armed {
+                // the armed close grows leftwards over the name and the roll-up label
+                let confirm = match sidebar::close_rule(&workspace.label, mine.len(), panes) {
+                    sidebar::CloseRule::Confirm(label) => label,
+                    _ => "Confirm: close".to_owned(),
+                };
+                row![
+                    chevron,
+                    button(
+                        container(text(confirm).size(11).font(theme::MONO_BOLD))
+                            .center(Length::Fill)
+                    )
+                    .padding(0)
+                    .width(Length::Fill)
+                    .height(24)
+                    .style(theme::danger_button_style())
+                    .on_press(Message::CloseWorkspace(id.clone())),
+                    Space::new().width(3),
+                ]
+                .align_y(iced::Alignment::Center)
+                .into()
+            } else {
+                let name_btn = button(
+                    container(
+                        row![
+                            container(text("")).width(7).height(7).style({
+                                let c = roll.square;
+                                move |_| container::Style {
+                                    background: Some(Background::Color(c)),
+                                    border: Border {
+                                        radius: 1.0.into(),
+                                        ..Border::default()
+                                    },
+                                    ..container::Style::default()
+                                }
+                            }),
+                            text(name).size(12.5).color(if current {
+                                theme::HI
+                            } else {
+                                theme::TEXT2
+                            }),
+                            container(text("")).width(Length::Fill),
+                            text(roll.label.clone()).size(10.5).color(roll.label_color),
+                        ]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
+                    )
+                    .center_y(Length::Fill),
+                )
+                .padding([0, 4])
+                .width(Length::Fill)
+                .height(30)
+                .style(theme::ghost_button_style())
+                .on_press(Message::SelectWorkspace(id.clone()));
+                let name_btn = mouse_area(name_btn).on_right_press(Message::ContextMenuOpened(
+                    ContextMenuTarget::Workspace {
+                        workspace_id: id.clone(),
+                        label: workspace.label.clone(),
+                    },
+                ));
+                row![
+                    chevron,
+                    name_btn,
+                    button(container(text("×").size(11).color(theme::FAINT)).center(Length::Fill))
+                        .padding(0)
+                        .width(24)
+                        .height(24)
+                        .style(theme::close_button_style())
+                        .on_press(Message::CloseWorkspace(id.clone())),
+                    Space::new().width(3),
+                ]
+                .align_y(iced::Alignment::Center)
+                .into()
+            };
+            let ws_row = container(ws_row)
+                .height(sidebar::WS_ROW_H)
+                .width(Length::Fill)
                 .style(move |_| container::Style {
-                    background: Some(Background::Color(color)),
+                    background: current.then_some(Background::Color(theme::PANEL)),
                     border: Border {
-                        radius: 3.0.into(),
-                        ..Border::default()
+                        color: if current {
+                            theme::LINE2
+                        } else {
+                            Color::TRANSPARENT
+                        },
+                        width: 1.0,
+                        radius: 6.0.into(),
                     },
                     ..container::Style::default()
                 });
-                let agent_body = row![
-                    square,
-                    text(agent.display_name()).size(12).width(Length::Fill),
-                    text(status_name(status)).size(11).color(color),
-                ]
-                .align_y(iced::Alignment::Center)
-                .spacing(10)
-                .width(Length::Fill);
-
-                agents = agents.push(
-                    button(container(agent_body).center_y(Length::Fill))
+            let mut block = column![ws_row].width(Length::Fill);
+            if open {
+                // the tabs row: the only row of the sidebar that wraps
+                let mut chips = row![text("tabs").size(10.5).color(theme::FAINT)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center)
+                    .width(Length::Fill);
+                let tabs: Vec<_> = self.snapshot.tabs_of(&id).collect();
+                if tabs.is_empty() {
+                    chips = chips.push(text("none yet").size(11).color(theme::FAINT));
+                }
+                for tab in &tabs {
+                    let shown = !in_shepherd && current && tab.focused;
+                    let count = self
+                        .snapshot
+                        .panes
+                        .iter()
+                        .filter(|p| p.tab_id == tab.tab_id)
+                        .count();
+                    chips = chips.push(
+                        button(
+                            container(
+                                row![
+                                    text(sidebar::ellipsize(&tab.label, 14))
+                                        .size(11)
+                                        .color(if shown { theme::HI } else { theme::TEXT2 }),
+                                    text(count.to_string()).size(11).color(theme::FAINT),
+                                ]
+                                .spacing(4),
+                            )
+                            .center_y(Length::Fill),
+                        )
+                        .padding([0, 7])
+                        .height(22)
+                        .style(move |_, status| {
+                            let hot =
+                                matches!(status, button::Status::Hovered | button::Status::Pressed);
+                            button::Style {
+                                background: if shown {
+                                    Some(Background::Color(theme::SELECTED))
+                                } else {
+                                    hot.then_some(Background::Color(theme::HOVER))
+                                },
+                                text_color: theme::TEXT2,
+                                border: Border {
+                                    color: if shown { theme::LINE3 } else { theme::LINE2 },
+                                    width: 1.0,
+                                    radius: 4.0.into(),
+                                },
+                                ..button::Style::default()
+                            }
+                        })
+                        .on_press(Message::PickTab(id.clone(), tab.tab_id.clone())),
+                    );
+                }
+                let mut inner = column![container(chips.wrap()).padding(pad(0.0, 0.0, 6.0, 0.0))]
+                    .spacing(0)
+                    .width(Length::Fill);
+                // one row per pane that runs an agent, in tab order and then pane order
+                let mut agent_rows = 0;
+                for tab in &tabs {
+                    for agent in mine.iter().filter(|a| a.tab_id == tab.tab_id) {
+                        agent_rows += 1;
+                        let status = agent_state(agent);
+                        let flagged = needs_human(agent);
+                        let urgent = status == Status::Blocked || flagged;
+                        let color = if urgent {
+                            theme::WARN
+                        } else {
+                            status_color(status)
+                        };
+                        let glyph = if urgent {
+                            "!"
+                        } else {
+                            theme::status_glyph(status)
+                        };
+                        let word = if urgent && flagged {
+                            "needs you".to_owned()
+                        } else {
+                            status_name(status).to_owned()
+                        };
+                        let focused = !in_shepherd && agent.focused;
+                        let icon = container(text(glyph).size(9).font(theme::MONO_BOLD).color(BG))
+                            .width(15)
+                            .height(15)
+                            .center(15)
+                            .style(move |_| container::Style {
+                                background: Some(Background::Color(color)),
+                                border: Border {
+                                    radius: 3.0.into(),
+                                    ..Border::default()
+                                },
+                                ..container::Style::default()
+                            });
+                        let target = if in_shepherd {
+                            Message::GoToPane(agent.pane_id.clone())
+                        } else {
+                            Message::Act(Action::FocusPane(agent.pane_id.clone()))
+                        };
+                        inner = inner.push(
+                            button(
+                                container(
+                                    row![
+                                        icon,
+                                        text(sidebar::ellipsize(
+                                            &agent.display_name(),
+                                            sidebar::agent_name_max_chars(&word)
+                                        ))
+                                        .size(12.5)
+                                        .color(theme::FG),
+                                        container(text("")).width(Length::Fill),
+                                        text(word).size(10.5).color(color),
+                                    ]
+                                    .spacing(8)
+                                    .align_y(iced::Alignment::Center),
+                                )
+                                .center_y(Length::Fill),
+                            )
+                            .padding([0, 6])
+                            .width(Length::Fill)
+                            .height(sidebar::AGENT_ROW_H)
+                            .style(move |_, status| {
+                                let hot = matches!(
+                                    status,
+                                    button::Status::Hovered | button::Status::Pressed
+                                );
+                                button::Style {
+                                    background: if focused {
+                                        Some(Background::Color(theme::SURFACE))
+                                    } else {
+                                        hot.then_some(Background::Color(theme::HOVER))
+                                    },
+                                    text_color: theme::FG,
+                                    border: Border {
+                                        color: if focused {
+                                            Color {
+                                                a: 0.55,
+                                                ..theme::ACCENT
+                                            }
+                                        } else {
+                                            Color::TRANSPARENT
+                                        },
+                                        width: 1.0,
+                                        radius: 5.0.into(),
+                                    },
+                                    ..button::Style::default()
+                                }
+                            })
+                            .on_press(target),
+                        );
+                    }
+                }
+                if let Some(line) = sidebar::shells_line(shells, agent_rows) {
+                    inner = inner.push(
+                        container(text(line).size(10.5).color(theme::FAINT))
+                            .padding(pad(3.0, 6.0, 0.0, 6.0)),
+                    );
+                }
+                if panes == 0 {
+                    inner = inner.push(
+                        container(
+                            text("No terminals yet. Open one to start a shell or an agent here.")
+                                .size(11)
+                                .color(DIM),
+                        )
+                        .padding(pad(2.0, 6.0, 4.0, 6.0)),
+                    );
+                }
+                inner = inner.push(
+                    container(
+                        button(
+                            container(
+                                row![
+                                    text("›_").size(11).color(DIM),
+                                    text("New terminal").size(11.5).color(DIM),
+                                ]
+                                .spacing(8)
+                                .align_y(iced::Alignment::Center),
+                            )
+                            .center_y(Length::Fill),
+                        )
+                        .padding([0, 6])
                         .width(Length::Fill)
-                        .height(34)
-                        .padding([0, 8])
-                        .style(item_style(agent.focused))
-                        .on_press(Message::Act(Action::FocusAgent(agent.pane_id.clone()))),
+                        .height(26)
+                        .style(theme::ghost_button_style())
+                        .on_press(Message::NewTerminal(id.clone())),
+                    )
+                    .padding(pad(4.0, 0.0, 0.0, 0.0)),
+                );
+                // indent 10, a 1 px guide, then the content (191 wide)
+                block = block.push(
+                    row![
+                        Space::new().width(10),
+                        container(text(""))
+                            .width(1)
+                            .height(Length::Fill)
+                            .style(|_| container::Style {
+                                background: Some(Background::Color(theme::LINE)),
+                                ..container::Style::default()
+                            }),
+                        Space::new().width(10),
+                        container(inner).width(Length::Fill),
+                    ]
+                    .padding(pad(6.0, 0.0, 4.0, 0.0)),
                 );
             }
+            blocks = blocks.push(block);
         }
 
-        // the brand and the switch live in the top bar; here only the toggle that gives the terminal more room
-        let brand: Element<'_, Message> = if self.mode == Mode::Shepherd {
-            container(text("")).height(0).into()
+        // only this list scrolls, and only vertically; in a very short window the whole column does
+        let short = self.window.height < sidebar::SHORT_WINDOW;
+        let list: Element<'_, Message> = if short {
+            blocks.into()
         } else {
-            row![
-                container(text("")).width(Length::Fill),
-                button(text("‹").size(13))
-                    .padding(5)
-                    .style(mini_button_style())
-                    .on_press(Message::ToggleSidebar),
-            ]
-            .align_y(iced::Alignment::Center)
-            .padding(pad(6.0, 10.0, 0.0, 10.0))
-            .into()
+            theme::scroll(blocks).height(Length::Fill).into()
         };
-        container(scrollable(
-            column![
-                brand,
-                container(column![spaces, agents].spacing(6)).padding([14, 10])
-            ]
-            .spacing(0),
-        ))
-        .width(SIDEBAR_W)
+        let workspaces = column![header, Space::new().height(8), list].height(if short {
+            Length::Shrink
+        } else {
+            Length::Fill
+        });
+
+        // the views: the same in both modes; no item is active in the Terminal mode
+        let ctx = panel::Ctx {
+            api: self.api_socket.clone(),
+            data: &self.data,
+            snapshot: &self.snapshot,
+            frame: self.frame,
+        };
+        let nav = container(self.panel.nav(&ctx, in_shepherd, self.nav_collapsed))
+            .height(sidebar::nav_height(
+                !self.nav_collapsed[0],
+                !self.nav_collapsed[1],
+            ))
+            .width(Length::Fill);
+        let hide = button(
+            container(
+                row![
+                    // a small panel icon: a rounded box with a line at one third
+                    container(
+                        row![
+                            Space::new().width(3),
+                            container(text(""))
+                                .width(1)
+                                .height(Length::Fill)
+                                .style(|_| container::Style {
+                                    background: Some(Background::Color(theme::FAINT)),
+                                    ..container::Style::default()
+                                }),
+                        ]
+                        .height(Length::Fill)
+                    )
+                    .width(12)
+                    .height(12)
+                    .style(|_| container::Style {
+                        border: Border {
+                            color: theme::FAINT,
+                            width: 1.0,
+                            radius: 2.0.into(),
+                        },
+                        ..container::Style::default()
+                    }),
+                    text("Hide sidebar").size(11.5).color(DIM),
+                    container(text("")).width(Length::Fill),
+                    text("Ctrl+B").size(10).color(theme::FAINT),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            )
+            .center_y(Length::Fill),
+        )
+        .padding([0, 8])
+        .width(Length::Fill)
+        .height(28)
+        .style(theme::ghost_button_style())
+        .on_press(Message::ToggleSidebar);
+        let body = column![workspaces, nav, hide]
+            .spacing(20)
+            .padding(pad(16.0, 10.0, 14.0, 10.0));
+        let body: Element<'_, Message> = if short {
+            theme::scroll(body).into()
+        } else {
+            body.into()
+        };
+        row![
+            container(body)
+                .width(sidebar::WIDTH - 1.0)
+                .height(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(BG)),
+                    ..container::Style::default()
+                }),
+            container(text(""))
+                .width(1)
+                .height(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(theme::LINE)),
+                    ..container::Style::default()
+                }),
+        ]
+        .width(sidebar::WIDTH)
         .height(Length::Fill)
-        .style(theme::bar_style)
         .into()
     }
 
@@ -1748,6 +2983,7 @@ impl App {
         let title = match &rename.target {
             ContextMenuTarget::Tab { .. } => "Rename Tab",
             ContextMenuTarget::Workspace { .. } => "Rename Workspace",
+            ContextMenuTarget::Session { .. } => "Rename Session",
         };
 
         let input = text_input("New name", &rename.input)
@@ -1831,22 +3067,6 @@ impl App {
                     candidate.key == worktree.key && candidate.is_linked_worktree
                 })
         })
-    }
-
-    fn close_workspace_message(
-        &self,
-        workspace: &shepherd_app_core::snapshot::Workspace,
-    ) -> Message {
-        let pending = PendingClose::Workspace(workspace.workspace_id.clone());
-        if self.workspace_has_linked_children(&workspace.workspace_id) {
-            if self.pending_close.as_ref() == Some(&pending) {
-                Message::Act(Action::CloseSpace(workspace.workspace_id.clone(), true))
-            } else {
-                Message::ArmClose(pending)
-            }
-        } else {
-            Message::Act(Action::CloseSpace(workspace.workspace_id.clone(), false))
-        }
     }
 
     fn close_tab_message(&self, tab: &shepherd_app_core::snapshot::Tab) -> Message {

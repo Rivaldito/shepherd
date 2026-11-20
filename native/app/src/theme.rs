@@ -28,6 +28,16 @@ pub const FG: Color = Color::from_rgb8(0xE7, 0xE7, 0xEE);
 pub const HI: Color = Color::from_rgb8(0xF4, 0xF4, 0xF8);
 /// --muted
 pub const DIM: Color = Color::from_rgb8(0x9A, 0x9A, 0xA8);
+/// Hovered rows and items (`hover`).
+pub const HOVER: Color = Color::from_rgb8(0x0F, 0x0F, 0x15);
+/// Input and code backgrounds (`input`).
+pub const INPUT: Color = Color::from_rgb8(0x05, 0x05, 0x07);
+/// Hovered control borders (`line3`).
+pub const LINE3: Color = Color::from_rgb8(0x4A, 0x4A, 0x5C);
+/// Secondary text that must stay readable (`text2`).
+pub const TEXT2: Color = Color::from_rgb8(0xC9, 0xC9, 0xD3);
+/// Decorative only: separators, keyboard hints, disabled (`faint`). Never for information.
+pub const FAINT: Color = Color::from_rgb8(0x6E, 0x6E, 0x7C);
 /// --cyan: accent / working.
 pub const ACCENT: Color = Color::from_rgb8(0x19, 0xD3, 0xFF);
 /// --red
@@ -154,7 +164,7 @@ pub fn item_style(selected: bool) -> impl Fn(&Theme, button::Status) -> button::
                 },
             )
         } else if hovered(status) {
-            (Some(Background::Color(SURFACE)), rounded(4.0))
+            (Some(Background::Color(HOVER)), rounded(4.0))
         } else {
             (None, rounded(4.0))
         };
@@ -229,6 +239,63 @@ pub fn danger_button_style() -> impl Fn(&Theme, button::Status) -> button::Style
     }
 }
 
+/// Destructive action before its confirmation: red outline, fills red once armed (`danger_button_style`).
+pub fn destructive_button_style() -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_theme, status| {
+        let hovered = hovered(status);
+        button::Style {
+            background: hovered.then_some(Background::Color(Color { a: 0.12, ..BAD })),
+            text_color: BAD,
+            border: Border {
+                color: if hovered {
+                    BAD
+                } else {
+                    Color { a: 0.55, ..BAD }
+                },
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..button::Style::default()
+        }
+    }
+}
+
+/// A filter chip (`All`, `Running`, ...): outlined pill, cyan when it is the active one.
+pub fn chip_style(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_theme, status| {
+        let hovered = hovered(status);
+        button::Style {
+            background: active.then_some(Background::Color(SELECTED)),
+            text_color: if active {
+                HI
+            } else if hovered {
+                FG
+            } else {
+                DIM
+            },
+            border: Border {
+                color: if active { ACCENT } else { LINE2 },
+                width: 1.0,
+                radius: 14.0.into(),
+            },
+            ..button::Style::default()
+        }
+    }
+}
+
+/// A toast: a card with a coloured edge (green for success, red for a server refusal).
+pub fn toast_style(color: Color) -> impl Fn(&Theme) -> iced::widget::container::Style {
+    move |_| iced::widget::container::Style {
+        background: Some(Background::Color(BAR)),
+        border: Border {
+            color,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..iced::widget::container::Style::default()
+    }
+}
+
 /// `.btn` (outlined) and `.btn.ghost` (no border, `ghost = true`).
 #[allow(dead_code)] // used by the views of phase 3
 pub fn outline_button_style(ghost: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
@@ -274,6 +341,16 @@ pub fn mini_button_style() -> impl Fn(&Theme, button::Status) -> button::Style {
             border: rounded(4.0),
             ..button::Style::default()
         }
+    }
+}
+
+/// A button with no box: transparent, a faint fill on hover (sidebar rows, "+" and the chevrons).
+pub fn ghost_button_style() -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_theme, status| button::Style {
+        background: hovered(status).then_some(Background::Color(HOVER)),
+        text_color: FG,
+        border: rounded(5.0),
+        ..button::Style::default()
     }
 }
 
@@ -345,24 +422,20 @@ pub fn kpi_cell_style(_: &Theme) -> iced::widget::container::Style {
     }
 }
 
-/// `.tab .n`: count badge; orange when the section needs attention.
-pub fn count_style(selected: bool, warn: bool) -> iced::widget::container::Style {
-    let (background, text_color) = if warn {
-        (Color { a: 0.16, ..WARN }, WARN)
-    } else if selected {
-        (LINE2, FG)
-    } else {
-        (LINE, DIM)
-    };
+/// A bar with a 1 px line along its bottom edge (`border-bottom: 1px solid var(--line)`).
+/// A bar with a hairline on its top edge (the composer).
+pub fn top_line_style(_: &Theme) -> iced::widget::container::Style {
     iced::widget::container::Style {
-        background: Some(Background::Color(background)),
-        text_color: Some(text_color),
-        border: rounded(3.0),
+        background: Some(Background::Color(BAR)),
+        border: Border {
+            color: LINE,
+            width: 0.5,
+            radius: 0.0.into(),
+        },
         ..iced::widget::container::Style::default()
     }
 }
 
-/// A bar with a 1 px line along its bottom edge (`border-bottom: 1px solid var(--line)`).
 pub fn bottom_line_style(_: &Theme) -> iced::widget::container::Style {
     iced::widget::container::Style {
         background: Some(Background::Color(PANEL)),
@@ -395,16 +468,42 @@ pub fn input_style(
 ) -> iced::widget::text_input::Style {
     let focused = matches!(status, iced::widget::text_input::Status::Focused { .. });
     iced::widget::text_input::Style {
-        background: Background::Color(BG),
+        background: Background::Color(INPUT),
         border: Border {
             color: if focused { ACCENT } else { LINE2 },
             width: 1.0,
-            radius: 4.0.into(),
+            radius: 6.0.into(),
         },
         icon: DIM,
         placeholder: DIM,
         value: FG,
         selection: Color { a: 0.3, ..ACCENT },
+    }
+}
+
+/// A small box on a card: surface fill, hairline border (publisher chips, consumer group cards).
+pub fn chip_box_style(_: &Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        background: Some(Background::Color(SURFACE)),
+        border: Border {
+            color: LINE,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..iced::widget::container::Style::default()
+    }
+}
+
+/// The input style with the red outline of a field that the form refused to send (3.6 of the spec).
+pub fn input_style_marked(
+    bad: bool,
+) -> impl Fn(&Theme, iced::widget::text_input::Status) -> iced::widget::text_input::Style {
+    move |theme, status| {
+        let mut style = input_style(theme, status);
+        if bad {
+            style.border.color = BAD;
+        }
+        style
     }
 }
 
@@ -483,6 +582,104 @@ pub fn editor_style(
 
 /// The iced theme of the app: Shepherd's palette, so that the widgets nobody styled by hand (pick lists, check
 /// boxes, scrollbars, text selection) wear the same colours as the rest.
+/// The fixed inspector or drawer on the right of a view: `bar` background and a hairline on its left edge.
+pub fn inspector_style(_: &Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        background: Some(Background::Color(BAR)),
+        border: Border {
+            color: LINE,
+            width: 0.5,
+            radius: 0.0.into(),
+        },
+        ..iced::widget::container::Style::default()
+    }
+}
+
+/// A thin vertical scrollbar (8 px, transparent track, thumb `line2`, lighter on hover).
+pub fn scrollbar_style(
+    _: &Theme,
+    status: iced::widget::scrollable::Status,
+) -> iced::widget::scrollable::Style {
+    use iced::widget::scrollable::{Rail, Scroller, Status, Style};
+    let hot = matches!(
+        status,
+        Status::Hovered {
+            is_vertical_scrollbar_hovered: true,
+            ..
+        } | Status::Hovered {
+            is_horizontal_scrollbar_hovered: true,
+            ..
+        } | Status::Dragged { .. }
+    );
+    let rail = Rail {
+        background: None,
+        border: Border::default(),
+        scroller: Scroller {
+            background: Background::Color(if hot { LINE3 } else { LINE2 }),
+            border: Border {
+                radius: 4.0.into(),
+                ..Border::default()
+            },
+        },
+    };
+    Style {
+        container: iced::widget::container::Style::default(),
+        vertical_rail: rail,
+        horizontal_rail: rail,
+        gap: None,
+        auto_scroll: iced::widget::scrollable::AutoScroll {
+            background: Background::Color(SURFACE),
+            border: Border::default(),
+            shadow: iced::Shadow::default(),
+            icon: DIM,
+        },
+    }
+}
+
+/// A scrollable with the thin scrollbar of the design: vertical, 8 px.
+pub fn scroll<'a>(
+    content: impl Into<iced::Element<'a, crate::Message>>,
+) -> iced::widget::Scrollable<'a, crate::Message> {
+    iced::widget::scrollable(content)
+        .style(scrollbar_style)
+        .direction(iced::widget::scrollable::Direction::Vertical(
+            iced::widget::scrollable::Scrollbar::new()
+                .width(8)
+                .scroller_width(8),
+        ))
+}
+
+/// A switch (34 x 18): off a `selected` track with a faint knob, on a cyan track with a cyan knob.
+pub fn switch_style(
+    _: &Theme,
+    status: iced::widget::toggler::Status,
+) -> iced::widget::toggler::Style {
+    let on = matches!(
+        status,
+        iced::widget::toggler::Status::Active { is_toggled: true }
+            | iced::widget::toggler::Status::Hovered { is_toggled: true }
+    );
+    iced::widget::toggler::Style {
+        background: if on {
+            Background::Color(Color { a: 0.25, ..ACCENT })
+        } else {
+            Background::Color(SELECTED)
+        },
+        background_border_width: 1.0,
+        background_border_color: if on {
+            Color { a: 0.6, ..ACCENT }
+        } else {
+            LINE2
+        },
+        foreground: Background::Color(if on { ACCENT } else { FAINT }),
+        foreground_border_width: 0.0,
+        foreground_border_color: Color::TRANSPARENT,
+        text_color: None,
+        border_radius: Some(9.0.into()),
+        padding_ratio: 0.2,
+    }
+}
+
 pub fn app_theme() -> Theme {
     static THEME: std::sync::OnceLock<Theme> = std::sync::OnceLock::new();
     THEME

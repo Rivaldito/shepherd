@@ -76,8 +76,9 @@ impl Panel {
         Task::perform(
             async move {
                 actions::snapshot_capture(&api, &agent, &root).map(|c| {
+                    let agent = agent.clone();
                     if c.created {
-                        format!("Took snapshot {}", c.snapshot.id)
+                        format!("Took snapshot {} of {agent}’s worktree.", c.snapshot.id)
                     } else {
                         format!(
                             "Nothing changed since {}, so no new snapshot",
@@ -90,129 +91,330 @@ impl Panel {
         )
     }
 
+    /// The agent the Capture box of the header names: the picked one, else the shown snapshot's, else the first.
+    pub(super) fn capture_agent(&self, ctx: &Ctx<'_>) -> Option<String> {
+        self.snap_capture_agent
+            .clone()
+            .filter(|a| ctx.data.agents.iter().any(|x| &x.id == a))
+            .or_else(|| {
+                self.snap_id(ctx)
+                    .and_then(|id| ctx.data.snapshots.iter().find(|s| s.id == id))
+                    .map(|s| s.agent.clone())
+            })
+            .or_else(|| ctx.data.agents.first().map(|a| a.id.clone()))
+    }
+
     pub(super) fn snapshots_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
         let snaps = &ctx.data.snapshots;
         let shown = self.snap_id(ctx);
-        let agents = snaps
-            .iter()
-            .map(|s| s.agent.as_str())
-            .collect::<std::collections::BTreeSet<_>>()
-            .len();
-        let (files, added, removed) = snaps.iter().fold((0u64, 0u64, 0u64), |(f, a, r), s| {
-            (f + s.files as u64, a + s.added, r + s.removed)
-        });
-        let summary = container(
+        let mut agents: Vec<String> = vec![];
+        for s in snaps {
+            if !agents.contains(&s.agent) {
+                agents.push(s.agent.clone());
+            }
+        }
+        let reasons = ["manual", "idle", "done", "pre-restore"];
+        let chip = |label: String, on: bool, msg: PanelMsg| {
+            button(text(label).size(11.5))
+                .padding([3, 10])
+                .style(theme::chip_style(on))
+                .on_press(Message::Panel(msg))
+        };
+        let mut agent_chips = row![chip(
+            "All agents".into(),
+            self.snap_agent_filter.is_none(),
+            PanelMsg::SnapFilterAgent(None)
+        )]
+        .spacing(6);
+        for a in &agents {
+            agent_chips = agent_chips.push(chip(
+                a.clone(),
+                self.snap_agent_filter.as_deref() == Some(a.as_str()),
+                PanelMsg::SnapFilterAgent(Some(a.clone())),
+            ));
+        }
+        let mut reason_chips = row![chip(
+            "Any reason".into(),
+            self.snap_reason_filter.is_none(),
+            PanelMsg::SnapFilterReason(None)
+        )]
+        .spacing(6);
+        for r in reasons {
+            reason_chips = reason_chips.push(chip(
+                r.to_owned(),
+                self.snap_reason_filter.as_deref() == Some(r),
+                PanelMsg::SnapFilterReason(Some(r.to_owned())),
+            ));
+        }
+        let filters = container(
             row![
-                agent_metric("SNAPSHOTS", snaps.len(), FG),
-                agent_metric("AGENTS", agents, ACCENT),
-                agent_metric("FILES CHANGED", files as usize, DIM),
-                agent_metric("LINES +", added as usize, OK),
-                agent_metric(
-                    "LINES -",
-                    removed as usize,
-                    if removed > 0 { WARN } else { DIM }
-                ),
+                text_input("Filter by file, like auth/logout.go", &self.filter)
+                    .on_input(|t| Message::Panel(PanelMsg::Filter(t)))
+                    .id(crate::ui::FILTER_ID)
+                    .style(theme::input_style)
+                    .padding([8, 10])
+                    .size(12)
+                    .width(260),
+                agent_chips.wrap(),
+                container(text(""))
+                    .width(1)
+                    .height(20)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(theme::LINE2)),
+                        ..container::Style::default()
+                    }),
+                reason_chips.wrap(),
             ]
-            .spacing(1),
+            .spacing(14)
+            .align_y(iced::Alignment::Center),
         )
-        .style(kpi_strip_style);
+        .padding([10, 20])
+        .width(Length::Fill)
+        .style(theme::bottom_line_style);
 
-        let items = snaps
-            .iter()
-            .map(|s| {
-                let body = column![
-                    row![
-                        text(s.id.clone()).size(13).color(theme::HI),
-                        badge(s.reason.as_str(), reason_color(s.reason)),
+        let visible = |s: &&SnapshotInfo| {
+            self.snap_agent_filter
+                .as_deref()
+                .is_none_or(|a| a == s.agent)
+                && self
+                    .snap_reason_filter
+                    .as_deref()
+                    .is_none_or(|r| r == s.reason.as_str())
+                && self.passes(&format!(
+                    "{} {} {}",
+                    s.id,
+                    s.agent,
+                    self.snap_files
+                        .get(&s.id)
+                        .map_or(String::new(), |f| f.join(" "))
+                ))
+        };
+        // grouped by agent (newest first inside), each group with its own prune
+        let mut items: Vec<Element<'a, Message>> = vec![];
+        for agent in &agents {
+            let mine: Vec<&SnapshotInfo> = snaps
+                .iter()
+                .filter(|s| &s.agent == agent)
+                .filter(visible)
+                .collect();
+            if mine.is_empty() {
+                continue;
+            }
+            items.push(
+                row![
+                    text(agent.clone())
+                        .font(theme::MONO_BOLD)
+                        .size(12.5)
+                        .color(theme::HI),
+                    text(format!("{} snapshots", mine.len()))
+                        .size(11)
+                        .color(DIM)
+                        .width(Length::Fill),
+                    self.arm_button(
+                        Armed::PruneSnapshots(agent.clone()),
+                        "Prune older",
+                        "Confirm: prune"
+                    ),
+                ]
+                .spacing(8)
+                .padding(pad(10.0, 4.0, 4.0, 4.0))
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
+            for s in mine {
+                let sel = shown.as_deref() == Some(s.id.as_str());
+                let rc = reason_color(s.reason);
+                let body = row![
+                    // a line the items hang on, and a ring in the reason colour
+                    container(text(""))
+                        .width(1)
+                        .height(Length::Fill)
+                        .style(|_| container::Style {
+                            background: Some(iced::Background::Color(theme::LINE2)),
+                            ..container::Style::default()
+                        }),
+                    container(text(""))
+                        .width(11)
+                        .height(11)
+                        .style(move |_| container::Style {
+                            border: iced::Border {
+                                color: if sel { theme::HI } else { rc },
+                                width: 2.0,
+                                radius: 6.0.into(),
+                            },
+                            ..container::Style::default()
+                        }),
+                    column![
+                        row![
+                            text(s.id.clone())
+                                .font(theme::MONO_BOLD)
+                                .size(12.5)
+                                .color(theme::HI),
+                            container(text(s.reason.as_str()).size(10).color(rc))
+                                .padding([0, 6])
+                                .style(move |_| container::Style {
+                                    border: iced::Border {
+                                        color: rc,
+                                        width: 1.0,
+                                        radius: 3.0.into()
+                                    },
+                                    ..container::Style::default()
+                                }),
+                            container(text("")).width(Length::Fill),
+                            text(
+                                format_utc(s.created)
+                                    .chars()
+                                    .skip(11)
+                                    .take(5)
+                                    .collect::<String>()
+                            )
+                            .size(11)
+                            .color(DIM),
+                        ]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
+                        row![
+                            text(format!("{} files", s.files)).size(11).color(DIM),
+                            text(format!("+{}", s.added)).size(11).color(OK),
+                            text(format!("-{}", s.removed)).size(11).color(BAD),
+                        ]
+                        .spacing(8),
+                    ]
+                    .spacing(3)
+                    .width(Length::Fill),
+                ]
+                .spacing(10)
+                .height(40)
+                .align_y(iced::Alignment::Center);
+                items.push(
+                    button(body)
+                        .width(Length::Fill)
+                        .padding([8, 10])
+                        .style(item_style(sel))
+                        .on_press(crate::ui::nav(
+                            sel,
+                            Message::Panel(PanelMsg::SnapSelect(s.id.clone())),
+                        ))
+                        .into(),
+                );
+            }
+        }
+        if items.is_empty() && !snaps.is_empty() {
+            items.push(text("No snapshot matches.").size(12).color(DIM).into());
+        }
+
+        // the detail is the flexible region: at least 600 px, scrolling when narrower
+        let detail = {
+            let (this, ctx) = (self, ctx.clone());
+            crate::ui::flex(600.0, [22.0, 28.0], move || {
+                let shown = this.snap_id(&ctx);
+                match shown
+                    .as_deref()
+                    .and_then(|id| ctx.data.snapshots.iter().find(|s| s.id == id))
+                {
+                    Some(snap) => this.snapshot_detail(snap),
+                    None => column![
+                        text("No snapshots match").size(16).color(theme::HI),
+                        text(
+                            "The server takes one when an agent goes idle or finishes, and before every restore."
+                        )
+                        .size(12)
+                        .color(DIM),
+                        btn_primary("Capture now", PanelMsg::SnapCapture(
+                            ctx.data.agents.first().map(|a| a.id.clone()).unwrap_or_default()
+                        )),
                     ]
                     .spacing(8)
-                    .align_y(iced::Alignment::Center),
-                    text(format!("{} file(s) · +{} −{}", s.files, s.added, s.removed))
-                        .size(11)
-                        .color(DIM),
-                    text(format_utc(s.created)).size(10).color(DIM)
-                ];
-                button(body)
-                    .width(Length::Fill)
-                    .padding([4, 8])
-                    .style(item_style(shown.as_deref() == Some(s.id.as_str())))
-                    .on_press(Message::Panel(PanelMsg::SnapSelect(s.id.clone())))
-                    .into()
+                    .into(),
+                }
             })
-            .collect();
-
-        // Capturing needs an agent: the one of the shown snapshot, else the first agent that exists.
-        let capture_agent = shown
-            .as_deref()
-            .and_then(|id| snaps.iter().find(|s| s.id == id))
-            .map(|s| s.agent.clone())
-            .or_else(|| ctx.data.agents.first().map(|a| a.id.clone()));
-        let footer = capture_agent
-            .map(|agent| {
-                vec![btn_link(
-                    format!("+ Capture {agent} now"),
-                    PanelMsg::SnapCapture(agent),
-                )]
-            })
-            .unwrap_or_default();
-
-        let detail = match shown.as_deref().and_then(|id| snaps.iter().find(|s| s.id == id)) {
-            Some(snap) => self.snapshot_detail(snap),
-            None => column![
-                text("No snapshots yet").size(16).color(theme::HI),
-                text(
-                    "The server takes one of an agent's worktree when the agent goes idle or finishes, \
-                     and now and then while it works. Use Capture to take one yourself."
-                )
-                .size(12)
-                .color(DIM),
-            ]
-            .spacing(6)
-            .into(),
         };
         column![
-            summary,
-            row![self.list(items, footer), self.detail(detail)].height(Length::Fill),
+            filters,
+            row![
+                crate::panel::list_box_sized(400.0, None, items, vec![]),
+                detail
+            ]
+            .height(Length::Fill),
         ]
-        .spacing(8)
         .into()
     }
 
     fn snapshot_detail<'a>(&'a self, snap: &'a SnapshotInfo) -> Element<'a, Message> {
         let mut page = column![
             row![
-                text(snap.id.clone()).size(18).color(theme::HI),
+                text(snap.id.clone()).font(theme::MONO_BOLD).size(20).color(theme::HI),
                 badge(snap.reason.as_str(), reason_color(snap.reason)),
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center),
             text(format!(
-                "{} · commit {} · worktree {}",
+                "taken {}   worktree {}   previous {}",
                 format_utc(snap.created),
-                snap.commit.chars().take(8).collect::<String>(),
-                snap.worktree
+                snap.worktree,
+                snap.prev.clone().unwrap_or_else(|| "none".into())
             ))
-            .size(11)
+            .size(11.5)
             .color(DIM),
-            text(match &snap.prev {
-                Some(prev) => format!(
-                    "Changes since {prev}: {} file(s), +{} −{}",
-                    snap.files, snap.added, snap.removed
+            row![
+                btn_primary("Compare with the worktree now", PanelMsg::SnapCompare(snap.id.clone())),
+                self.arm_button(
+                    Armed::RestoreSnapshot(snap.id.clone()),
+                    "Restore worktree",
+                    "Confirm: restore the whole worktree",
                 ),
-                None => format!(
-                    "First snapshot of this agent: {} file(s), +{} −{}",
-                    snap.files, snap.added, snap.removed
+                self.arm_button(
+                    Armed::DeleteSnapshot(snap.id.clone()),
+                    "Delete",
+                    "Confirm: delete this snapshot",
                 ),
-            })
-            .size(12)
-            .color(FG),
+            ]
+            .spacing(8),
+            text(
+                "Restore puts the whole worktree back as this snapshot had it. A pre-restore snapshot of what is \
+                 there now is taken first, and files this snapshot does not have are kept.",
+            )
+            .size(11.5)
+            .color(DIM),
         ]
-        .spacing(6);
+        .spacing(10);
 
+        // the file list of a diff: status, path, +A -D
+        let files = |files: &'a [shepherd_app_core::shepherd_core::snapshot::DiffFile]| {
+            let mut list = column![].spacing(6);
+            for f in files {
+                list = list.push(
+                    row![
+                        container(
+                            text(f.status.clone())
+                                .size(11)
+                                .color(change_color(&f.status))
+                        )
+                        .width(90),
+                        text(f.path.clone()).size(12).color(FG).width(Length::Fill),
+                        text(if f.binary {
+                            "binary".to_owned()
+                        } else {
+                            format!("+{} −{}", f.added, f.removed)
+                        })
+                        .size(11)
+                        .color(DIM),
+                    ]
+                    .spacing(8),
+                );
+            }
+            list
+        };
+
+        let since = match &snap.prev {
+            Some(prev) => format!("since {prev}: "),
+            None => "first snapshot of this agent: ".to_owned(),
+        };
+        let mut body = column![].spacing(8);
         match self.snap_detail.as_ref().filter(|(id, _)| *id == snap.id) {
-            None => page = page.push(text("Loading the changed files…").size(12).color(DIM)),
+            None => body = body.push(text("Loading the changed files…").size(12).color(DIM)),
             Some((_, Err(e))) => {
-                page = page.push(alert(
+                body = body.push(alert(
                     text(format!("Could not read the snapshot: {e}"))
                         .size(12)
                         .into(),
@@ -221,49 +423,44 @@ impl Panel {
             }
             Some((_, Ok(shown))) => {
                 if shown.diff.files.is_empty() {
-                    page = page.push(
+                    body = body.push(
                         text("No file changed since the previous snapshot.")
                             .size(12)
                             .color(DIM),
                     );
                 }
-                for f in &shown.diff.files {
-                    page = page.push(
-                        row![
-                            container(
-                                text(f.status.clone())
-                                    .size(11)
-                                    .color(change_color(&f.status))
-                            )
-                            .width(90),
-                            text(f.path.clone()).size(12).color(FG).width(Length::Fill),
-                            text(if f.binary {
-                                "binary".to_owned()
-                            } else {
-                                format!("+{} −{}", f.added, f.removed)
-                            })
-                            .size(11)
-                            .color(DIM),
-                        ]
-                        .spacing(8),
-                    );
-                }
+                body = body.push(files(&shown.diff.files));
             }
         }
-        for o in &snap.omitted {
-            page = page.push(
+        if !snap.omitted.is_empty() {
+            body = body.push(
                 text(format!(
-                    "Left out: {} ({}, {} bytes)",
-                    o.path, o.reason, o.size
+                    "{} file(s) not listed: {}",
+                    snap.omitted.len(),
+                    snap.omitted
+                        .iter()
+                        .map(|o| format!("{} ({}, {} bytes)", o.path, o.reason, o.size))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ))
                 .size(11)
                 .color(WARN),
             );
         }
-        page = page.push(btn_link(
-            "Compare with the worktree now".to_owned(),
-            PanelMsg::SnapCompare(snap.id.clone()),
+        page = page.push(card(
+            "CHANGES",
+            Some(
+                text(format!(
+                    "{since}{} files +{} −{}",
+                    snap.files, snap.added, snap.removed
+                ))
+                .size(11)
+                .color(DIM)
+                .into(),
+            ),
+            body.into(),
         ));
+
         match self.snap_compare.as_ref().filter(|(id, _)| *id == snap.id) {
             None => {}
             Some((_, Err(e))) => {
@@ -273,75 +470,78 @@ impl Panel {
                 ))
             }
             Some((_, Ok(diff))) => {
-                page = page.push(
-                    text(format!(
-                        "Worktree now vs this snapshot: {} file(s), +{} −{}",
-                        diff.files.len(),
-                        diff.added,
-                        diff.removed
-                    ))
-                    .size(12)
-                    .color(FG),
-                );
+                let mut body = column![].spacing(8);
                 if diff.files.is_empty() {
-                    page = page.push(
+                    body = body.push(
                         text("The worktree is the same as this snapshot.")
                             .size(12)
                             .color(DIM),
                     );
                 }
-                for f in &diff.files {
-                    page = page.push(
-                        row![
-                            container(
-                                text(f.status.clone())
-                                    .size(11)
-                                    .color(change_color(&f.status))
-                            )
-                            .width(90),
-                            text(f.path.clone()).size(12).color(FG).width(Length::Fill),
-                            text(if f.binary {
-                                "binary".to_owned()
-                            } else {
-                                format!("+{} −{}", f.added, f.removed)
-                            })
-                            .size(11)
-                            .color(DIM),
-                        ]
-                        .spacing(8),
-                    );
+                body = body.push(files(&diff.files));
+                if let Some(patch) = diff.patch.as_ref().filter(|p| !p.trim().is_empty()) {
+                    body = body.push(diff_excerpt(patch));
                 }
+                page = page.push(card(
+                    "WORKTREE NOW COMPARED WITH THIS SNAPSHOT",
+                    Some(
+                        row![
+                            text(snap.id.clone()).size(11).color(DIM),
+                            button(text("Hide").size(11.5))
+                                .padding([3, 10])
+                                .style(theme::outline_button_style(false))
+                                .on_press(Message::Panel(PanelMsg::SnapHide)),
+                        ]
+                        .spacing(10)
+                        .align_y(iced::Alignment::Center)
+                        .into(),
+                    ),
+                    body.into(),
+                ));
             }
         }
-        page.push(
-            text(
-                "Restore puts the whole worktree back as this snapshot had it. A snapshot of what is there now \
-                 is taken first, and files this snapshot does not have are kept.",
-            )
-            .size(11)
-            .color(DIM),
-        )
-        .push(
-            row![
-                self.arm_button(
-                    Armed::RestoreSnapshot(snap.id.clone()),
-                    "Restore worktree",
-                    "Confirm: restore the whole worktree",
-                ),
-                self.arm_button(
-                    Armed::DeleteSnapshot(snap.id.clone()),
-                    "Delete snapshot",
-                    "Confirm: delete this snapshot",
-                ),
-                self.arm_button(
-                    Armed::PruneSnapshots(snap.agent.clone()),
-                    "Prune older ones",
-                    "Confirm: delete this agent's oldest snapshots",
-                ),
-            ]
-            .spacing(8),
-        )
-        .spacing(10)
-        .into()
+        page.into()
     }
+}
+
+/// The first lines of a unified diff: hunk headers dim, removed lines red, added lines green.
+fn diff_excerpt<'a>(patch: &str) -> Element<'a, Message> {
+    const SHOWN: usize = 60;
+    let mut lines = column![].spacing(1);
+    let all: Vec<&str> = patch
+        .lines()
+        .filter(|l| !(l.starts_with("diff --git") || l.starts_with("index ")))
+        .collect();
+    for l in all.iter().take(SHOWN) {
+        let color = if l.starts_with("@@") || l.starts_with("---") || l.starts_with("+++") {
+            DIM
+        } else if l.starts_with('-') {
+            BAD
+        } else if l.starts_with('+') {
+            OK
+        } else {
+            theme::TEXT2
+        };
+        lines = lines.push(text((*l).to_owned()).size(11).color(color));
+    }
+    if all.len() > SHOWN {
+        lines = lines.push(
+            text(format!("… {} more lines", all.len() - SHOWN))
+                .size(11)
+                .color(DIM),
+        );
+    }
+    container(lines)
+        .padding([8, 10])
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::INPUT)),
+            border: iced::Border {
+                color: theme::LINE,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
 }

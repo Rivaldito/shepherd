@@ -64,6 +64,8 @@ pub struct GateRow {
     pub task_id: u32,
     pub task_title: String,
     pub gate: Gate,
+    /// What the branch to publish changes: files, lines added, lines removed (when the server could tell).
+    pub change: Option<(usize, u64, u64)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -84,6 +86,8 @@ pub struct Data {
     pub snapshots: Vec<SnapshotInfo>,
     pub patterns: Vec<PatternSummary>,
     pub models: Models,
+    /// What each agent's state did over the last day (Activity draws its timelines from it).
+    pub state_log: Vec<shepherd_core::StateChange>,
 }
 
 /// The project a folder belongs to: the one with the nearest `.shepherd/config.yaml`, else the folder.
@@ -251,7 +255,14 @@ impl Data {
                 cfg,
             )
         });
+        let since = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |t| t.as_secs())
+            .saturating_sub(24 * 3600);
+        let state_log =
+            shepherd_core::load_state_log(&config::state_dir().join("agents.json"), since);
         Self {
+            state_log,
             runs,
             tasks,
             snapshots,
@@ -334,10 +345,18 @@ pub fn parse_gates(reply: &Value) -> Vec<GateRow> {
                 }
                 _ => return None,
             };
+            let change = run["pending_gate"]["files"].as_u64().map(|f| {
+                (
+                    f as usize,
+                    run["pending_gate"]["added"].as_u64().unwrap_or(0),
+                    run["pending_gate"]["removed"].as_u64().unwrap_or(0),
+                )
+            });
             Some(GateRow {
                 task_id: run["task_id"].as_u64()? as u32,
                 task_title: run["task_title"].as_str().unwrap_or_default().to_owned(),
                 gate,
+                change,
             })
         })
         .collect()
@@ -654,7 +673,7 @@ mod tests {
         let reply = json!({"data": [
             {"task_id": 1, "task_title": "Plan me", "status": "planning", "pending_gate": "plan"},
             {"task_id": 2, "task_title": "Ship it", "status": "running",
-             "pending_gate": {"kind": "push_pr", "subtask": 3}},
+             "pending_gate": {"kind": "push_pr", "subtask": 3, "files": 2, "added": 14, "removed": 3}},
             {"task_id": 3, "task_title": "Busy", "status": "running", "pending_gate": null},
             {"task_id": 4, "task_title": "Odd", "pending_gate": {"kind": "other"}},
             {"task_title": "no id", "pending_gate": "plan"}
@@ -666,12 +685,14 @@ mod tests {
                 GateRow {
                     task_id: 1,
                     task_title: "Plan me".into(),
-                    gate: Gate::Plan
+                    gate: Gate::Plan,
+                    change: None,
                 },
                 GateRow {
                     task_id: 2,
                     task_title: "Ship it".into(),
-                    gate: Gate::PushPr(3)
+                    gate: Gate::PushPr(3),
+                    change: Some((2, 14, 3)),
                 },
             ]
         );
