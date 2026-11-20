@@ -63,6 +63,15 @@ fn start_size() -> Size {
         .unwrap_or(START)
 }
 
+/// The window's icon: the project logo (`assets/logo.png`) as 256 x 256 RGBA pixels.
+fn window_icon() -> Option<iced::window::Icon> {
+    iced::window::icon::from_rgba(include_bytes!("../assets/icon-256.rgba").to_vec(), 256, 256).ok()
+}
+
+/// The name a desktop knows the app by: `shepherd-native.desktop` and the icon of that name (`make native-desktop`)
+/// are what the dock shows under Wayland, where a window cannot set its own icon.
+pub const APP_ID: &str = "shepherd-native";
+
 fn main() -> iced::Result {
     iced::application(App::boot, App::update, App::view)
         .title("Shepherd")
@@ -73,7 +82,15 @@ fn main() -> iced::Result {
         .default_font(theme::MONO)
         .subscription(App::subscription)
         .theme(App::theme)
-        .window_size(start_size())
+        .window(iced::window::Settings {
+            size: start_size(),
+            icon: window_icon(),
+            platform_specific: iced::window::settings::PlatformSpecific {
+                application_id: APP_ID.to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
         .run()
 }
 
