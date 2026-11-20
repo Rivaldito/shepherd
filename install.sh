@@ -92,10 +92,8 @@ main() {
     esac
 
     echo ""
-    log "next: enable the orchestrator once, then start it in a git repository"
-    # a quoted heredoc prints the text as is (echo would turn the \n in the printf into real newlines in some shells)
+    log "next: start it in a git repository (the orchestrator is on by default)"
     cat <<'HINT'
-    mkdir -p ~/.config/shepherd && printf '[shepherd]\nenabled = true\n' > ~/.config/shepherd/config.toml
     cd ~/your-repo && shepherd
 HINT
     if [ "$GUI" = "1" ]; then
