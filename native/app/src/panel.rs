@@ -2946,7 +2946,7 @@ impl Panel {
                             .style(item_style(false))
                             .on_press(Message::Panel(PanelMsg::SelectRun(r.run.id.clone())))
                         )
-                        .width(Length::FillPortion(3)),
+                        .width(150),
                         container(agent_col).width(160),
                         container(branch_col).width(150),
                         container(publish).width(140),
