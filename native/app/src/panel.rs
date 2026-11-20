@@ -147,6 +147,8 @@ pub enum PanelMsg {
     Arm(Armed),
     Confirm,
     Done(Result<String, String>),
+    /// A notice from outside the panel (the window's menus).
+    Notify(String),
     SnapSelect(String),
     SnapShown(
         String,
@@ -1360,6 +1362,7 @@ impl Panel {
                 self.task_form = None;
                 return Task::done(Message::Reload);
             }
+            PanelMsg::Notify(text) => self.notice = text,
             PanelMsg::Done(Err(e)) => self.notice = refusal(self.fail_summary, &e),
             PanelMsg::SnapSelect(id) => {
                 self.snap = Some(id);

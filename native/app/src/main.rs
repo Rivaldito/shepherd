@@ -79,6 +79,7 @@ fn main() -> iced::Result {
 /// The session the app was switched to (see `Message::SwitchSession`); the connection thread reads it on every
 /// (re)connect, so a switch is: set this, close the current connection, and let the reader reconnect.
 static SOCKET_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
+static MENU_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CLOSE_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static NEW_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SWITCH_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -212,6 +213,8 @@ enum Message {
     ArmClose(PendingClose),
     ContextMenuOpened(ContextMenuTarget),
     ContextMenuClosed,
+    /// A destructive item of the context menu: the first click arms it, the second sends `then`.
+    MenuItem(&'static str, Box<Message>),
     RenameStarted(String),
     RenameInput(String),
     RenameSubmitted,
@@ -283,8 +286,20 @@ impl Mode {
 /// Target of a context menu (for rename).
 #[derive(Debug, Clone)]
 enum ContextMenuTarget {
-    Tab { tab_id: String, label: String },
-    Workspace { workspace_id: String, label: String },
+    Tab {
+        tab_id: String,
+        label: String,
+    },
+    Workspace {
+        workspace_id: String,
+        label: String,
+    },
+    /// A session tab of the top bar: running or stopped, and whether it is the default one.
+    Session {
+        name: String,
+        running: bool,
+        default: bool,
+    },
 }
 
 /// Active rename state.
@@ -319,6 +334,8 @@ struct App {
     sent: Option<(u16, u16)>,
     api_socket: PathBuf,
     context_menu: Option<(iced::Point, ContextMenuTarget)>,
+    /// The destructive item of the context menu that waits for its second click.
+    menu_armed: Option<&'static str>,
     rename: Option<RenameState>,
     mouse_position: iced::Point,
     /// Whether a data load is running, and whether another was asked for meanwhile.
@@ -364,6 +381,7 @@ impl App {
             sent: None,
             api_socket: api::api_socket_for(&client_socket()),
             context_menu: None,
+            menu_armed: None,
             rename: None,
             mouse_position: iced::Point::ORIGIN,
             reloads: shepherd_app_core::reload::Coalesce::running(), // the first load starts below
@@ -733,6 +751,33 @@ impl App {
             }
             Message::Sessions(Ok(list)) => {
                 self.sessions = list;
+                // verification aid: `SHEPHERD_NATIVE_MENU=session|workspace[:arm]` opens that right-click menu once
+                if let Some(spec) = std::env::var_os("SHEPHERD_NATIVE_MENU") {
+                    if !MENU_DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                        let spec = spec.to_string_lossy().into_owned();
+                        let target = if spec.starts_with("session") {
+                            self.sessions.first().map(|s| ContextMenuTarget::Session {
+                                name: s.name.clone(),
+                                running: s.running,
+                                default: s.default,
+                            })
+                        } else {
+                            self.snapshot
+                                .workspaces
+                                .last()
+                                .map(|w| ContextMenuTarget::Workspace {
+                                    workspace_id: w.workspace_id.clone(),
+                                    label: w.label.clone(),
+                                })
+                        };
+                        if let Some(target) = target {
+                            self.context_menu = Some((iced::Point::new(260.0, 80.0), target));
+                            if spec.ends_with(":arm") {
+                                self.menu_armed = Some("close");
+                            }
+                        }
+                    }
+                }
                 // verification aid: `SHEPHERD_NATIVE_CLOSE=<name>` clicks that session's `×` twice, `<name>:arm` once
                 if let Some(spec) = std::env::var_os("SHEPHERD_NATIVE_CLOSE") {
                     if !CLOSE_DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -815,10 +860,25 @@ impl App {
                 self.status = "Press close again to confirm closing the group.".into();
             }
             Message::ContextMenuOpened(target) => {
+                self.menu_armed = None;
                 self.context_menu = Some((self.mouse_position, target));
             }
             Message::ContextMenuClosed => {
                 self.context_menu = None;
+                self.menu_armed = None;
+            }
+            Message::MenuItem(key, then) => {
+                if self.menu_armed != Some(key) {
+                    self.menu_armed = Some(key);
+                    return Task::none();
+                }
+                self.menu_armed = None;
+                self.context_menu = None;
+                // the menu's two clicks are the confirmation; the session close asks only once more
+                if let Message::CloseSession(name) = &*then {
+                    self.closing = Some((name.clone(), self.clock));
+                }
+                return Task::done(*then);
             }
             Message::RenameStarted(label) => {
                 if let Some((_, target)) = self.context_menu.take() {
@@ -853,6 +913,7 @@ impl App {
                         "workspace.rename",
                         serde_json::json!({ "workspace_id": workspace_id, "label": new_label }),
                     ),
+                    ContextMenuTarget::Session { .. } => return Task::none(),
                 };
                 let socket = self.api_socket.clone();
                 return Task::perform(
@@ -1321,11 +1382,20 @@ impl App {
                 .padding([0, 10])
                 .height(30)
                 .style(item_style(here));
-            buttons = buttons.push(if session.running && !here {
-                session_button.on_press(Message::SwitchSession(session.client_socket()))
-            } else {
+            let session_button: Element<'_, Message> = if session.running && !here {
                 session_button
-            });
+                    .on_press(Message::SwitchSession(session.client_socket()))
+                    .into()
+            } else {
+                session_button.into()
+            };
+            buttons = buttons.push(mouse_area(session_button).on_right_press(
+                Message::ContextMenuOpened(ContextMenuTarget::Session {
+                    name: session.name.clone(),
+                    running: session.running,
+                    default: session.default,
+                }),
+            ));
             // `×`: stop it (running) or delete it (stopped); the default session cannot be deleted
             if session.running || !session.default {
                 let armed = self.closing.as_ref().map(|(n, _)| n) == Some(&session.name);
@@ -1694,38 +1764,130 @@ impl App {
         .into()
     }
 
-    /// The context menu overlay (right-click menu).
+    /// The context menu overlay (right-click menu): Rename, and the destructive items with the two-click rule.
     fn context_menu_view(&self) -> Element<'_, Message> {
         let Some((position, target)) = &self.context_menu else {
             return container(text("")).into();
         };
-
-        let label = match target {
-            ContextMenuTarget::Tab { label, .. } => label.clone(),
-            ContextMenuTarget::Workspace { label, .. } => label.clone(),
-        };
-
-        let rename_btn = button(
-            container(text(format!("Rename \"{}\"", label)).size(12))
-                .padding([8, 16])
-                .width(Length::Fill),
-        )
-        .padding(0)
-        .width(180.0)
-        .style(item_style(false))
-        .on_press(Message::RenameStarted(label));
-
-        let menu_content = container(column![rename_btn].spacing(0))
-            .padding(4)
-            .style(|_| container::Style {
-                background: Some(Background::Color(PANEL)),
-                border: Border {
-                    color: Color { a: 0.5, ..LINE },
-                    width: 0.5,
-                    radius: 0.0.into(),
-                },
-                ..container::Style::default()
-            });
+        // (label, armed label, what it sends); a plain item has no armed label
+        let mut items: Vec<(String, Option<String>, Message)> = vec![];
+        match target {
+            ContextMenuTarget::Tab { tab_id, label } => {
+                items.push(("Rename".into(), None, Message::RenameStarted(label.clone())));
+                items.push((
+                    "Close".into(),
+                    Some(format!("Confirm: close {label}")),
+                    Message::Act(Action::CloseTab(tab_id.clone())),
+                ));
+            }
+            ContextMenuTarget::Workspace {
+                workspace_id,
+                label,
+            } => {
+                let agents = self
+                    .snapshot
+                    .agents
+                    .iter()
+                    .filter(|a| &a.workspace_id == workspace_id)
+                    .count();
+                items.push(("Rename".into(), None, Message::RenameStarted(label.clone())));
+                items.push((
+                    "New terminal".into(),
+                    None,
+                    Message::Act(Action::NewTab(workspace_id.clone())),
+                ));
+                if agents > 0 {
+                    // the server would refuse anyway: say it where the click is
+                    items.push((
+                        "Close".into(),
+                        None,
+                        Message::Panel(panel::PanelMsg::Notify(ui::invalid(&format!(
+                            "Workspace {label} still runs {agents} agents. Close them first, then the workspace."
+                        )))),
+                    ));
+                } else {
+                    items.push((
+                        "Close".into(),
+                        Some(format!("Confirm: close {label}")),
+                        Message::Act(Action::CloseSpace(workspace_id.clone(), false)),
+                    ));
+                }
+            }
+            ContextMenuTarget::Session {
+                name,
+                running,
+                default,
+            } => {
+                if *running {
+                    // `CloseSession` asks twice itself: the second message is the confirmation
+                    items.push((
+                        "Close".into(),
+                        Some(format!("Confirm: close {name}")),
+                        Message::CloseSession(name.clone()),
+                    ));
+                } else if !default {
+                    items.push((
+                        "Delete".into(),
+                        Some(format!("Confirm: delete {name}")),
+                        Message::CloseSession(name.clone()),
+                    ));
+                } else {
+                    // nothing to offer: say why instead of showing an empty menu
+                    items.push((
+                        "The default session cannot be deleted".into(),
+                        None,
+                        Message::ContextMenuClosed,
+                    ));
+                }
+            }
+        }
+        let mut list = column![].spacing(0);
+        for (label, armed_label, message) in items {
+            let key: &'static str = match label.as_str() {
+                "Close" => "close",
+                _ => "delete",
+            };
+            let armed = armed_label.is_some() && self.menu_armed == Some(key);
+            let shown = match (&armed_label, armed) {
+                (Some(text), true) => text.clone(),
+                _ => label.clone(),
+            };
+            let send = match (&armed_label, &target) {
+                (Some(_), _) => Message::MenuItem(key, Box::new(message)),
+                (None, _) => message,
+            };
+            list = list.push(
+                button(
+                    container(text(shown).size(12))
+                        .padding([8, 16])
+                        .width(Length::Fill),
+                )
+                .padding(0)
+                .width(240.0)
+                .style({
+                    let destructive = armed_label.is_some();
+                    move |theme, status| {
+                        if armed {
+                            theme::danger_button_style()(theme, status)
+                        } else if destructive {
+                            theme::destructive_button_style()(theme, status)
+                        } else {
+                            item_style(false)(theme, status)
+                        }
+                    }
+                })
+                .on_press(send),
+            );
+        }
+        let menu_content = container(list).padding(4).style(|_| container::Style {
+            background: Some(Background::Color(PANEL)),
+            border: Border {
+                color: Color { a: 0.5, ..LINE },
+                width: 0.5,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        });
 
         // Click overlay to close menu
         let overlay = mouse_area(container(text("")).width(Length::Fill).height(Length::Fill))
@@ -2233,6 +2395,7 @@ impl App {
         let title = match &rename.target {
             ContextMenuTarget::Tab { .. } => "Rename Tab",
             ContextMenuTarget::Workspace { .. } => "Rename Workspace",
+            ContextMenuTarget::Session { .. } => "Rename Session",
         };
 
         let input = text_input("New name", &rename.input)
