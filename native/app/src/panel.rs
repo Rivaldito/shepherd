@@ -1226,7 +1226,15 @@ impl Panel {
                         return Task::perform(
                             async move {
                                 actions::clean_runs(&api, Some(&root)).map(|(runs, agents)| {
-                                    format!("Cleaned {runs} run(s) and {agents} agent(s)")
+                                    if runs == 0 && agents == 0 {
+                                        crate::ui::info("No finished runs or agents to clean.")
+                                    } else {
+                                        format!(
+                                            "Cleaned {runs} finished run{} and {agents} finished agent{}.",
+                                            if runs == 1 { "" } else { "s" },
+                                            if agents == 1 { "" } else { "s" }
+                                        )
+                                    }
                                 })
                             },
                             |r| Message::Panel(PanelMsg::Done(r)),
@@ -2034,7 +2042,16 @@ impl Panel {
                         self.arm_button(
                             Armed::CleanRuns,
                             "Clean finished",
-                            "Confirm: delete finished",
+                            format!(
+                                "Confirm: forget {} finished",
+                                d.runs
+                                    .iter()
+                                    .filter(|r| matches!(
+                                        r.run.state,
+                                        PatternRunState::Done | PatternRunState::Stopped
+                                    ))
+                                    .count()
+                            ),
                         ),
                         btn_primary("Run a pattern", PanelMsg::OpenLauncher(None)),
                     ],
@@ -2054,7 +2071,13 @@ impl Panel {
                         self.arm_button(
                             Armed::CleanRuns,
                             "Clean finished",
-                            "Confirm: delete finished",
+                            format!(
+                                "Confirm: forget {} finished",
+                                d.agents
+                                    .iter()
+                                    .filter(|a| matches!(a.state.as_str(), "done" | "failed"))
+                                    .count()
+                            ),
                         ),
                         btn("Resume idle", PanelMsg::ResumeAgents),
                         btn_primary("+ New agent", PanelMsg::OpenSpawnAgent),
