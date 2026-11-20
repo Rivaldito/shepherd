@@ -2,16 +2,16 @@
 //! top right), the list filter with its chips, and the toasts.
 
 use crate::panel::PanelMsg;
-use crate::theme::{self, BAD, DIM, FG, HI, LINE, OK};
+use crate::theme::{self, BAD, DIM, HI, LINE, OK};
 use crate::Message;
 use iced::widget::{button, column, container, row, text, text_input};
-use iced::{Background, Element, Length};
+use iced::{Background, Color, Element, Length};
 use std::time::{Duration, Instant};
 
 /// How long a success toast stays; a refusal stays until dismissed.
-pub const TOAST_SECS: u64 = 4;
+pub const TOAST_MS: u64 = 4200;
 /// Notices kept for the status bar history.
-pub const HISTORY: usize = 50;
+pub const HISTORY: usize = 30;
 
 /// The view's title and subtitle on the left, its actions on the right (`create` first, filled button last).
 pub fn page_header<'a>(
@@ -95,7 +95,7 @@ impl Toast {
 
     /// A success toast goes away on its own.
     pub fn expired(&self) -> bool {
-        !self.error && self.at.elapsed() > Duration::from_secs(TOAST_SECS)
+        !self.error && self.at.elapsed() > Duration::from_millis(TOAST_MS)
     }
 }
 
@@ -108,54 +108,73 @@ pub fn is_error(notice: &str) -> bool {
         || notice.contains("cannot")
 }
 
-/// The toast at the top right: a green success or a red refusal with the server's own words.
-pub fn toast_view<'a>(toast: &'a Toast) -> Element<'a, Message> {
-    let color = if toast.error { BAD } else { OK };
-    let mut body = column![row![
-        text("●").size(10).color(color),
-        text(if toast.error {
-            "The server refused this. Its answer, as sent:"
+/// The toasts at the bottom right: 400 wide, 14 px from the right edge and 40 px above the status bar, stacked
+/// upwards with the newest at the bottom (at most 3). A success goes away by itself; an error stays and shows
+/// the server's own words.
+pub fn toasts_view<'a>(toasts: Vec<(usize, &'a Toast)>) -> Element<'a, Message> {
+    let mut stack = column![].spacing(8).width(400);
+    for (index, toast) in toasts {
+        let color = if toast.error { BAD } else { OK };
+        let mut body = column![].spacing(6).width(Length::Fill);
+        if toast.error {
+            body = body
+                .push(
+                    text("The server refused this. Its answer, as sent:")
+                        .size(11)
+                        .color(BAD),
+                )
+                .push(
+                    container(text(toast.text.clone()).size(11).color(theme::TEXT2))
+                        .padding([6, 8])
+                        .width(Length::Fill)
+                        .style(|_| container::Style {
+                            background: Some(Background::Color(theme::INPUT)),
+                            border: iced::Border {
+                                color: LINE,
+                                width: 1.0,
+                                radius: 4.0.into(),
+                            },
+                            ..container::Style::default()
+                        }),
+                );
         } else {
-            ""
-        })
-        .size(11)
-        .color(color),
-    ]
-    .spacing(8)];
-    if !toast.error {
-        body = column![row![
-            text("●").size(10).color(color),
-            text(toast.text.clone()).size(12).color(FG)
-        ]
-        .spacing(8)];
-    } else {
-        body = body.push(
-            container(text(toast.text.clone()).size(12).color(FG))
-                .padding([6, 8])
-                .width(Length::Fill)
-                .style(|_| container::Style {
-                    background: Some(Background::Color(theme::BG)),
-                    border: iced::Border {
-                        color: LINE,
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    ..container::Style::default()
-                }),
+            body = body.push(text(toast.text.clone()).size(12).color(theme::FG));
+        }
+        let close = button(text("×").size(14))
+            .padding([0, 6])
+            .width(22)
+            .height(22)
+            .style(theme::close_button_style())
+            .on_press(Message::Panel(PanelMsg::DismissToast(index)));
+        stack = stack.push(
+            container(
+                row![
+                    container(text(""))
+                        .width(8)
+                        .height(8)
+                        .style(move |_| container::Style {
+                            background: Some(Background::Color(color)),
+                            ..container::Style::default()
+                        }),
+                    body,
+                    close
+                ]
+                .spacing(10)
+                .align_y(iced::Alignment::Start),
+            )
+            .padding([11, 12])
+            .width(400)
+            .style(theme::toast_style(Color {
+                a: if toast.error { 0.7 } else { 0.4 },
+                ..color
+            })),
         );
     }
-    let close = button(text("×").size(14))
-        .padding([0, 6])
-        .style(theme::close_button_style())
-        .on_press(Message::Panel(PanelMsg::DismissToast));
-    container(
-        container(row![body.width(Length::Fill), close].spacing(8))
-            .padding([10, 12])
-            .width(420)
-            .style(theme::toast_style(color)),
-    )
-    .padding([56, 16])
-    .width(Length::Fill)
-    .align_x(iced::alignment::Horizontal::Right)
-    .into()
+    container(stack)
+        .padding(theme::pad(0.0, 14.0, 40.0, 0.0))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced::alignment::Horizontal::Right)
+        .align_y(iced::alignment::Vertical::Bottom)
+        .into()
 }

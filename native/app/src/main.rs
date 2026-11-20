@@ -37,6 +37,8 @@ use theme::{
 };
 
 const SIDEBAR_W: f32 = 232.0;
+/// The least height of the main area: below it the area scrolls.
+const MAIN_MIN_H: f32 = 600.0;
 /// The height of a terminal row, which the pane headers take.
 const CELL_ROW: f32 = grid::CELL_H;
 const TABBAR_H: f32 = 42.0;
@@ -1046,15 +1048,39 @@ impl App {
 
     fn view(&self) -> Element<'_, Message> {
         let body: Element<'_, Message> = match self.mode {
-            Mode::Shepherd => {
+            Mode::Shepherd => iced::widget::responsive(move |size| {
                 let ctx = panel::Ctx {
                     api: self.api_socket.clone(),
                     data: &self.data,
                     snapshot: &self.snapshot,
                     frame: self.frame,
                 };
-                self.panel.view(&ctx)
-            }
+                let body = self.panel.view(&ctx);
+                // fixed sizes, scroll instead of squash: when the fixed panes and a flexible region of at
+                // least 360 px do not fit, the whole main area scrolls (section 1.3 of the spec)
+                let (min_w, min_h) = (self.panel.min_main_width(), MAIN_MIN_H);
+                if size.width >= min_w && size.height >= min_h {
+                    body
+                } else {
+                    theme::scroll(
+                        container(body)
+                            .width(Length::Fixed(size.width.max(min_w)))
+                            .height(Length::Fixed(size.height.max(min_h))),
+                    )
+                    .direction(iced::widget::scrollable::Direction::Both {
+                        vertical: iced::widget::scrollable::Scrollbar::new()
+                            .width(8)
+                            .scroller_width(8),
+                        horizontal: iced::widget::scrollable::Scrollbar::new()
+                            .width(8)
+                            .scroller_width(8),
+                    })
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+                }
+            })
+            .into(),
             Mode::Terminal => self.terminal_pane(),
         };
         let status_color_val = if self.status.starts_with("connected") {
@@ -1068,16 +1094,16 @@ impl App {
             DIM
         };
         let base = self.app_window(body, status_color_val);
-        let base: Element<'_, Message> = if self.history_open && self.mode == Mode::Shepherd {
+        let base: Element<'_, Message> = if self.history_open {
             iced::widget::stack![base, self.history_view()].into()
         } else {
             base
         };
-        let base: Element<'_, Message> = match (self.mode, self.panel.toast()) {
-            (Mode::Shepherd, Some(toast)) => {
-                iced::widget::stack![base, ui::toast_view(toast)].into()
-            }
-            _ => base,
+        let toasts = self.panel.toasts();
+        let base: Element<'_, Message> = if toasts.is_empty() {
+            base
+        } else {
+            iced::widget::stack![base, ui::toasts_view(toasts)].into()
         };
         let content: Element<'_, Message> = match &self.palette {
             Some(palette) => iced::widget::stack![base, self.palette_view(palette)].into(),
@@ -1093,7 +1119,8 @@ impl App {
         }
     }
 
-    /// The notices of this session, newest first, over the bottom left corner (opened from the status bar).
+    /// The notices of this session, newest first (at most 30), over the bottom left corner: 480 wide, 280 tall at
+    /// most, opened from the status bar.
     fn history_view(&self) -> Element<'_, Message> {
         let notices = self.panel.history();
         let mut list = column![row![
@@ -1120,25 +1147,26 @@ impl App {
                     .color(DIM),
             );
         }
-        for n in notices.iter().rev().take(40) {
+        for (time, n) in notices.iter().rev() {
             let bad = ui::is_error(n);
+            let color = if bad { theme::BAD } else { theme::OK };
             list = list.push(
                 row![
-                    text(if bad { "✖" } else { "●" }).size(10).color(if bad {
-                        theme::BAD
-                    } else {
-                        theme::OK
-                    }),
-                    text(n.clone()).size(12).color(theme::FG),
+                    text(time.clone()).size(11).color(theme::FAINT).width(62),
+                    text("■").size(8).color(color),
+                    text(n.clone())
+                        .size(12)
+                        .color(if bad { theme::BAD } else { theme::FG }),
                 ]
-                .spacing(8),
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
             );
         }
         container(
-            container(scrollable(list).height(Length::Shrink))
+            container(theme::scroll(list).height(Length::Shrink))
                 .padding(14)
-                .width(520)
-                .max_height(420)
+                .width(480)
+                .max_height(280)
                 .style(theme::toast_style(theme::LINE2)),
         )
         .padding(pad(0.0, 0.0, 34.0, 12.0))
@@ -1759,7 +1787,7 @@ impl App {
 
             let tab_button = button(container(tab_content).center_y(Length::Fill))
                 .padding([0, 12])
-                .height(34)
+                .height(32)
                 .style(item_style(tab.focused))
                 .on_press(Message::Act(Action::FocusTab(tab_id.clone())));
 
@@ -1773,7 +1801,7 @@ impl App {
         tabs = tabs.push(
             button(container(text("+").size(14)).center(Length::Fill))
                 .width(30)
-                .height(34)
+                .height(32)
                 .style(mini_button_style())
                 .on_press(Message::Act(Action::NewTab(workspace.to_owned()))),
         );
@@ -1785,7 +1813,7 @@ impl App {
             .find(|t| t.focused)
             .map_or(1, |t| t.number);
         let content = row![
-            scrollable(tabs).direction(scrollable::Direction::Horizontal(
+            crate::theme::scroll(tabs).direction(scrollable::Direction::Horizontal(
                 scrollable::Scrollbar::new().width(0).scroller_width(0),
             )),
             container(text("")).width(Length::Fill),
@@ -2073,7 +2101,7 @@ impl App {
         } else {
             container(text("")).height(0).into()
         };
-        container(scrollable(
+        container(crate::theme::scroll(
             column![container(column![spaces, agents, nav].spacing(6)).padding([14, 10])]
                 .spacing(0),
         ))

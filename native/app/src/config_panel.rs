@@ -4,9 +4,7 @@
 use crate::panel::{detail_box, list_box, PanelMsg, Tab};
 use crate::theme::{card_style, item_style, ACCENT, DIM, OK, WARN};
 use crate::Message;
-use iced::widget::{
-    button, checkbox, column, container, row, scrollable, text, text_editor, text_input,
-};
+use iced::widget::{button, checkbox, column, container, row, text, text_editor, text_input};
 use iced::{Background, Color, Element, Length, Task};
 use shepherd_app_core::actions;
 use shepherd_app_core::config_data::{self, Models, SkillRow, TopicRow};
@@ -1070,13 +1068,13 @@ impl ConfigPanel {
                                     .center_y(Length::Fill),
                             )
                             .padding([0, 12])
-                            .height(34)
+                            .height(32)
                             .style(crate::theme::danger_button_style())
                             .on_press(cfg(CfgMsg::SkillDelete(s.name.clone())))
                         } else {
                             button(container(text("Delete").size(13)).center_y(Length::Fill))
                                 .padding([0, 12])
-                                .height(34)
+                                .height(32)
                                 .style(crate::theme::outline_button_style(false))
                                 .on_press(cfg(CfgMsg::SkillDelete(s.name.clone())))
                         });
@@ -1569,7 +1567,7 @@ impl ConfigPanel {
             .spacing(16)
             .into(),
         };
-        scrollable(
+        crate::theme::scroll(
             container(column![note, table, lower].spacing(16))
                 .padding([20, 28])
                 .width(Length::Fill),
@@ -2133,7 +2131,7 @@ impl ConfigPanel {
                 } else {
                     "Delete"
                 };
-                form.push(row![button(container(text("Save").size(13)).center_y(Length::Fill)).padding([0, 12]).height(34).style(crate::theme::primary_button_style()).on_press(cfg(CfgMsg::Save)), button(container(text(delete_label).size(13)).center_y(Length::Fill)).padding([0, 12]).height(34).style(crate::theme::outline_button_style(!self.armed_delete)).on_press(cfg(CfgMsg::Delete))].spacing(8))
+                form.push(row![button(container(text("Save").size(13)).center_y(Length::Fill)).padding([0, 12]).height(32).style(crate::theme::primary_button_style()).on_press(cfg(CfgMsg::Save)), button(container(text(delete_label).size(13)).center_y(Length::Fill)).padding([0, 12]).height(32).style(crate::theme::outline_button_style(!self.armed_delete)).on_press(cfg(CfgMsg::Delete))].spacing(8))
                     .push(text(target).size(11).color(DIM))
                     .push(text(if self.is_new { "New entry: pick a name and Save." } else { "Lists are comma or space separated. Saving rewrites config.yaml (comments are lost, a .bak is kept)." }).size(11).color(DIM))
                     .into()
@@ -2494,7 +2492,7 @@ fn chip_btn<'a>(label: String, on: bool, msg: CfgMsg) -> Element<'a, Message> {
 fn refresh_button<'a>() -> Element<'a, Message> {
     button(container(text("Refresh").size(13)).center_y(Length::Fill))
         .padding([0, 12])
-        .height(34)
+        .height(32)
         .style(crate::theme::outline_button_style(true))
         .on_press(cfg(CfgMsg::Refresh))
         .into()

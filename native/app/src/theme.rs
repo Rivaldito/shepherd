@@ -28,6 +28,16 @@ pub const FG: Color = Color::from_rgb8(0xE7, 0xE7, 0xEE);
 pub const HI: Color = Color::from_rgb8(0xF4, 0xF4, 0xF8);
 /// --muted
 pub const DIM: Color = Color::from_rgb8(0x9A, 0x9A, 0xA8);
+/// Hovered rows and items (`hover`).
+pub const HOVER: Color = Color::from_rgb8(0x0F, 0x0F, 0x15);
+/// Input and code backgrounds (`input`).
+pub const INPUT: Color = Color::from_rgb8(0x05, 0x05, 0x07);
+/// Hovered control borders (`line3`).
+pub const LINE3: Color = Color::from_rgb8(0x4A, 0x4A, 0x5C);
+/// Secondary text that must stay readable (`text2`).
+pub const TEXT2: Color = Color::from_rgb8(0xC9, 0xC9, 0xD3);
+/// Decorative only: separators, keyboard hints, disabled (`faint`). Never for information.
+pub const FAINT: Color = Color::from_rgb8(0x6E, 0x6E, 0x7C);
 /// --cyan: accent / working.
 pub const ACCENT: Color = Color::from_rgb8(0x19, 0xD3, 0xFF);
 /// --red
@@ -154,7 +164,7 @@ pub fn item_style(selected: bool) -> impl Fn(&Theme, button::Status) -> button::
                 },
             )
         } else if hovered(status) {
-            (Some(Background::Color(SURFACE)), rounded(4.0))
+            (Some(Background::Color(HOVER)), rounded(4.0))
         } else {
             (None, rounded(4.0))
         };
@@ -465,11 +475,11 @@ pub fn input_style(
 ) -> iced::widget::text_input::Style {
     let focused = matches!(status, iced::widget::text_input::Status::Focused { .. });
     iced::widget::text_input::Style {
-        background: Background::Color(BG),
+        background: Background::Color(INPUT),
         border: Border {
             color: if focused { ACCENT } else { LINE2 },
             width: 1.0,
-            radius: 4.0.into(),
+            radius: 6.0.into(),
         },
         icon: DIM,
         placeholder: DIM,
@@ -553,6 +563,91 @@ pub fn editor_style(
 
 /// The iced theme of the app: Shepherd's palette, so that the widgets nobody styled by hand (pick lists, check
 /// boxes, scrollbars, text selection) wear the same colours as the rest.
+/// A thin vertical scrollbar (8 px, transparent track, thumb `line2`, lighter on hover).
+pub fn scrollbar_style(
+    _: &Theme,
+    status: iced::widget::scrollable::Status,
+) -> iced::widget::scrollable::Style {
+    use iced::widget::scrollable::{Rail, Scroller, Status, Style};
+    let hot = matches!(
+        status,
+        Status::Hovered {
+            is_vertical_scrollbar_hovered: true,
+            ..
+        } | Status::Hovered {
+            is_horizontal_scrollbar_hovered: true,
+            ..
+        } | Status::Dragged { .. }
+    );
+    let rail = Rail {
+        background: None,
+        border: Border::default(),
+        scroller: Scroller {
+            background: Background::Color(if hot { LINE3 } else { LINE2 }),
+            border: Border {
+                radius: 4.0.into(),
+                ..Border::default()
+            },
+        },
+    };
+    Style {
+        container: iced::widget::container::Style::default(),
+        vertical_rail: rail,
+        horizontal_rail: rail,
+        gap: None,
+        auto_scroll: iced::widget::scrollable::AutoScroll {
+            background: Background::Color(SURFACE),
+            border: Border::default(),
+            shadow: iced::Shadow::default(),
+            icon: DIM,
+        },
+    }
+}
+
+/// A scrollable with the thin scrollbar of the design: vertical, 8 px.
+pub fn scroll<'a>(
+    content: impl Into<iced::Element<'a, crate::Message>>,
+) -> iced::widget::Scrollable<'a, crate::Message> {
+    iced::widget::scrollable(content)
+        .style(scrollbar_style)
+        .direction(iced::widget::scrollable::Direction::Vertical(
+            iced::widget::scrollable::Scrollbar::new()
+                .width(8)
+                .scroller_width(8),
+        ))
+}
+
+/// A switch (34 x 18): off a `selected` track with a faint knob, on a cyan track with a cyan knob.
+pub fn switch_style(
+    _: &Theme,
+    status: iced::widget::toggler::Status,
+) -> iced::widget::toggler::Style {
+    let on = matches!(
+        status,
+        iced::widget::toggler::Status::Active { is_toggled: true }
+            | iced::widget::toggler::Status::Hovered { is_toggled: true }
+    );
+    iced::widget::toggler::Style {
+        background: if on {
+            Background::Color(Color { a: 0.25, ..ACCENT })
+        } else {
+            Background::Color(SELECTED)
+        },
+        background_border_width: 1.0,
+        background_border_color: if on {
+            Color { a: 0.6, ..ACCENT }
+        } else {
+            LINE2
+        },
+        foreground: Background::Color(if on { ACCENT } else { FAINT }),
+        foreground_border_width: 0.0,
+        foreground_border_color: Color::TRANSPARENT,
+        text_color: None,
+        border_radius: Some(9.0.into()),
+        padding_ratio: 0.2,
+    }
+}
+
 pub fn app_theme() -> Theme {
     static THEME: std::sync::OnceLock<Theme> = std::sync::OnceLock::new();
     THEME

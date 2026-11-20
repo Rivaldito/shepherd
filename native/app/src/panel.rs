@@ -11,7 +11,7 @@ use crate::theme::{
 use crate::{Action, Message};
 use iced::widget::canvas::Canvas;
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, scrollable, text, text_editor, text_input,
+    button, checkbox, column, container, pick_list, row, text, text_editor, text_input,
 };
 use iced::{Background, Color, Element, Length, Task};
 use shepherd_app_core::actions::{self, RunControl};
@@ -42,6 +42,14 @@ pub enum Tab {
 
 /// Seconds an armed (two-click) button waits for its second click.
 const ARM_SECS: f32 = 4.0;
+
+/// `HH:MM:SS` (UTC) now, for the notice history.
+fn clock_now() -> String {
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    format!("{:02}:{:02}:{:02}", (t / 3600) % 24, (t / 60) % 60, t % 60)
+}
 
 /// A button that needs a second click (no pop-ups).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,7 +152,7 @@ pub enum PanelMsg {
     /// The list filter box and its chips.
     Filter(String),
     Chip(usize),
-    DismissToast,
+    DismissToast(usize),
     /// What the agents' panes show now.
     Outputs(Vec<(String, String)>),
     /// Opens the editor on a blank pattern.
@@ -245,10 +253,10 @@ pub struct Panel {
     filter: String,
     chip: usize,
     /// The notice shown as a toast, and the last notice seen (to know when a new one arrives).
-    toast: Option<crate::ui::Toast>,
+    toasts: Vec<crate::ui::Toast>,
     seen_notice: String,
     /// Every notice of this session, newest last, for the status bar history.
-    pub history: Vec<String>,
+    pub history: Vec<(String, String)>,
     /// The graph of the shown run's pattern, for the live topology (cached by pattern name).
     run_graph: Option<(String, shepherd_app_core::pattern_graph::Graph)>,
     /// The last lines each agent's pane shows, by pane id (asked from the API while Agents is open).
@@ -329,7 +337,7 @@ impl Default for Panel {
             reject_reason: String::new(),
             filter: String::new(),
             chip: 0,
-            toast: None,
+            toasts: Vec::new(),
             seen_notice: String::new(),
             history: Vec::new(),
             run_graph: None,
@@ -405,7 +413,8 @@ fn agent_skill_buttons<'a>(
         if enabled || !a.skills.add.contains(&name) || a.skills.remove.contains(&name) {
             r = r.push(
                 iced::widget::toggler(enabled)
-                    .size(16)
+                    .size(18)
+                    .style(theme::switch_style)
                     .on_toggle(move |on| {
                         Message::Panel(PanelMsg::AgentSkill(id.clone(), name.clone(), Some(on)))
                     }),
@@ -583,7 +592,7 @@ fn btn_body<'a>(label: impl ToString) -> Element<'a, Message> {
 pub(crate) fn btn<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Message> {
     button(btn_body(label))
         .padding([0, 12])
-        .height(34)
+        .height(32)
         .style(theme::outline_button_style(false))
         .on_press(Message::Panel(msg))
         .into()
@@ -593,7 +602,7 @@ pub(crate) fn btn<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Messag
 pub(crate) fn btn_ghost<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Message> {
     button(btn_body(label))
         .padding([0, 12])
-        .height(34)
+        .height(32)
         .style(theme::outline_button_style(true))
         .on_press(Message::Panel(msg))
         .into()
@@ -603,7 +612,7 @@ pub(crate) fn btn_ghost<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, 
 pub(crate) fn btn_quiet<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Message> {
     button(btn_body(label))
         .padding([0, 12])
-        .height(34)
+        .height(32)
         .style(theme::outline_button_style(true))
         .on_press(Message::Panel(msg))
         .into()
@@ -612,7 +621,7 @@ pub(crate) fn btn_quiet<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, 
 pub(crate) fn btn_link<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Message> {
     button(btn_body(label))
         .padding([0, 8])
-        .height(34)
+        .height(32)
         .style(theme::link_button_style())
         .on_press(Message::Panel(msg))
         .into()
@@ -621,7 +630,7 @@ pub(crate) fn btn_link<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, M
 pub(crate) fn btn_primary<'a>(label: impl ToString, msg: PanelMsg) -> Element<'a, Message> {
     button(btn_body(label))
         .padding([0, 12])
-        .height(34)
+        .height(32)
         .style(primary_button_style())
         .on_press(Message::Panel(msg))
         .into()
@@ -756,10 +765,13 @@ impl Panel {
         if current != self.seen_notice {
             self.seen_notice = current.clone();
             if !current.is_empty() {
-                self.history.push(current.clone());
+                self.history.push((clock_now(), current.clone()));
                 let extra = self.history.len().saturating_sub(crate::ui::HISTORY);
                 self.history.drain(..extra);
-                self.toast = Some(crate::ui::Toast::new(current));
+                self.toasts.push(crate::ui::Toast::new(current));
+                // at most 3: a 4th pushes the oldest out
+                let over = self.toasts.len().saturating_sub(3);
+                self.toasts.drain(..over);
             }
         }
     }
@@ -811,8 +823,12 @@ impl Panel {
     }
 
     /// The toast to draw now, if any (a success goes away after a few seconds).
-    pub fn toast(&self) -> Option<&crate::ui::Toast> {
-        self.toast.as_ref().filter(|t| !t.expired())
+    pub fn toasts(&self) -> Vec<(usize, &crate::ui::Toast)> {
+        self.toasts
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| !t.expired())
+            .collect()
     }
 
     fn update_inner(&mut self, message: PanelMsg, ctx: &Ctx<'_>) -> Task<Message> {
@@ -852,7 +868,11 @@ impl Panel {
             PanelMsg::Cfg(msg) => return self.cfg.update(msg, &ctx.data.root),
             PanelMsg::Filter(t) => self.filter = t,
             PanelMsg::Chip(i) => self.chip = i,
-            PanelMsg::DismissToast => self.toast = None,
+            PanelMsg::DismissToast(i) => {
+                if i < self.toasts.len() {
+                    self.toasts.remove(i);
+                }
+            }
             PanelMsg::ActivityWindow(i) => self.activity_window = i,
             PanelMsg::CommClose => {
                 self.comm_open = false;
@@ -1627,7 +1647,7 @@ impl Panel {
             return iced::widget::stack![
                 button(content)
                     .padding([0, 12])
-                    .height(34)
+                    .height(32)
                     .style(danger_button_style())
                     .on_press(Message::Panel(msg)),
                 container(bar).align_bottom(Length::Fill).padding([0, 1]),
@@ -1636,12 +1656,12 @@ impl Panel {
         } else if approving {
             button(content)
                 .padding([0, 12])
-                .height(34)
+                .height(32)
                 .style(primary_button_style())
         } else {
             button(content)
                 .padding([0, 12])
-                .height(34)
+                .height(32)
                 .style(theme::destructive_button_style())
         }
         .on_press(Message::Panel(msg))
@@ -2065,21 +2085,33 @@ impl Panel {
         } else {
             OK
         };
-        let notice: Element<'a, Message> = if notice_text.is_empty() {
-            text("Ready").size(11.5).color(DIM).into()
+        let shown = if notice_text.is_empty() {
+            "Ready".to_owned()
         } else {
-            container(
-                row![
-                    text(if notice_color == BAD { "✖" } else { "●" })
-                        .size(11)
-                        .color(notice_color),
-                    text(notice_text).size(11).color(notice_color),
-                ]
-                .spacing(7),
-            )
-            .into()
+            notice_text
         };
-        notice
+        let color = if shown == "Ready" { DIM } else { notice_color };
+        let mut line = row![
+            text("■").size(8).color(color),
+            container(
+                text(shown)
+                    .size(11)
+                    .color(color)
+                    .wrapping(iced::widget::text::Wrapping::None)
+            )
+            .max_width(620)
+            .clip(true),
+        ]
+        .spacing(7)
+        .align_y(iced::Alignment::Center);
+        if !self.history.is_empty() {
+            line = line.push(
+                text(format!("{} notices", self.history.len()))
+                    .size(11)
+                    .color(theme::FAINT),
+            );
+        }
+        line.into()
     }
 
     fn list<'a>(
@@ -2800,7 +2832,7 @@ impl Panel {
 
         column![
             kpis,
-            scrollable(
+            crate::theme::scroll(
                 column![
                     pulse,
                     row![
@@ -2858,12 +2890,12 @@ impl Panel {
             row![
                 button(container(text("Run pattern").size(13)).center_y(Length::Fill))
                     .padding([0, 16])
-                    .height(34)
+                    .height(32)
                     .style(primary_button_style())
                     .on_press(Message::Panel(PanelMsg::Launch)),
                 button(container(text("Cancel").size(13)).center_y(Length::Fill))
                     .padding([0, 14])
-                    .height(34)
+                    .height(32)
                     .style(theme::outline_button_style(false))
                     .on_press(Message::Panel(PanelMsg::CloseLauncher)),
             ]
@@ -2888,7 +2920,7 @@ impl Panel {
                         .color(DIM),
                     button(container(text("Run a pattern").size(13)).center_y(Length::Fill))
                         .padding([0, 12])
-                        .height(34)
+                        .height(32)
                         .style(primary_button_style())
                         .on_press(Message::Panel(PanelMsg::OpenLauncher(None))),
                 ]
@@ -3402,7 +3434,7 @@ impl Panel {
                 &chips,
                 self.chip
             ),
-            scrollable(container(grid).padding([4, 12])).height(Length::Fill),
+            crate::theme::scroll(container(grid).padding([4, 12])).height(Length::Fill),
         ]
         .width(Length::Fill);
         let _ = footer;
@@ -3442,7 +3474,7 @@ impl Panel {
         let action = |label: &'static str, msg: Message, primary: bool| -> Element<'a, Message> {
             button(container(text(label).size(13)).center_y(Length::Fill))
                 .padding([0, 12])
-                .height(34)
+                .height(32)
                 .style(if primary {
                     Box::new(primary_button_style())
                         as Box<dyn Fn(&iced::Theme, button::Status) -> button::Style>
@@ -3478,7 +3510,7 @@ impl Panel {
             actions = actions.push(
                 button(container(text("Close agent").size(13)).center_y(Length::Fill))
                     .padding([0, 12])
-                    .height(34)
+                    .height(32)
                     .style(danger_button_style())
                     .on_press(Message::Panel(PanelMsg::KillAgent(a.id.clone()))),
             );
@@ -3724,12 +3756,12 @@ impl Panel {
             row![
                 button(container(text("Launch").size(13)).center_y(Length::Fill))
                     .padding([0, 16])
-                    .height(34)
+                    .height(32)
                     .style(primary_button_style())
                     .on_press(Message::Panel(PanelMsg::SpawnAgent)),
                 button(container(text("Cancel").size(13)).center_y(Length::Fill))
                     .padding([0, 14])
-                    .height(34)
+                    .height(32)
                     .style(theme::outline_button_style(false))
                     .on_press(Message::Panel(PanelMsg::CloseSpawnAgent)),
             ]
@@ -3865,7 +3897,7 @@ impl Panel {
             for t in tasks {
                 cards = cards.push(card_of(t));
             }
-            container(column![head, scrollable(cards).height(Length::Fill)].spacing(10))
+            container(column![head, crate::theme::scroll(cards).height(Length::Fill)].spacing(10))
                 .padding(12)
                 .width(Length::FillPortion(1))
                 .height(Length::Fill)
@@ -4311,7 +4343,7 @@ impl Panel {
     }
 
     /// Every notice of this session, oldest first (the status bar shows them in a list).
-    pub fn history(&self) -> &[String] {
+    pub fn history(&self) -> &[(String, String)] {
         &self.history
     }
 
@@ -4328,6 +4360,7 @@ impl Panel {
 
     /// An armed button goes back to normal after `ARM_SECS` (called on every tick).
     pub fn expire_armed(&mut self) {
+        self.toasts.retain(|t| !t.expired());
         if self.armed.is_some()
             && self
                 .armed_at
@@ -4341,6 +4374,22 @@ impl Panel {
     /// Whether the communication screen of a run is open (it reads the bus again on every change).
     pub fn comm_open(&self) -> bool {
         self.comm_open
+    }
+
+    /// The least width the main area keeps: the fixed panes of the view plus a flexible region of 360 px.
+    /// Narrower than this, the main area scrolls sideways instead of squashing anything.
+    pub fn min_main_width(&self) -> f32 {
+        const FLEX: f32 = 360.0;
+        match self.tab {
+            Tab::Overview | Tab::Git | Tab::Monitor => 1000.0,
+            Tab::Runs | Tab::Skills => 320.0 + 1.0 + FLEX,
+            Tab::Agents => 460.0 + 1.0 + FLEX,
+            Tab::Tasks => 430.0 + 1.0 + FLEX,
+            Tab::Patterns => 260.0 + 300.0 + 2.0 + FLEX,
+            Tab::Events => 250.0 + 1.0 + FLEX,
+            Tab::Models => 230.0 + 1.0 + FLEX,
+            Tab::Snapshots => 400.0 + 1.0 + FLEX,
+        }
     }
 
     /// The seconds the Activity window covers.
@@ -4533,7 +4582,7 @@ impl Panel {
             .spacing(12)
             .into(),
         );
-        scrollable(
+        crate::theme::scroll(
             container(column![timelines, lag].spacing(16))
                 .padding([20, 28])
                 .width(Length::Fill),
@@ -4791,7 +4840,7 @@ impl Panel {
                         background: Some(Background::Color(LINE)),
                         ..container::Style::default()
                     }),
-                scrollable(container(feed).padding([8, 28]).width(Length::Fill))
+                crate::theme::scroll(container(feed).padding([8, 28]).width(Length::Fill))
                     .height(Length::Fill),
             ]
             .height(Length::Fill),
@@ -4829,7 +4878,7 @@ pub fn list_box_with<'a>(
                 ..container::Style::default()
             })
     };
-    let list = scrollable(column(items).spacing(2).padding(8)).height(Length::Fill);
+    let list = crate::theme::scroll(column(items).spacing(2).padding(8)).height(Length::Fill);
     let mut col = column![];
     if let Some(top) = top {
         col = col.push(top);
@@ -4856,7 +4905,7 @@ pub fn list_box_with<'a>(
 
 /// `.detail`: the rest of the width, padded, no card.
 pub fn detail_box<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
-    container(scrollable(
+    container(crate::theme::scroll(
         container(content).padding([20, 24]).width(Length::Fill),
     ))
     .width(Length::Fill)
@@ -5176,12 +5225,21 @@ mod tests {
         let mut panel = Panel::default();
         panel.notice = "Saved task #1".into();
         panel.sync_toast();
-        assert!(panel.toast().is_some_and(|t| !t.error));
+        assert!(panel.toasts().last().is_some_and(|(_, t)| !t.error));
         panel.notice = "error: refused: cannot remove".into();
         panel.sync_toast();
-        let toast = panel.toast().expect("a refusal stays");
+        let toast = panel
+            .toasts()
+            .last()
+            .map(|(_, t)| *t)
+            .expect("a refusal stays");
         assert!(toast.error && !toast.expired());
-        assert_eq!(panel.history.len(), 2);
+        for n in 0..5 {
+            panel.notice = format!("Saved {n}");
+            panel.sync_toast();
+        }
+        assert_eq!(panel.toasts().len(), 3, "at most three at a time");
+        assert_eq!(panel.history.len(), 7, "every notice is kept");
         panel.update_filter_for_test("api team");
         assert!(!panel.passes("api only 231"));
         assert!(panel.passes("api team 231"));

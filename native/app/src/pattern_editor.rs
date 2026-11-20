@@ -306,7 +306,7 @@ impl PatternEditor {
         let tool = |label: &'static str, msg: EditMsg, on: bool| {
             button(container(text(label).size(13)).center_y(Length::Fill))
                 .padding([0, 12])
-                .height(34)
+                .height(32)
                 .style(crate::theme::outline_button_style(!on))
                 .on_press(edit(msg))
         };
@@ -348,7 +348,7 @@ impl PatternEditor {
         let hbtn = |label: &'static str, msg: Message, style: u8, on: bool| {
             let b = button(container(text(label).size(13)).center_y(Length::Fill))
                 .padding([0, 12])
-                .height(34);
+                .height(32);
             let b = match style {
                 0 => b.style(primary_button_style()),
                 1 => b.style(crate::theme::destructive_button_style()),
@@ -551,7 +551,7 @@ impl PatternEditor {
                     .color(DIM),
             );
         let canvas = container(
-            scrollable(
+            crate::theme::scroll(
                 Canvas::new(crate::graph_view::GraphView {
                     graph: &self.graph,
                     selected: self.selected.as_ref().map(Sel::key),
@@ -575,8 +575,10 @@ impl PatternEditor {
         .padding(8)
         .style(crate::theme::graph_style);
         let inspector = container(
-            scrollable(container(inspector).padding(crate::theme::pad(0.0, 14.0, 0.0, 0.0)))
-                .height(Length::Fill),
+            crate::theme::scroll(
+                container(inspector).padding(crate::theme::pad(0.0, 14.0, 0.0, 0.0)),
+            )
+            .height(Length::Fill),
         )
         .width(290)
         .height(Length::Fill)
