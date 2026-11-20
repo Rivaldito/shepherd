@@ -41,10 +41,11 @@ const SIDEBAR_W: f32 = 232.0;
 const MAIN_MIN_H: f32 = 600.0;
 /// The height of a terminal row, which the pane headers take.
 const CELL_ROW: f32 = grid::CELL_H;
-const TABBAR_H: f32 = 42.0;
-const STATUS_H: f32 = 30.0;
-const TOPBAR_H: f32 = 46.0;
-const STRIP_H: f32 = 6.0;
+const TABBAR_H: f32 = 44.0;
+const STATUS_H: f32 = 28.0;
+/// The top bar is 48 high in all: the 4 px prism strip and the items under it.
+const TOPBAR_H: f32 = 44.0;
+const STRIP_H: f32 = 4.0;
 /// Margin between the terminal and what surrounds it, and the 1 px border of its frame (both sides).
 const TERM_PAD: f32 = 8.0;
 const TERM_FRAME: f32 = 2.0 * TERM_PAD + 2.0;
@@ -192,6 +193,8 @@ enum Message {
     ToggleMotion,
     /// The list of notices opened from the status bar.
     ToggleHistory,
+    /// Shows a view of the Shepherd panel (from whichever mode the window is in).
+    GoTo(panel::Tab),
     /// Opens or closes a workspace in the sidebar.
     ToggleWorkspace(String),
     /// From the Shepherd panel: back to the terminal, on this workspace.
@@ -895,6 +898,12 @@ impl App {
             }
             Message::ToggleMotion => self.still = !self.still,
             Message::ToggleHistory => self.history_open = !self.history_open,
+            Message::GoTo(tab) => {
+                return Task::batch([
+                    Task::done(Message::SetMode(Mode::Shepherd)),
+                    Task::done(Message::Panel(panel::PanelMsg::Tab(tab))),
+                ]);
+            }
             Message::ToggleWorkspace(id) => {
                 let now = self.expanded.get(&id).copied().unwrap_or_else(|| {
                     self.snapshot
@@ -1200,7 +1209,8 @@ impl App {
             .align_y(iced::Alignment::Center),
         )
         .width(360)
-        .padding([6, 10])
+        .height(30)
+        .padding([0, 10])
         .style(theme::outline_button_style(false))
         .on_press(Message::TogglePalette)
         .into()
@@ -1217,13 +1227,21 @@ impl App {
             .count();
         let n = gates + blocked;
         if n == 0 {
-            return container(text("")).width(0).into();
+            return button(
+                row![
+                    text("■").size(8).color(theme::OK),
+                    text("all clear").size(11.5).color(DIM)
+                ]
+                .spacing(7)
+                .align_y(iced::Alignment::Center),
+            )
+            .padding([0, 12])
+            .height(30)
+            .style(theme::link_button_style())
+            .on_press(Message::GoTo(panel::Tab::Overview))
+            .into();
         }
-        let target = if gates > 0 {
-            panel::Tab::Runs
-        } else {
-            panel::Tab::Agents
-        };
+        let target = panel::Tab::Overview;
         button(
             row![
                 container(
@@ -1256,7 +1274,7 @@ impl App {
                 ..button::Style::default()
             }
         })
-        .on_press(Message::Panel(panel::PanelMsg::Tab(target)))
+        .on_press(Message::GoTo(target))
         .into()
     }
 
@@ -1350,17 +1368,17 @@ impl App {
             tooltip(
                 button(
                     container(
-                        row![text(glyph).size(12), text(label).size(13)]
-                            .spacing(8)
+                        row![text(glyph).size(12), text(label).size(12.5)]
+                            .spacing(7)
                             .align_y(iced::Alignment::Center),
                     )
                     .center_y(Length::Fill),
                 )
-                .padding([0, 14])
-                .height(30)
+                .padding([0, 12])
+                .height(26)
                 .style(item_style(self.mode == mode))
                 .on_press(Message::SetMode(mode)),
-                text("Ctrl+Shift+S").size(11),
+                text("Switch mode: Ctrl+Shift+S").size(11),
                 tooltip::Position::Bottom,
             )
         };
@@ -1373,11 +1391,10 @@ impl App {
         )
         .padding(2)
         .style(|_| container::Style {
-            background: Some(Background::Color(theme::SURFACE)),
             border: Border {
-                color: theme::LINE,
+                color: theme::LINE2,
                 width: 1.0,
-                radius: 6.0.into(),
+                radius: 7.0.into(),
             },
             ..container::Style::default()
         })
@@ -1526,11 +1543,20 @@ impl App {
         let connected = self.status.starts_with("connected");
         let top_bar = container(
             row![
-                Canvas::new(logo::Flock).width(36).height(18),
-                text("SHEPHERD")
-                    .font(theme::PIXEL_BOLD)
-                    .size(15)
-                    .color(theme::HI),
+                button(
+                    row![
+                        Canvas::new(logo::Flock).width(36).height(18),
+                        text("SHEPHERD")
+                            .font(theme::PIXEL_BOLD)
+                            .size(13)
+                            .color(theme::HI),
+                    ]
+                    .spacing(10)
+                    .align_y(iced::Alignment::Center)
+                )
+                .padding(0)
+                .style(theme::link_button_style())
+                .on_press(Message::GoTo(panel::Tab::Overview)),
                 self.mode_switch(),
                 self.session_buttons(),
                 container(text("")).width(Length::Fill),
@@ -1539,11 +1565,24 @@ impl App {
                 text("●").size(9).color(status_color_val),
                 text(if connected {
                     "connected".to_owned()
+                } else if self.status.contains("disconnected")
+                    || self.status.starts_with("could not")
+                {
+                    "disconnected".to_owned()
                 } else {
-                    self.status.clone()
+                    "reconnecting".to_owned()
                 })
-                .size(12)
-                .color(DIM),
+                .size(11.5)
+                .color(
+                    if connected
+                        || !(self.status.contains("disconnected")
+                            || self.status.starts_with("could not"))
+                    {
+                        DIM
+                    } else {
+                        theme::BAD
+                    }
+                ),
             ]
             .spacing(14)
             .align_y(iced::Alignment::Center),

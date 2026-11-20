@@ -1688,7 +1688,21 @@ impl Panel {
             let (count, warn) = match tab {
                 Tab::Runs => (Some(ctx.data.runs.len()), runs_warn),
                 Tab::Agents => (Some(ctx.data.agents.len()), agents_warn),
-                Tab::Tasks => (Some(ctx.data.tasks.len()), false),
+                Tab::Tasks => (
+                    Some(
+                        ctx.data
+                            .tasks
+                            .iter()
+                            .filter(|t| {
+                                !matches!(
+                                    t.status.state.as_str(),
+                                    "done" | "completed" | "archived" | "cancelled"
+                                )
+                            })
+                            .count(),
+                    ),
+                    false,
+                ),
                 Tab::Patterns => (Some(ctx.data.patterns.len()), false),
                 Tab::Skills => (Some(counts.0), false),
                 Tab::Git => (self.cfg.git_count(), false),
@@ -1741,9 +1755,9 @@ impl Panel {
             if !key.is_empty() {
                 r = r.push(
                     text(key)
-                        .size(10.5)
-                        .color(theme::LINE2)
-                        .width(Length::Fixed(46.0)),
+                        .size(10)
+                        .color(theme::FAINT)
+                        .width(Length::Fixed(44.0)),
                 );
             }
             button(container(r).center_y(Length::Fill))
