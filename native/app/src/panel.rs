@@ -972,7 +972,7 @@ impl Panel {
                 self.comm_text.clear();
                 return Task::perform(
                     async move {
-                        actions::topic_publish(&api, &topic, &text)
+                        actions::topic_publish(&api, &topic, &text, None)
                             .map(|_| format!("Sent to #{topic}."))
                     },
                     |r| Message::Panel(PanelMsg::Done(r)),

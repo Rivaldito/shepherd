@@ -73,6 +73,8 @@ pub enum CfgMsg {
     MsgPartition(Option<u32>),
     /// The box at the foot of Events: what is typed, and sending it to the open topic.
     ComposerText(String),
+    ComposerPartition(Option<u32>),
+    LoadOlder,
     ComposerSend,
     SelectVendor(String),
     SelectRole(String),
@@ -189,6 +191,10 @@ pub struct ConfigPanel {
     topics: Vec<TopicRow>,
     topic: Option<String>,
     msg_partition: Option<u32>,
+    /// Where the composer sends: a partition, or by key (None).
+    composer_partition: Option<u32>,
+    /// How many messages of the open topic are loaded: 50 more every time `Load older` is pressed (at most 500).
+    feed_limit: usize,
     composer: String,
     feed: Vec<BusMessage>,
     models: Models,
@@ -266,6 +272,22 @@ impl ConfigPanel {
     }
 
     /// The topics loaded so far, with their consumer groups.
+    fn topic_partitions(&self, name: &str) -> u32 {
+        self.topics
+            .iter()
+            .find(|t| t.name == name)
+            .map_or(1, |t| t.partitions)
+    }
+
+    /// How many messages of the open topic to ask for.
+    fn feed_limit(&self) -> usize {
+        if self.feed_limit == 0 {
+            50
+        } else {
+            self.feed_limit
+        }
+    }
+
     pub fn topic_rows(&self) -> &[TopicRow] {
         &self.topics
     }
@@ -303,8 +325,9 @@ impl ConfigPanel {
         let mut tasks = vec![Self::load_topics(&self.api)];
         if let Some(name) = self.topic.clone() {
             let api = self.api.clone();
+            let limit = self.feed_limit();
             tasks.push(Task::perform(
-                async move { config_data::topic_messages(&api, &name, 200) },
+                async move { config_data::topic_messages(&api, &name, limit) },
                 |r| cfg(CfgMsg::Feed(r)),
             ));
         }
@@ -775,7 +798,7 @@ impl ConfigPanel {
                     self.topic_form = None;
                     return Task::perform(
                         async move {
-                            actions::topic_publish(&api, &topic, &form.first)
+                            actions::topic_publish(&api, &topic, &form.first, None)
                                 .map(|_| format!("Sent to #{topic}."))
                         },
                         |r| cfg(CfgMsg::TopicDone(r)),
@@ -828,6 +851,18 @@ impl ConfigPanel {
             }
             CfgMsg::MsgPartition(p) => self.msg_partition = p,
             CfgMsg::ComposerText(t) => self.composer = t,
+            CfgMsg::ComposerPartition(p) => self.composer_partition = p,
+            CfgMsg::LoadOlder => {
+                let Some(name) = self.topic.clone() else {
+                    return Task::none();
+                };
+                self.feed_limit = (self.feed_limit() + 50).min(500);
+                let (api, limit) = (self.api.clone(), self.feed_limit());
+                return Task::perform(
+                    async move { config_data::topic_messages(&api, &name, limit) },
+                    |r| cfg(CfgMsg::Feed(r)),
+                );
+            }
             CfgMsg::ComposerSend => {
                 let text = self.composer.trim().to_owned();
                 let Some(topic) = self.topic.clone() else {
@@ -835,25 +870,34 @@ impl ConfigPanel {
                     return Task::none();
                 };
                 if text.is_empty() {
-                    self.notice = crate::ui::invalid("A message cannot be empty.");
+                    self.notice =
+                        crate::ui::invalid("Write something first. Empty messages are not sent.");
                     return Task::none();
                 }
                 self.composer.clear();
                 let api = self.api.clone();
+                let partition = self.composer_partition;
                 return Task::perform(
                     async move {
-                        actions::topic_publish(&api, &topic, &text)
-                            .map(|_| format!("Sent to #{topic}."))
+                        actions::topic_publish(&api, &topic, &text, partition).map(|_| {
+                            match partition {
+                                Some(p) => format!("Sent to #{topic} p{p}."),
+                                None => format!("Sent to #{topic}."),
+                            }
+                        })
                     },
                     |r| cfg(CfgMsg::TopicDone(r)),
                 );
             }
             CfgMsg::SelectTopic(name) => {
                 self.topic = Some(name.clone());
+                self.feed_limit = 0;
+                self.composer_partition = None;
                 self.loading = true;
                 let api = self.api.clone();
+                let limit = self.feed_limit();
                 return Task::perform(
-                    async move { config_data::topic_messages(&api, &name, 200) },
+                    async move { config_data::topic_messages(&api, &name, limit) },
                     |r| cfg(CfgMsg::Feed(r)),
                 );
             }
@@ -1714,18 +1758,16 @@ impl ConfigPanel {
                     .iter()
                     .flat_map(|g| g.members.iter().cloned())
                     .collect();
+                let _ = &consumers;
                 let mut col = column![row![
                     text(format!("#{}", t.name))
                         .size(18)
-                        .color(crate::theme::HI),
+                        .color(crate::theme::VIOLET),
                     text(format!(
-                        "{} messages · consumers {}",
+                        "{} messages, {} partitions, {} consumer groups",
                         t.messages_count,
-                        if consumers.is_empty() {
-                            "none".to_owned()
-                        } else {
-                            consumers.join(" · ")
-                        }
+                        t.partitions,
+                        t.groups.len()
                     ))
                     .size(12)
                     .color(DIM),
@@ -1761,7 +1803,7 @@ impl ConfigPanel {
                     groups.max(seen)
                 };
                 let max_msgs = (0..t.partitions).map(msgs_of).max().unwrap_or(0).max(1);
-                let mut parts = column![].spacing(8);
+                let mut parts = column![].spacing(8).width(Length::Fill);
                 for p in 0..t.partitions {
                     let (lag, msgs) = (lag_of(p), msgs_of(p));
                     // `lag` canvas: the stream is as long as the partition is full
@@ -1771,7 +1813,7 @@ impl ConfigPanel {
                             text(format!("p{p}"))
                                 .size(12)
                                 .color(crate::theme::HI)
-                                .width(60),
+                                .width(26),
                             iced::widget::canvas::Canvas::new(crate::prism::Prism {
                                 preset: crate::prism::Preset::lag(reach, f64::from(p) * 7.0),
                                 frame: frame.wrapping_add(p * 3),
@@ -1786,16 +1828,94 @@ impl ConfigPanel {
                                     OK
                                 }),
                             ]
-                            .width(150),
+                            .width(116),
                         ]
-                        .spacing(12)
+                        .spacing(8)
+                        .width(Length::Fill)
                         .align_y(iced::Alignment::Center),
                     );
                 }
+                // Flow: who writes (left), the partitions with their lag (middle), who reads (right)
+                let mut senders: Vec<&str> = vec![];
+                for m in &self.feed {
+                    if !senders.contains(&m.from.as_str()) {
+                        senders.push(&m.from);
+                    }
+                }
+                let mut publishers = column![crate::theme::label("PUBLISHERS")].spacing(8);
+                for s in &senders {
+                    let color = crate::theme::emitter_color(s);
+                    publishers = publishers.push(
+                        container(
+                            row![
+                                text("■").size(8).color(color),
+                                text(if *s == "user" { "you" } else { s }.to_owned()).size(12),
+                            ]
+                            .spacing(8)
+                            .align_y(iced::Alignment::Center),
+                        )
+                        .padding([0, 10])
+                        .height(32)
+                        .align_y(iced::alignment::Vertical::Center)
+                        .style(crate::theme::chip_box_style),
+                    );
+                }
+                if senders.is_empty() {
+                    publishers = publishers.push(text("nobody yet").size(12).color(DIM));
+                }
+                let mut readers = column![crate::theme::label("CONSUMER GROUPS")].spacing(8);
+                for g in &t.groups {
+                    let lag: u64 = g.lag_by_partition.values().sum();
+                    readers =
+                        readers.push(
+                            container(
+                                column![
+                                    row![
+                                        text(g.group.clone()).size(12.5).color(crate::theme::HI),
+                                        container(text("")).width(Length::Fill),
+                                        text(if lag == 0 {
+                                            "read".to_owned()
+                                        } else {
+                                            format!("lag {lag}")
+                                        })
+                                        .size(11)
+                                        .color(if lag > 1 { WARN } else { OK }),
+                                    ],
+                                    text(if g.members.is_empty() {
+                                        "no members".to_owned()
+                                    } else {
+                                        g.members.join(", ")
+                                    })
+                                    .size(11)
+                                    .color(DIM),
+                                ]
+                                .spacing(4),
+                            )
+                            .padding([8, 10])
+                            .width(Length::Fill)
+                            .style(crate::theme::chip_box_style),
+                        );
+                }
+                if t.groups.is_empty() {
+                    readers = readers.push(text("nobody reads yet").size(12).color(DIM));
+                }
                 col = col.push(crate::panel::card(
-                    "PARTITIONS · LAG",
-                    Some(text("messages / lag").size(11).color(DIM).into()),
-                    parts.into(),
+                    "FLOW",
+                    Some(
+                        text("who writes, how full, who reads")
+                            .size(11)
+                            .color(DIM)
+                            .into(),
+                    ),
+                    row![
+                        container(publishers).width(170),
+                        column![crate::theme::label("PARTITIONS"), parts]
+                            .spacing(8)
+                            .width(Length::Fill),
+                        container(readers).width(250),
+                    ]
+                    .spacing(20)
+                    .into(),
                 ));
                 // Recent messages, newest first: time, who emitted it, and colours.
                 let mut feed = column![].spacing(0);
@@ -1822,6 +1942,18 @@ impl ConfigPanel {
                         self.msg_partition == Some(p),
                         CfgMsg::MsgPartition(Some(p)),
                     ));
+                }
+                if self.feed.is_empty() {
+                    feed = column![text(format!(
+                        "No messages here yet. Send the first one below; agents reading #{} get it right away.",
+                        t.name
+                    ))
+                    .size(12)
+                    .color(DIM)];
+                } else if self.feed.len() >= self.feed_limit() {
+                    feed = feed.push(
+                        container(cfg_btn("Load older", CfgMsg::LoadOlder, false)).padding([10, 0]),
+                    );
                 }
                 col = col.push(crate::panel::card(
                     "MESSAGES · NEWEST FIRST",
@@ -1900,10 +2032,27 @@ impl ConfigPanel {
         let composer: Element<'a, Message> = match &self.topic {
             Some(t) if self.topic_form.is_none() => container(
                 row![
+                    iced::widget::pick_list(
+                        std::iter::once("by key".to_owned())
+                            .chain((0..self.topic_partitions(t)).map(|p| format!("p{p}")))
+                            .collect::<Vec<_>>(),
+                        Some(match self.composer_partition {
+                            Some(p) => format!("p{p}"),
+                            None => "by key".to_owned(),
+                        }),
+                        |choice| cfg(CfgMsg::ComposerPartition(
+                            choice.strip_prefix('p').and_then(|n| n.parse().ok())
+                        ))
+                    )
+                    .text_size(12)
+                    .padding([8, 10])
+                    .width(130),
                     text_input(&format!("Message for #{t}, sent as you"), &self.composer)
                         .on_input(|v| cfg(CfgMsg::ComposerText(v)))
                         .on_submit(cfg(CfgMsg::ComposerSend))
-                        .style(crate::theme::input_style)
+                        .style(crate::theme::input_style_marked(
+                            crate::ui::is_invalid(&self.notice) && self.composer.trim().is_empty()
+                        ))
                         .padding([9, 12])
                         .size(12.5)
                         .width(Length::Fill),

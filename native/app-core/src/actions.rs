@@ -403,13 +403,17 @@ pub fn topic_create(api: &Path, name: &str, partitions: u32) -> Result<(), Strin
 }
 
 /// Publishes a message to a topic, as the user.
-pub fn topic_publish(api: &Path, topic: &str, content: &str) -> Result<(), String> {
-    git_call(
-        api,
-        "publish",
-        json!({ "topic": topic, "content": content, "from": "user" }),
-    )
-    .map(|_| ())
+pub fn topic_publish(
+    api: &Path,
+    topic: &str,
+    content: &str,
+    partition: Option<u32>,
+) -> Result<(), String> {
+    let mut args = json!({ "topic": topic, "content": content, "from": "user" });
+    if let Some(p) = partition {
+        args["partition"] = json!(p);
+    }
+    git_call(api, "publish", args).map(|_| ())
 }
 
 /// Kills an agent (if not already in a terminal state) and cleans it from the registry.
@@ -571,7 +575,7 @@ mod tests {
             r#"{"id":"2","result":{"type":"shepherd_call","data":{}}}"#,
         ]);
         topic_create(&path, " news ", 0).unwrap();
-        topic_publish(&path, "news", "hello").unwrap();
+        topic_publish(&path, "news", "hello", None).unwrap();
         let seen = server.join().unwrap();
         assert_eq!(seen[0]["params"]["op"], "topic_create");
         assert_eq!(seen[0]["params"]["args"]["name"], "news");

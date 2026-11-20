@@ -52,6 +52,8 @@ B=$("$SERVER" workspace create --cwd "$T/beta" --label beta --focus | json "d['r
 "$SERVER" pane run "$B" "echo 'beta: a split pane'; seq 1 40" >/dev/null
 "$SERVER" pane split "$B" --direction right --cwd "$T/beta" --no-focus >/dev/null
 (cd "$T/alpha" && "$SERVER" task new "Sample task" --description "Something to try the panels with" --criteria "it works" >/dev/null 2>&1 && "$SERVER" pattern run duo --task "Task #1: Sample task" >/dev/null 2>&1)
+# a few messages on the run's topic, so Events has something to show
+for n in 1 2 3; do (cd "$T/alpha" && "$SERVER" topic publish work "demo message $n" >/dev/null 2>&1); done
 "$SERVER" workspace focus w1 >/dev/null 2>&1
 sleep 2
 [ -n "${MODE:-}" ] && export SHEPHERD_NATIVE_MODE="$MODE"

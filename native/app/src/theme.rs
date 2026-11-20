@@ -488,6 +488,19 @@ pub fn input_style(
     }
 }
 
+/// A small box on a card: surface fill, hairline border (publisher chips, consumer group cards).
+pub fn chip_box_style(_: &Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        background: Some(Background::Color(SURFACE)),
+        border: Border {
+            color: LINE,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..iced::widget::container::Style::default()
+    }
+}
+
 /// The input style with the red outline of a field that the form refused to send (3.6 of the spec).
 pub fn input_style_marked(
     bad: bool,
