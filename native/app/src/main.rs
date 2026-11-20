@@ -211,7 +211,6 @@ enum Message {
     NewSpaceCancel,
     SelectWorkspace(String),
     CloseWorkspace(String),
-    PickTab(String, String),
     NewTerminal(String),
     ToggleSidebar,
     /// Folds or unfolds a group of the views nav: 0 Orchestrate, 1 Inspect.
@@ -1175,11 +1174,6 @@ impl App {
                 self.mode = Mode::Terminal;
                 self.expanded.insert(id.clone(), true);
                 return Task::done(Message::Act(Action::FocusSpace(id)));
-            }
-            Message::PickTab(ws, tab) => {
-                self.mode = Mode::Terminal;
-                self.expanded.insert(ws, true);
-                return Task::done(Message::Act(Action::FocusTab(tab)));
             }
             Message::NewTerminal(id) => {
                 let name = self
@@ -2690,62 +2684,10 @@ impl App {
                 });
             let mut block = column![ws_row].width(Length::Fill);
             if open {
-                // the tabs row: the only row of the sidebar that wraps
-                let mut chips = row![text("tabs").size(10.5).color(theme::FAINT)]
-                    .spacing(4)
-                    .align_y(iced::Alignment::Center)
-                    .width(Length::Fill);
+                // the terminals of this workspace are its agent rows (with their icon) and the plain-shell line;
+                // the tabs themselves are in the tab bar of the terminal
                 let tabs: Vec<_> = self.snapshot.tabs_of(&id).collect();
-                if tabs.is_empty() {
-                    chips = chips.push(text("none yet").size(11).color(theme::FAINT));
-                }
-                for tab in &tabs {
-                    let shown = !in_shepherd && current && tab.focused;
-                    let count = self
-                        .snapshot
-                        .panes
-                        .iter()
-                        .filter(|p| p.tab_id == tab.tab_id)
-                        .count();
-                    chips = chips.push(
-                        button(
-                            container(
-                                row![
-                                    text(sidebar::ellipsize(&tab.label, 14))
-                                        .size(11)
-                                        .color(if shown { theme::HI } else { theme::TEXT2 }),
-                                    text(count.to_string()).size(11).color(theme::FAINT),
-                                ]
-                                .spacing(4),
-                            )
-                            .center_y(Length::Fill),
-                        )
-                        .padding([0, 7])
-                        .height(22)
-                        .style(move |_, status| {
-                            let hot =
-                                matches!(status, button::Status::Hovered | button::Status::Pressed);
-                            button::Style {
-                                background: if shown {
-                                    Some(Background::Color(theme::SELECTED))
-                                } else {
-                                    hot.then_some(Background::Color(theme::HOVER))
-                                },
-                                text_color: theme::TEXT2,
-                                border: Border {
-                                    color: if shown { theme::LINE3 } else { theme::LINE2 },
-                                    width: 1.0,
-                                    radius: 4.0.into(),
-                                },
-                                ..button::Style::default()
-                            }
-                        })
-                        .on_press(Message::PickTab(id.clone(), tab.tab_id.clone())),
-                    );
-                }
-                let mut inner = column![container(chips.wrap()).padding(pad(0.0, 0.0, 6.0, 0.0))]
-                    .spacing(0)
-                    .width(Length::Fill);
+                let mut inner = column![].spacing(0).width(Length::Fill);
                 // one row per pane that runs an agent, in tab order and then pane order
                 let mut agent_rows = 0;
                 for tab in &tabs {
