@@ -1669,7 +1669,11 @@ impl ConfigPanel {
                     text_input(hint, value)
                         .on_input(move |t| cfg(on(t)))
                         .on_submit(cfg(CfgMsg::GitFormSubmit))
-                        .style(crate::theme::input_style)
+                        .style(crate::theme::input_style_marked(
+                            crate::ui::is_invalid(&self.notice)
+                                && value.trim().is_empty()
+                                && !label.contains("EMPTY"),
+                        ))
                         .padding([8, 10])
                         .size(13),
                 ]
@@ -1930,7 +1934,9 @@ impl ConfigPanel {
             text_input(hint, value)
                 .on_input(move |t| cfg(on(t)))
                 .on_submit(cfg(CfgMsg::TopicFormSubmit))
-                .style(crate::theme::input_style)
+                .style(crate::theme::input_style_marked(
+                    crate::ui::is_invalid(&self.notice) && value.trim().is_empty() && hint != "1",
+                ))
                 .padding([8, 10])
                 .size(13)
         };

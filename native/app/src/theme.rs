@@ -488,6 +488,19 @@ pub fn input_style(
     }
 }
 
+/// The input style with the red outline of a field that the form refused to send (3.6 of the spec).
+pub fn input_style_marked(
+    bad: bool,
+) -> impl Fn(&Theme, iced::widget::text_input::Status) -> iced::widget::text_input::Style {
+    move |theme, status| {
+        let mut style = input_style(theme, status);
+        if bad {
+            style.border.color = BAD;
+        }
+        style
+    }
+}
+
 /// `.graph`: the pattern canvas, darker than the panels, with a hairline border.
 pub fn graph_style(_: &Theme) -> iced::widget::container::Style {
     iced::widget::container::Style {

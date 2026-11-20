@@ -4538,7 +4538,9 @@ impl Panel {
                 text_input("What has to be done", &form.title)
                     .on_input(|t| Message::Panel(PanelMsg::TaskTitle(t)))
                     .on_submit(Message::Panel(PanelMsg::TaskSave))
-                    .style(theme::input_style)
+                    .style(theme::input_style_marked(
+                        crate::ui::is_invalid(&self.notice) && form.title.trim().is_empty(),
+                    ))
                     .padding([8, 10])
                     .size(13),
             ]

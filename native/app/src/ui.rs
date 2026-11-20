@@ -138,6 +138,11 @@ impl Toast {
 /// Marks a notice as information (cyan square): it starts with this character, which is never shown.
 pub const INFO: char = '\u{1}';
 
+/// Is this notice a refusal of the app's own form check (see `invalid`)?
+pub fn is_invalid(notice: &str) -> bool {
+    notice.ends_with('\n')
+}
+
 /// An information notice.
 pub fn info(message: &str) -> String {
     format!("{INFO}{message}")
