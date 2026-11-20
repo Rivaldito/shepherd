@@ -1908,7 +1908,12 @@ impl Panel {
 
     /// The navigation of the sidebar (`ORCHESTRATE` and `INSPECT`): a square bullet, the name, a count (orange
     /// when something in that view needs the user) and the shortcut.
-    pub fn nav<'a>(&self, ctx: &Ctx<'a>, active: bool) -> Element<'a, Message> {
+    pub fn nav<'a>(
+        &self,
+        ctx: &Ctx<'a>,
+        active: bool,
+        collapsed: [bool; 2],
+    ) -> Element<'a, Message> {
         // the Runs badge turns orange only while a gate waits for the human
         let runs_warn = !ctx.data.gates.is_empty();
         let agents_warn = false;
@@ -2003,31 +2008,64 @@ impl Panel {
                 .style(item_style(selected))
                 .on_press(Message::Panel(PanelMsg::Tab(tab)))
         };
-        let label = |s: &'static str| {
-            container(text(s).font(theme::PIXEL).size(10).color(DIM))
-                .height(16)
-                .padding([0, 8])
+        // a group label is a button: it folds the group (chevron, then the spaced pixel label)
+        let label = |s: &'static str, index: u8, closed: bool| {
+            button(
+                row![
+                    text(if closed { "›" } else { "⌄" })
+                        .size(11)
+                        .color(theme::FAINT),
+                    text(crate::sidebar::spaced(s))
+                        .font(theme::PIXEL)
+                        .size(10)
+                        .color(DIM),
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center),
+            )
+            .padding([0, 8])
+            .height(16)
+            .width(Length::Fill)
+            .style(theme::ghost_button_style())
+            .on_press(Message::ToggleNavGroup(index))
+        };
+        let group = |title: &'static str,
+                     index: u8,
+                     items: Vec<Element<'a, Message>>|
+         -> Element<'a, Message> {
+            let closed = collapsed[index as usize];
+            let mut col = column![label(title, index, closed)].spacing(1);
+            if !closed {
+                for item in items {
+                    col = col.push(item);
+                }
+            }
+            col.into()
         };
         column![
-            column![
-                label("Orchestrate"),
-                item(Tab::Overview, "Overview", "Ctrl+1"),
-                item(Tab::Runs, "Runs", "Ctrl+2"),
-                item(Tab::Agents, "Agents", "Ctrl+3"),
-                item(Tab::Tasks, "Tasks", "Ctrl+4"),
-                item(Tab::Patterns, "Patterns", "Ctrl+5"),
-            ]
-            .spacing(1),
-            column![
-                label("Inspect"),
-                item(Tab::Monitor, "Activity", "Ctrl+6"),
-                item(Tab::Skills, "Skills", "Ctrl+7"),
-                item(Tab::Git, "Git", "Ctrl+8"),
-                item(Tab::Events, "Events", "Ctrl+9"),
-                item(Tab::Models, "Models", ""),
-                item(Tab::Snapshots, "Snapshots", ""),
-            ]
-            .spacing(1),
+            group(
+                "Orchestrate",
+                0,
+                vec![
+                    item(Tab::Overview, "Overview", "Ctrl+1").into(),
+                    item(Tab::Runs, "Runs", "Ctrl+2").into(),
+                    item(Tab::Agents, "Agents", "Ctrl+3").into(),
+                    item(Tab::Tasks, "Tasks", "Ctrl+4").into(),
+                    item(Tab::Patterns, "Patterns", "Ctrl+5").into(),
+                ]
+            ),
+            group(
+                "Inspect",
+                1,
+                vec![
+                    item(Tab::Monitor, "Activity", "Ctrl+6").into(),
+                    item(Tab::Skills, "Skills", "Ctrl+7").into(),
+                    item(Tab::Git, "Git", "Ctrl+8").into(),
+                    item(Tab::Events, "Events", "Ctrl+9").into(),
+                    item(Tab::Models, "Models", "").into(),
+                    item(Tab::Snapshots, "Snapshots", "").into(),
+                ]
+            ),
         ]
         .spacing(14)
         .into()

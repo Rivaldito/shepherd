@@ -187,6 +187,8 @@ enum Message {
     PickTab(String, String),
     NewTerminal(String),
     ToggleSidebar,
+    /// Folds or unfolds a group of the views nav: 0 Orchestrate, 1 Inspect.
+    ToggleNavGroup(u8),
     /// A started session answered (its client socket), or why it did not.
     SessionStarted(Result<PathBuf, String>),
     /// The `×` of a session: the first click warns, the second one stops it (or deletes it when it is stopped).
@@ -359,6 +361,8 @@ struct App {
     new_space: Option<NewSpace>,
     /// The sidebar column is shown (Ctrl+B hides it; the main area then takes the full width).
     sidebar_visible: bool,
+    /// Which groups of the views nav are folded (Orchestrate, Inspect).
+    nav_collapsed: [bool; 2],
     /// The destructive item of the context menu that waits for its second click.
     menu_armed: Option<&'static str>,
     rename: Option<RenameState>,
@@ -410,6 +414,7 @@ impl App {
             menu_armed: None,
             new_space: None,
             sidebar_visible: true,
+            nav_collapsed: [false, false],
             rename: None,
             mouse_position: iced::Point::ORIGIN,
             reloads: shepherd_app_core::reload::Coalesce::running(), // the first load starts below
@@ -536,6 +541,10 @@ impl App {
                     self.panel.notify(ui::info("Reconnected."));
                 }
                 self.sync_size();
+                // verification aid: `SHEPHERD_NATIVE_FOLD=1` starts with the Inspect group folded
+                if std::env::var_os("SHEPHERD_NATIVE_FOLD").is_some() {
+                    self.nav_collapsed[1] = true;
+                }
                 // verification aid: `SHEPHERD_NATIVE_HIDESIDEBAR=1` starts with the sidebar hidden
                 if std::env::var_os("SHEPHERD_NATIVE_HIDESIDEBAR").is_some() {
                     self.sidebar_visible = false;
@@ -1202,6 +1211,11 @@ impl App {
                         self.panel.notify(format!("Closed workspace {name}."));
                         return Task::done(Message::Act(Action::CloseSpace(id, false)));
                     }
+                }
+            }
+            Message::ToggleNavGroup(i) => {
+                if let Some(c) = self.nav_collapsed.get_mut(usize::from(i)) {
+                    *c = !*c;
                 }
             }
             Message::ToggleSidebar => {
@@ -2851,12 +2865,38 @@ impl App {
             snapshot: &self.snapshot,
             frame: self.frame,
         };
-        let nav = container(self.panel.nav(&ctx, in_shepherd))
-            .height(sidebar::NAV_H)
+        let nav = container(self.panel.nav(&ctx, in_shepherd, self.nav_collapsed))
+            .height(sidebar::nav_height(
+                !self.nav_collapsed[0],
+                !self.nav_collapsed[1],
+            ))
             .width(Length::Fill);
         let hide = button(
             row![
-                text("▯").size(12).color(DIM),
+                // a small panel icon: a rounded box with a line at one third
+                container(
+                    row![
+                        Space::new().width(3),
+                        container(text(""))
+                            .width(1)
+                            .height(Length::Fill)
+                            .style(|_| container::Style {
+                                background: Some(Background::Color(theme::FAINT)),
+                                ..container::Style::default()
+                            }),
+                    ]
+                    .height(Length::Fill)
+                )
+                .width(12)
+                .height(12)
+                .style(|_| container::Style {
+                    border: Border {
+                        color: theme::FAINT,
+                        width: 1.0,
+                        radius: 2.0.into(),
+                    },
+                    ..container::Style::default()
+                }),
                 text("Hide sidebar").size(11.5).color(DIM),
                 container(text("")).width(Length::Fill),
                 text("Ctrl+B").size(10).color(theme::FAINT),

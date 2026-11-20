@@ -7,9 +7,25 @@ use shepherd_app_core::snapshot::Status;
 
 /// Widths of the sidebar's regions (spec 4.2.3).
 pub const WIDTH: f32 = 232.0;
-pub const NAV_H: f32 = 387.0;
 pub const WS_ROW_H: f32 = 32.0;
 pub const AGENT_ROW_H: f32 = 28.0;
+/// Height of the views nav: each group is a 16 px label plus 31 px per item while it is open, 14 px between
+/// the groups (387 with both open, spec 4.2.3).
+pub fn nav_height(orchestrate_open: bool, inspect_open: bool) -> f32 {
+    let group = |open: bool, items: f32| 16.0 + if open { items * 31.0 } else { 0.0 };
+    group(orchestrate_open, 5.0) + 14.0 + group(inspect_open, 6.0)
+}
+
+/// A pixel-font label with the letter spacing of the reference (1.5 px at 10 px): thin spaces between letters.
+pub fn spaced(label: &str) -> String {
+    label
+        .to_uppercase()
+        .chars()
+        .map(String::from)
+        .collect::<Vec<_>>()
+        .join("\u{2009}")
+}
+
 /// Under this window height the whole column scrolls as one piece (spec 4.2.3: a list viewport under 120 px).
 pub const SHORT_WINDOW: f32 = 711.0;
 
@@ -197,6 +213,14 @@ mod tests {
             CloseRule::Confirm("Confirm: close 2 terminals".into())
         );
         assert_eq!(close_rule("beta", 0, 0), CloseRule::Now);
+    }
+
+    #[test]
+    fn the_nav_is_387_high_with_both_groups_open_and_shrinks_when_one_closes() {
+        assert_eq!(nav_height(true, true), 387.0);
+        assert_eq!(nav_height(false, true), 16.0 + 14.0 + 16.0 + 6.0 * 31.0);
+        assert_eq!(nav_height(false, false), 46.0);
+        assert!(spaced("Inspect").starts_with("I\u{2009}N"));
     }
 
     #[test]
