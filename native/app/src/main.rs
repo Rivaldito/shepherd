@@ -2653,11 +2653,9 @@ impl App {
                     chips = chips.push(
                         button(
                             row![
-                                text(tab.label.clone()).size(11).color(if shown {
-                                    theme::HI
-                                } else {
-                                    theme::TEXT2
-                                }),
+                                text(sidebar::ellipsize(&tab.label, 14))
+                                    .size(11)
+                                    .color(if shown { theme::HI } else { theme::TEXT2 }),
                                 text(count.to_string()).size(11).color(theme::FAINT),
                             ]
                             .spacing(4),

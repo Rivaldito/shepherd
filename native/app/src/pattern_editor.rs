@@ -689,7 +689,7 @@ impl PatternEditor {
             )
             .height(Length::Fill),
         )
-        .width(300)
+        .width(280)
         .height(Length::Fill)
         .padding(12)
         .style(crate::theme::inspector_style);

@@ -71,6 +71,8 @@ pub enum Armed {
     PruneSnapshots(String),
     /// Deletes a pattern file.
     DeletePattern(String),
+    /// Closes an agent (kills it and cleans it from the registry).
+    CloseAgent(String),
 }
 
 /// The one-line summary (copy deck, section 7) of what an action was doing; the server's refusal follows it.
@@ -94,6 +96,7 @@ fn failure_summary(message: &PanelMsg, armed: Option<&Armed>) -> Option<&'static
             | Armed::DeleteTask(_)
             | Armed::DeleteSnapshot(_)
             | Armed::DeletePattern(_) => "Not deleted.",
+            Armed::CloseAgent(_) => "Not closed.",
             Armed::CleanRuns | Armed::CleanBus | Armed::CleanBusForce => "Not cleaned.",
             Armed::ArchiveDone => "Not archived.",
             Armed::CancelRun(_) => "Not cancelled.",
@@ -1214,6 +1217,9 @@ impl Panel {
                 match armed {
                     Armed::StopRun(id) => {
                         return self.update(PanelMsg::Control(id, RunControl::Stop), ctx)
+                    }
+                    Armed::CloseAgent(id) => {
+                        return self.update(PanelMsg::KillAgent(id), ctx);
                     }
                     Armed::DeletePattern(name) => {
                         self.edit = None;
@@ -3334,25 +3340,19 @@ impl Panel {
             "Delete run",
             format!("Confirm: delete {}", run.id),
         ));
-        let mut col = column![
-            row![
-                text(run.pattern.clone())
-                    .font(theme::MONO_BOLD)
-                    .size(22)
-                    .color(theme::HI),
-                text(format!("run {}", run.id)).size(12).color(DIM),
-                badge(label, color),
-            ]
-            .spacing(10)
-            .align_y(iced::Alignment::Center),
-            text(format!(
-                "topology {}   started {}   updated {}",
-                run.kind, run.created_at, run.updated_at
-            ))
-            .size(12)
-            .color(DIM),
-            controls,
-        ]
+        let mut col = column![detail_header(
+            text(run.pattern.clone())
+                .font(theme::MONO_BOLD)
+                .size(18)
+                .color(theme::HI)
+                .into(),
+            badge(label, color),
+            controls.into(),
+            format!(
+                "{}   topology {}   started {}   updated {}",
+                run.id, run.kind, run.created_at, run.updated_at
+            ),
+        )]
         .spacing(14);
         if let Some(reason) = run.stalled_reason.as_deref() {
             col = col.push(alert(
@@ -3486,7 +3486,10 @@ impl Panel {
         let pill = |key: &'static str, value: String, color: Color, msg: Option<PanelMsg>| {
             let body = row![
                 text(key).size(11).color(DIM),
-                text(value).size(12).color(color),
+                text(value)
+                    .size(12)
+                    .color(color)
+                    .wrapping(iced::widget::text::Wrapping::None),
             ]
             .spacing(8);
             let b = button(body).padding([4, 12]).style(move |_, status| {
@@ -3539,7 +3542,8 @@ impl Panel {
             .push(arrow())
             .push(pill(
                 "branches",
-                branches.join(", "),
+                // a count keeps the row short; the names are in the Git view
+                branches.len().to_string(),
                 FG,
                 Some(PanelMsg::Tab(Tab::Git)),
             ))
@@ -3554,7 +3558,8 @@ impl Panel {
                 if waits { WARN } else { DIM },
                 None,
             ));
-        r_.wrap().into()
+        // the row never wraps: in a narrow detail it scrolls with the rest
+        r_.into()
     }
 
     /// `Live topology`: who publishes to which topic and who reads it.
@@ -3864,48 +3869,45 @@ impl Panel {
                 .on_press(msg)
                 .into()
         };
-        let mut actions = row![].spacing(8);
+        let mut actions = row![].spacing(8).align_y(iced::Alignment::Center);
         if !a.pane.is_empty() {
-            actions = actions.push(action("Terminal", Message::GoToPane(a.pane.clone()), true));
+            actions = actions.push(action(
+                "Open terminal",
+                Message::GoToPane(a.pane.clone()),
+                true,
+            ));
         }
         actions = actions.push(action(
-            "Focus agent",
+            "Focus",
             Message::Act(Action::FocusAgent(a.id.clone())),
             false,
         ));
-        if !a.workspace.is_empty() {
-            actions = actions.push(action(
-                "Workspace",
-                Message::Act(Action::FocusSpace(a.workspace.clone())),
-                false,
-            ));
-        }
         if !a.worktree.is_empty() || !a.branch.is_empty() {
-            actions = actions.push(btn("Git", PanelMsg::Tab(Tab::Git)));
+            actions = actions.push(btn("Worktree", PanelMsg::Tab(Tab::Git)));
         }
         if !["done", "exited", "killed", "failed"]
             .iter()
             .any(|s| a.state == *s)
         {
-            actions = actions.push(
-                button(container(text("Close agent").size(13)).center_y(Length::Fill))
-                    .padding([0, 12])
-                    .height(32)
-                    .style(danger_button_style())
-                    .on_press(Message::Panel(PanelMsg::KillAgent(a.id.clone()))),
-            );
+            actions = actions.push(container(text("")).width(Length::Fill));
+            actions = actions.push(self.arm_button(
+                Armed::CloseAgent(a.id.clone()),
+                "Close agent",
+                format!("Confirm: close {}", a.id),
+            ));
         }
+        let actions: Element<'a, Message> = container(actions).width(Length::Fill).into();
         let mut col = column![
             row![
                 text(a.id.clone()).size(18).color(theme::HI),
-                text(sub).size(12).color(DIM),
                 badge(a.state.to_uppercase(), status_color(status)),
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center),
-            actions.wrap(),
+            text(sub).size(11.5).color(DIM),
+            actions,
         ]
-        .spacing(14);
+        .spacing(10);
 
         // Live output: the latest messages of this agent (the terminal itself lives in its pane).
         let mut output = column![].spacing(6);
@@ -4356,7 +4358,7 @@ impl Panel {
                 .filter(|c| c.trim_start().starts_with("- [x]"))
                 .count()
         };
-        let board = crate::ui::flex(878.0, [16.0, 28.0], {
+        let board = crate::ui::flex(762.0, [16.0, 28.0], {
             let (this, ctx) = (self, ctx.clone());
             move || this.tasks_board(&ctx)
         });
@@ -4381,17 +4383,7 @@ impl Panel {
                         .filter(|r| task_of_run(&r.run.task) == Some(t.status.id))
                         .collect();
                     let state_color = task_state_color(&t.status.state);
-                    let mut col = column![row![
-                        text(format!("#{}", t.status.id)).size(13).color(DIM),
-                        text(t.status.title.clone())
-                            .font(theme::MONO_BOLD)
-                            .size(20)
-                            .color(theme::HI),
-                        badge(t.status.state.clone(), state_color),
-                    ]
-                    .spacing(10)
-                    .align_y(iced::Alignment::Center),]
-                    .spacing(14);
+                    let mut col = column![].spacing(14);
                     let mut actions = row![].spacing(8).align_y(iced::Alignment::Center);
                     match runs.first() {
                         Some(r) => {
@@ -4431,7 +4423,33 @@ impl Panel {
                         "Delete",
                         "Confirm: delete for good",
                     ));
-                    col = col.push(actions.wrap());
+                    // the drawer is fixed (it only scrolls vertically): its action bar wraps instead
+                    col = col.push(
+                        column![
+                            row![
+                                text(t.status.title.clone())
+                                    .font(theme::MONO_BOLD)
+                                    .size(18)
+                                    .color(theme::HI),
+                                badge(t.status.state.clone(), state_color),
+                            ]
+                            .spacing(10)
+                            .align_y(iced::Alignment::Center),
+                            text(format!(
+                                "#{}   {}",
+                                t.status.id,
+                                if runs.is_empty() {
+                                    "no run yet".to_owned()
+                                } else {
+                                    format!("run {}", runs[0].run.id)
+                                }
+                            ))
+                            .size(11.5)
+                            .color(DIM),
+                            actions.wrap(),
+                        ]
+                        .spacing(10),
+                    );
                     if !t.description.is_empty() {
                         col = col.push(
                             column![
@@ -4745,7 +4763,7 @@ impl Panel {
             .into(),
         };
         row![
-            list_box_sized(260.0, Some(top), items, vec![]),
+            list_box_sized(240.0, Some(top), items, vec![]),
             container(detail)
                 .padding([16, 20])
                 .width(Length::Fill)
@@ -4803,7 +4821,8 @@ impl Panel {
             Tab::Runs | Tab::Skills => 320.0 + 1.0 + FLEX,
             Tab::Agents => 460.0 + 1.0 + FLEX,
             Tab::Tasks => 430.0 + 1.0 + FLEX,
-            Tab::Patterns => 260.0 + 300.0 + 2.0 + FLEX,
+            // library 240, inspector 280 and an editor of at least 680
+            Tab::Patterns => 240.0 + 280.0 + 2.0 + 680.0,
             Tab::Events => 250.0 + 1.0 + FLEX,
             Tab::Models => 230.0 + 1.0 + FLEX,
             Tab::Snapshots => 400.0 + 1.0 + FLEX,
@@ -5417,6 +5436,29 @@ pub fn list_box_sized<'a>(
 }
 
 /// `.detail`: the rest of the width, padded, no card.
+/// The header of a detail (spec 3.8): row 1 holds the title and the state pill on the left and the action bar on
+/// the right; row 2, under both, the id and the meta. The bar does not wrap: it scrolls with the detail.
+pub(crate) fn detail_header<'a>(
+    title: Element<'a, Message>,
+    pill: Element<'a, Message>,
+    actions: Element<'a, Message>,
+    meta: String,
+) -> Element<'a, Message> {
+    column![
+        row![
+            title,
+            pill,
+            container(text("")).width(Length::Fill),
+            actions
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center),
+        text(meta).size(11.5).color(DIM),
+    ]
+    .spacing(6)
+    .into()
+}
+
 pub fn detail_box<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
     container(crate::theme::scroll(
         container(content).padding([20, 24]).width(Length::Fill),
