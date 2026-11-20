@@ -9,6 +9,7 @@
 #   PALETTE=text                     start with the command palette open and that text typed
 # Variables: SERVER (shepherd binary), APP (shepherd-native binary).
 set -u
+echo "demo: a throwaway HOME. Its terminals have no colours and 'claude' asks to sign in. Use 'make native-run' for your real environment." >&2
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 SERVER="${SERVER:-$HOME/shepherd-worktrees/agent-skill/target/debug/shepherd}"
 APP="${APP:-$HERE/target/release/shepherd-native}"
