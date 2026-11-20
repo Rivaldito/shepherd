@@ -1615,8 +1615,8 @@ impl Panel {
     fn arm_button<'a>(
         &self,
         key: Armed,
-        label: &'a str,
-        armed_label: &'a str,
+        label: impl ToString,
+        armed_label: impl ToString,
     ) -> Element<'a, Message> {
         let armed = self.armed.as_ref() == Some(&key);
         let approving = matches!(key, Armed::ApproveGate(..));
@@ -1625,7 +1625,11 @@ impl Panel {
         } else {
             PanelMsg::Arm(key)
         };
-        let btn_label = if armed { armed_label } else { label };
+        let btn_label = if armed {
+            armed_label.to_string()
+        } else {
+            label.to_string()
+        };
         let content = btn_body(btn_label);
         if armed {
             // the bar along the bottom edge drains over `ARM_SECS`, then the button disarms
@@ -2389,6 +2393,97 @@ impl Panel {
     }
 
     fn overview_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        // one flexible region: the page keeps at least 1000 px and scrolls when the window is narrower
+        let (this, ctx) = (self, ctx.clone());
+        crate::ui::flex(1000.0, [20.0, 28.0], move || this.overview_page(&ctx))
+    }
+
+    /// The Recent runs table: fixed columns (180, 140, 120, 120, 220, 140).
+    fn recent_runs_table<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        let d = ctx.data;
+        let cell = |w: f32, e: Element<'a, Message>| container(e).width(w).clip(true);
+        let head = |s: &'static str, w: f32| cell(w, text(s).size(11.5).color(DIM).into());
+        let mut table = column![row![
+            head("Run", 180.0),
+            head("Pattern", 140.0),
+            head("State", 120.0),
+            head("Agents", 120.0),
+            head("Task", 220.0),
+            head("Started", 140.0),
+        ]
+        .spacing(0)]
+        .spacing(10);
+        for r in d.runs.iter().take(8) {
+            let (state, color) = state_badge(r.run.state);
+            let task = task_of_run(&r.run.task)
+                .and_then(|id| d.task(id))
+                .map(|t| format!("#{} {}", t.status.id, t.status.title))
+                .unwrap_or_else(|| "none".to_owned());
+            let task_id = task_of_run(&r.run.task);
+            table = table.push(
+                row![
+                    cell(
+                        180.0,
+                        button(text(r.run.id.clone()).size(12).color(ACCENT))
+                            .padding(0)
+                            .style(theme::link_button_style())
+                            .on_press(Message::Panel(PanelMsg::SelectRun(r.run.id.clone())))
+                            .into()
+                    ),
+                    cell(140.0, text(r.run.pattern.clone()).size(12).into()),
+                    cell(
+                        120.0,
+                        row![
+                            text("■").size(8).color(color),
+                            text(state).size(12).color(color)
+                        ]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center)
+                        .into()
+                    ),
+                    cell(
+                        120.0,
+                        text(format!("{} of {} live", r.live_agents, r.run.agents.len()))
+                            .size(12)
+                            .into()
+                    ),
+                    cell(
+                        220.0,
+                        match task_id {
+                            Some(id) => button(text(task).size(12).color(ACCENT))
+                                .padding(0)
+                                .style(theme::link_button_style())
+                                .on_press(Message::Panel(PanelMsg::SelectTask(id)))
+                                .into(),
+                            None => text(task).size(12).color(theme::FAINT).into(),
+                        }
+                    ),
+                    cell(
+                        140.0,
+                        text(
+                            r.run
+                                .created_at
+                                .chars()
+                                .skip(5)
+                                .take(11)
+                                .collect::<String>()
+                                .replace('T', " ")
+                        )
+                        .size(12)
+                        .color(DIM)
+                        .into()
+                    ),
+                ]
+                .align_y(iced::Alignment::Center),
+            );
+        }
+        if d.runs.is_empty() {
+            table = table.push(text("No runs yet.").size(12).color(DIM));
+        }
+        card("RECENT RUNS", None, table.into())
+    }
+
+    fn overview_page<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
         let d = ctx.data;
         let running = d
             .runs
@@ -2842,21 +2937,16 @@ impl Panel {
 
         column![
             kpis,
-            crate::theme::scroll(
-                column![
-                    pulse,
-                    row![
-                        container(needs_card).width(Length::FillPortion(3)),
-                        container(tasks_card).width(Length::FillPortion(2))
-                    ]
-                    .spacing(16),
-                    work_card,
-                ]
-                .spacing(16)
-                .padding([22, 24]),
-            )
-            .height(Length::Fill),
+            pulse,
+            row![
+                container(needs_card).width(Length::Fill),
+                container(tasks_card).width(420)
+            ]
+            .spacing(20),
+            work_card,
+            self.recent_runs_table(ctx),
         ]
+        .spacing(20)
         .into()
     }
 
@@ -2946,7 +3036,11 @@ impl Panel {
             run.state,
             PatternRunState::Running | PatternRunState::Stalled | PatternRunState::Degraded
         );
-        let mut controls = row![].spacing(8);
+        // order of the spec: Communication, Pause or Resume, a divider, then the dangerous ones
+        let linked_task = task_of_run(&run.task);
+        let mut controls = row![btn("Communication", PanelMsg::ShowMonitor(run.id.clone()))]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
         if live {
             controls = controls.push(btn(
                 "Pause",
@@ -2959,38 +3053,37 @@ impl Panel {
                 PanelMsg::Control(run.id.clone(), RunControl::Resume),
             ));
         }
+        controls =
+            controls.push(
+                container(text(""))
+                    .width(1)
+                    .height(22)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(theme::LINE2)),
+                        ..container::Style::default()
+                    }),
+            );
         if live || run.state == PatternRunState::Paused {
-            let armed = self.armed == Some(Armed::StopRun(run.id.clone()));
             controls = controls.push(self.arm_button(
                 Armed::StopRun(run.id.clone()),
                 "Stop",
-                if armed {
-                    "Confirm: stop and close agents"
-                } else {
-                    "Stop"
-                },
+                format!("Confirm: stop and close {} agents", r.live_agents),
             ));
+            if let Some(t) = linked_task.and_then(|id| ctx.data.task(id)) {
+                if has_run(&t.status.state) {
+                    controls = controls.push(self.arm_button(
+                        Armed::CancelRun(t.status.id),
+                        "Cancel task's run",
+                        format!("Confirm: cancel task #{}'s run", t.status.id),
+                    ));
+                }
+            }
         }
-        controls = controls.push(btn("Communication", PanelMsg::ShowMonitor(run.id.clone())));
         controls = controls.push(self.arm_button(
             Armed::DeleteRun(run.id.clone()),
             "Delete run",
-            if live || run.state == PatternRunState::Paused {
-                "Confirm: stop its agents and delete"
-            } else {
-                "Confirm: delete this run"
-            },
+            format!("Confirm: delete {}", run.id),
         ));
-        let linked_task = task_of_run(&run.task);
-        if let Some(t) = linked_task.and_then(|id| ctx.data.task(id)) {
-            if has_run(&t.status.state) {
-                controls = controls.push(self.arm_button(
-                    Armed::CancelRun(t.status.id),
-                    "Cancel task's run",
-                    "Confirm: cancel the run",
-                ));
-            }
-        }
         let mut col = column![
             row![
                 text(run.pattern.clone())
@@ -3059,7 +3152,31 @@ impl Panel {
                 PanelMsg::SelectTask(task),
             )
         });
-        col = col.push(card("OBJECTIVE", linked, objective.into()));
+        if let Some(t) = linked_task.and_then(|id| ctx.data.task(id)) {
+            for s in &t.status.subtasks {
+                let who = if s.coder.is_empty() {
+                    "queued".to_owned()
+                } else {
+                    s.coder.clone()
+                };
+                let c = match s.state.as_str() {
+                    "awaiting-approval" => WARN,
+                    "done" | "completed" => OK,
+                    "in_progress" | "in-progress" | "working" => ACCENT,
+                    _ => DIM,
+                };
+                objective = objective.push(
+                    row![
+                        text(s.number.to_string()).size(11).color(DIM).width(16),
+                        text(s.title.clone()).size(12).width(Length::Fill),
+                        text(who).size(11).color(DIM),
+                        text(s.state.clone()).size(11).color(c),
+                    ]
+                    .spacing(8),
+                );
+            }
+        }
+        let objective_card = card("OBJECTIVE", linked, objective.into());
         let mut agents = column![].spacing(6);
         for a in &run.agents {
             let status = agent_status(&a.state);
@@ -3081,8 +3198,14 @@ impl Panel {
                 .align_y(iced::Alignment::Center),
             );
         }
-        col = col.push(card("AGENTS", None, agents.into()));
-        container(col).max_width(980).into()
+        col = col.push(
+            row![
+                container(objective_card).width(Length::Fill),
+                container(card("AGENTS", None, agents.into())).width(Length::Fill),
+            ]
+            .spacing(14),
+        );
+        col.into()
     }
 
     /// The pills that follow one piece of work: task > run > agents > branches > publish.
@@ -3778,7 +3901,8 @@ impl Panel {
         .into()
     }
 
-    fn tasks_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+    /// The board of Tasks: New, In run and Done share the width (at least 220 each), Cancelled is 128 wide.
+    fn tasks_board<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
         let d = ctx.data;
         let is_done = |state: &str| matches!(state, "done" | "completed" | "archived");
         let selected = self
@@ -3906,7 +4030,11 @@ impl Panel {
             }
             container(column![head, crate::theme::scroll(cards).height(Length::Fill)].spacing(10))
                 .padding(12)
-                .width(Length::FillPortion(1))
+                .width(if title == "Cancelled" {
+                    Length::Fixed(128.0)
+                } else {
+                    Length::FillPortion(1)
+                })
                 .height(Length::Fill)
                 .style(card_style)
                 .into()
@@ -3946,7 +4074,7 @@ impl Panel {
             .filter(|t| t.status.state == "cancelled")
             .filter(shown)
             .collect();
-        let board = row![
+        row![
             column_of("New", theme::IDLE, new_tasks, None),
             column_of("In run", ACCENT, running, None),
             column_of(
@@ -3957,8 +4085,28 @@ impl Panel {
             ),
             column_of("Cancelled", BAD, cancelled, None),
         ]
-        .spacing(12)
-        .height(Length::Fill);
+        .spacing(14)
+        .height(Length::Fixed(520.0))
+        .into()
+    }
+
+    fn tasks_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        let d = ctx.data;
+        let selected = self
+            .task
+            .and_then(|id| d.task(id))
+            .or_else(|| d.tasks.first())
+            .map(|t| t.status.id);
+        let met = |t: &shepherd_app_core::data::TaskRow| {
+            t.criteria
+                .iter()
+                .filter(|c| c.trim_start().starts_with("- [x]"))
+                .count()
+        };
+        let board = crate::ui::flex(878.0, [16.0, 28.0], {
+            let (this, ctx) = (self, ctx.clone());
+            move || this.tasks_board(&ctx)
+        });
         let detail: Element<'a, Message> =
             match d.tasks.iter().find(|t| Some(t.status.id) == selected) {
                 None => column![
@@ -4166,10 +4314,7 @@ impl Panel {
             (None, None) => detail,
         };
         row![
-            container(board)
-                .padding(16)
-                .width(Length::Fill)
-                .height(Length::Fill),
+            board,
             container(text(""))
                 .width(1)
                 .height(Length::Fill)
