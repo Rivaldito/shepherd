@@ -164,6 +164,13 @@ pub fn build(snapshot: &Snapshot, data: &Data) -> Vec<Command> {
         neutral,
         vec![Message::NewSpaceOpen],
     ));
+    all.push(cmd(
+        "Commands",
+        "Toggle sidebar",
+        "Ctrl+B",
+        neutral,
+        vec![Message::ToggleSidebar],
+    ));
     if let Some(workspace) = snapshot.focused_workspace_id.clone() {
         all.push(cmd(
             "Commands",

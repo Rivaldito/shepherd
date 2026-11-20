@@ -344,6 +344,16 @@ pub fn mini_button_style() -> impl Fn(&Theme, button::Status) -> button::Style {
     }
 }
 
+/// A button with no box: transparent, a faint fill on hover (sidebar rows, "+" and the chevrons).
+pub fn ghost_button_style() -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_theme, status| button::Style {
+        background: hovered(status).then_some(Background::Color(HOVER)),
+        text_color: FG,
+        border: rounded(5.0),
+        ..button::Style::default()
+    }
+}
+
 /// `.badge`: small solid pill with dark bold text.
 #[allow(dead_code)] // used by the views of phase 3
 pub fn badge_style(color: Color) -> impl Fn(&Theme) -> iced::widget::container::Style {
@@ -408,23 +418,6 @@ pub fn kpi_strip_style(_: &Theme) -> iced::widget::container::Style {
 pub fn kpi_cell_style(_: &Theme) -> iced::widget::container::Style {
     iced::widget::container::Style {
         background: Some(Background::Color(PANEL)),
-        ..iced::widget::container::Style::default()
-    }
-}
-
-/// `.tab .n`: count badge; orange when the section needs attention.
-pub fn count_style(selected: bool, warn: bool) -> iced::widget::container::Style {
-    let (background, text_color) = if warn {
-        (Color { a: 0.16, ..WARN }, WARN)
-    } else if selected {
-        (LINE2, FG)
-    } else {
-        (LINE, DIM)
-    };
-    iced::widget::container::Style {
-        background: Some(Background::Color(background)),
-        text_color: Some(text_color),
-        border: rounded(3.0),
         ..iced::widget::container::Style::default()
     }
 }

@@ -1902,19 +1902,10 @@ impl Panel {
 
     /// The navigation of the sidebar (`ORCHESTRATE` and `INSPECT`): a square bullet, the name, a count (orange
     /// when something in that view needs the user) and the shortcut.
-    pub fn nav<'a>(&self, ctx: &Ctx<'a>) -> Element<'a, Message> {
-        let runs_warn = !ctx.data.gates.is_empty()
-            || ctx.data.runs.iter().any(|r| {
-                matches!(
-                    r.run.state,
-                    PatternRunState::Stalled | PatternRunState::Degraded | PatternRunState::Failed
-                )
-            });
-        let agents_warn = ctx
-            .data
-            .agents
-            .iter()
-            .any(|a| a.state == "blocked" || !a.notice.is_empty());
+    pub fn nav<'a>(&self, ctx: &Ctx<'a>, active: bool) -> Element<'a, Message> {
+        // the Runs badge turns orange only while a gate waits for the human
+        let runs_warn = !ctx.data.gates.is_empty();
+        let agents_warn = false;
         let counts = self.cfg.counts();
         let item = |tab: Tab, name: &'static str, key: &'static str| {
             let (count, warn) = match tab {
@@ -1943,7 +1934,7 @@ impl Panel {
                 Tab::Snapshots => (Some(ctx.data.snapshots.len()), false),
                 _ => (None, false),
             };
-            let selected = self.tab == tab;
+            let selected = active && self.tab == tab;
             let mut r = row![
                 container(text(""))
                     .width(6)
@@ -1974,13 +1965,20 @@ impl Panel {
                     } else {
                         DIM
                     }))
-                    .padding([0, 6])
-                    .style(move |_| {
-                        let mut s = theme::count_style(false, false);
-                        if warn {
-                            s.background = Some(Background::Color(WARN));
-                        }
-                        s
+                    .padding([0, 5])
+                    .height(18)
+                    .center_y(18)
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(if warn {
+                            WARN
+                        } else {
+                            theme::SURFACE
+                        })),
+                        border: iced::Border {
+                            radius: 3.0.into(),
+                            ..iced::Border::default()
+                        },
+                        ..container::Style::default()
                     }),
                 );
             }
@@ -1999,22 +1997,33 @@ impl Panel {
                 .style(item_style(selected))
                 .on_press(Message::Panel(PanelMsg::Tab(tab)))
         };
+        let label = |s: &'static str| {
+            container(text(s).font(theme::PIXEL).size(10).color(DIM))
+                .height(16)
+                .padding([0, 8])
+        };
         column![
-            container(theme::label("ORCHESTRATE")).padding(pad(10.0, 8.0, 4.0, 8.0)),
-            item(Tab::Overview, "Overview", "Ctrl+1"),
-            item(Tab::Runs, "Runs", "Ctrl+2"),
-            item(Tab::Agents, "Agents", "Ctrl+3"),
-            item(Tab::Tasks, "Tasks", "Ctrl+4"),
-            item(Tab::Patterns, "Patterns", "Ctrl+5"),
-            container(theme::label("INSPECT")).padding(pad(14.0, 8.0, 4.0, 8.0)),
-            item(Tab::Monitor, "Activity", "Ctrl+6"),
-            item(Tab::Skills, "Skills", "Ctrl+7"),
-            item(Tab::Git, "Git", "Ctrl+8"),
-            item(Tab::Events, "Events", "Ctrl+9"),
-            item(Tab::Models, "Models", ""),
-            item(Tab::Snapshots, "Snapshots", ""),
+            column![
+                label("Orchestrate"),
+                item(Tab::Overview, "Overview", "Ctrl+1"),
+                item(Tab::Runs, "Runs", "Ctrl+2"),
+                item(Tab::Agents, "Agents", "Ctrl+3"),
+                item(Tab::Tasks, "Tasks", "Ctrl+4"),
+                item(Tab::Patterns, "Patterns", "Ctrl+5"),
+            ]
+            .spacing(1),
+            column![
+                label("Inspect"),
+                item(Tab::Monitor, "Activity", "Ctrl+6"),
+                item(Tab::Skills, "Skills", "Ctrl+7"),
+                item(Tab::Git, "Git", "Ctrl+8"),
+                item(Tab::Events, "Events", "Ctrl+9"),
+                item(Tab::Models, "Models", ""),
+                item(Tab::Snapshots, "Snapshots", ""),
+            ]
+            .spacing(1),
         ]
-        .spacing(2)
+        .spacing(14)
         .into()
     }
 
