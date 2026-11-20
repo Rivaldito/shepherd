@@ -286,6 +286,8 @@ curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh 
 
 Set `SHEPHERD_INSTALL_DIR` to change where it goes, or `SHEPHERD_VERSION=v0.3.3-beta` to pick a release. You can also download a binary from the [releases](https://github.com/Rivaldito/shepherd/releases) page, or build from source:
 
+If a server is already running at another version, the installer stops it and starts the new one (its terminals and agents close, so save your work first). Set `SHEPHERD_NO_RESTART=1` to leave it running and restart it yourself with `shepherd server restart`.
+
 ```bash
 git clone https://github.com/Rivaldito/shepherd.git
 cd shepherd

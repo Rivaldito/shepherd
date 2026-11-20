@@ -10,6 +10,7 @@
 #   SHEPHERD_VERSION      release tag to install (default: the newest release, including betas), e.g. v0.2.0-beta
 #   SHEPHERD_INSTALL_DIR  where to put the binaries (default: ~/.local/bin)
 #   SHEPHERD_NO_GUI=1     install only `shepherd`, not the desktop app (for servers without a screen)
+#   SHEPHERD_NO_RESTART=1 do not replace a server that is already running at another version (default: it is stopped and the new one started)
 #   SHEPHERD_RELEASE_BASE base URL holding the assets, for mirrors and tests (skips the GitHub lookup)
 set -eu
 
@@ -91,13 +92,24 @@ main() {
             ;;
     esac
 
-    # a server that was already running keeps running the old version: the new binaries do not replace it
+    # a server that was already running keeps running the old version: the new binaries do not replace it, so the
+    # installer swaps it (stops the old one and starts the new one). That closes the terminals and agents of that
+    # server; SHEPHERD_NO_RESTART=1 leaves it alone and only says how.
     RUNNING="$("${INSTALL_DIR}/shepherd" status server 2>/dev/null | sed -n 's/^version: *//p' | head -n 1)" || RUNNING=""
     if [ -n "$RUNNING" ] && [ "$TAG" != "custom" ] && [ "$RUNNING" != "${TAG#v}" ]; then
         echo ""
-        warn "a shepherd server is still running at ${RUNNING}, not ${TAG#v}. The desktop app and shepherd connect to it, so you keep the old behaviour until it restarts."
-        echo "    shepherd server stop     # closes the terminals and agents of that session; save your work first"
-        echo "    shepherd                 # starts the new server"
+        if [ "${SHEPHERD_NO_RESTART:-0}" = "1" ]; then
+            warn "a shepherd server is still running at ${RUNNING}, not ${TAG#v} (SHEPHERD_NO_RESTART=1, so it was left alone)."
+            echo "    shepherd server restart  # stops it and starts the new one; closes the terminals and agents of that session"
+        else
+            log "a shepherd server is running at ${RUNNING}; replacing it with ${TAG#v} (its terminals and agents close)"
+            if "${INSTALL_DIR}/shepherd" server restart; then
+                log "the new server is running"
+            else
+                warn "could not replace the old server. Do it yourself when you can:"
+                echo "    shepherd server restart"
+            fi
+        fi
     fi
 
     echo ""
