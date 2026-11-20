@@ -126,7 +126,7 @@ pub(super) fn spawn_shepherd(
         runtime_dir,
         socket_path,
         None,
-        "onboarding = false\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n",
     )
 }
 
@@ -140,7 +140,7 @@ pub(super) fn spawn_shepherd_with_pane_history(
         runtime_dir,
         socket_path,
         None,
-        "onboarding = false\n[experimental]\npane_history = true\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n[experimental]\npane_history = true\n",
     )
 }
 
@@ -170,7 +170,7 @@ pub(super) fn spawn_named_server(
     register_runtime_dir(runtime_dir);
     fs::write(
         config_home.join(app_dir_name()).join("config.toml"),
-        "onboarding = false\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n",
     )
     .unwrap();
 
@@ -272,7 +272,7 @@ pub(super) fn spawn_shepherd_with_path(
         runtime_dir,
         socket_path,
         path_override,
-        "onboarding = false\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n",
     )
 }
 

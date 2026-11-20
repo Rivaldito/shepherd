@@ -127,7 +127,7 @@ fn spawn_shepherd_with_options(
     register_runtime_dir(runtime_dir);
     fs::write(
         config_home.join("shepherd/config.toml"),
-        "onboarding = false\n",
+        "onboarding = false\n[shepherd]\nenabled = false\n",
     )
     .unwrap();
 

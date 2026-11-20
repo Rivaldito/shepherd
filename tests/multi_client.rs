@@ -79,7 +79,11 @@ fn spawn_server(config: &Path, runtime: &Path, api: &Path) -> SpawnedShepherd {
     fs::create_dir_all(config.join("shepherd")).unwrap();
     fs::create_dir_all(runtime).unwrap();
     register_runtime_dir(runtime);
-    fs::write(config.join("shepherd/config.toml"), "onboarding = false\n").unwrap();
+    fs::write(
+        config.join("shepherd/config.toml"),
+        "onboarding = false\n[shepherd]\nenabled = false\n",
+    )
+    .unwrap();
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: 24,
