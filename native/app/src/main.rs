@@ -479,6 +479,18 @@ impl App {
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
     }
 
+    /// What a (re)connection asks for: the data again, now and once more a few seconds later. The server of a restart
+    /// answers before its Shepherd layer is up, and the version and layer notice must not outlive the old server.
+    fn refresh_after_connect(&mut self) -> Task<Message> {
+        Task::batch([
+            self.reload(),
+            Task::perform(async { std::thread::sleep(Duration::from_secs(3)) }, |_| {
+                Message::Reload
+            }),
+            refresh_sessions(),
+        ])
+    }
+
     /// Asks for a data load. While one runs, the request is kept and one more load starts when it ends.
     fn reload(&mut self) -> Task<Message> {
         if !self.reloads.request() {
@@ -610,7 +622,7 @@ impl App {
                         refresh_sessions(),
                     ]);
                 }
-                return refresh_sessions();
+                return self.refresh_after_connect();
             }
             Message::Lost(why) => {
                 self.sender = None;
@@ -3293,6 +3305,18 @@ fn connection() -> impl iced::futures::Stream<Item = Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// After a restart the app reconnects to a new server; the data (its version, its Shepherd layer) is read again,
+    /// else the "older server" notice stays on screen.
+    #[test]
+    fn connecting_asks_for_the_data_again() {
+        let (mut app, _) = App::boot();
+        // boot started a load; let it end as it would
+        let _ = app.reloads.finished();
+        let _ = app.refresh_after_connect();
+        // a load is now running: a new request is kept for later instead of starting one
+        assert!(!app.reloads.request());
+    }
 
     /// The window opens on a terminal. A view of the sidebar (Orchestrate, Inspect) must open on the first click,
     /// not only select a tab of a panel that is not on screen.
