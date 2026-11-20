@@ -6,7 +6,7 @@ use crate::Message;
 use iced::widget::{
     button, canvas::Canvas, checkbox, column, container, row, scrollable, text, text_input,
 };
-use iced::{Element, Length};
+use iced::{Color, Element, Length};
 use shepherd_app_core::pattern_edit::{AgentField, Editor, Sel};
 use shepherd_app_core::pattern_graph::{relayout_keep, Graph, PatternView, NODE_H, NODE_W};
 use shepherd_app_core::shepherd_core::config::{self, Config};
@@ -296,6 +296,14 @@ impl PatternEditor {
         .into()
     }
 
+    /// Turns the pattern into an own copy called `name`, not saved yet (the template of New pattern).
+    pub fn copy_as(&mut self, name: &str) {
+        self.editor = self.editor.duplicate(name);
+        self.path = None;
+        self.refresh_fields();
+        self.editor.dirty = true;
+    }
+
     /// A blank pattern just created: it has no file yet, so there is something to save.
     pub fn mark_new(&mut self) {
         self.editor.dirty = true;
@@ -416,6 +424,40 @@ impl PatternEditor {
         .spacing(12)
         .align_y(iced::Alignment::Center),]
         .spacing(10);
+        if read_only {
+            col = col.push(
+                container(
+                    row![
+                        text("Built-in patterns are read-only. Duplicate this one to change it; the copy is saved in this project.")
+                            .size(12)
+                            .width(Length::Fill),
+                        button(text("Duplicate to edit").size(11.5))
+                            .padding([4, 10])
+                            .style(crate::theme::outline_button_style(false))
+                            .on_press(edit(EditMsg::Duplicate)),
+                    ]
+                    .spacing(12)
+                    .align_y(iced::Alignment::Center),
+                )
+                .padding([8, 14])
+                .width(Length::Fill)
+                .style(|_| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(Color {
+                        a: 0.08,
+                        ..crate::theme::VIOLET
+                    })),
+                    border: iced::Border {
+                        color: Color {
+                            a: 0.38,
+                            ..crate::theme::VIOLET
+                        },
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..iced::widget::container::Style::default()
+                }),
+            );
+        }
         if let Some(path) = &self.path {
             col = col.push(text(path.clone()).size(11).color(DIM));
         }
@@ -580,10 +622,10 @@ impl PatternEditor {
             )
             .height(Length::Fill),
         )
-        .width(290)
+        .width(300)
         .height(Length::Fill)
         .padding(12)
-        .style(crate::theme::card_style);
+        .style(crate::theme::inspector_style);
         let toolbar = container(toolbar.align_y(iced::Alignment::Center)).padding([4, 0]);
         col = col.push(
             row![

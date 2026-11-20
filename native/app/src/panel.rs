@@ -162,6 +162,8 @@ pub enum PanelMsg {
     SnapFilterAgent(Option<String>),
     SnapFilterReason(Option<String>),
     ActivityWindow(usize),
+    /// Opens Events with this topic selected.
+    OpenTopic(String),
     CommClose,
     /// Shows or hides the messages of one sender in the communication screen.
     CommToggle(String),
@@ -875,6 +877,14 @@ impl Panel {
                 }
             }
             PanelMsg::ActivityWindow(i) => self.activity_window = i,
+            PanelMsg::OpenTopic(name) => {
+                return Task::batch([
+                    Task::done(Message::Panel(PanelMsg::Tab(Tab::Events))),
+                    Task::done(Message::Panel(PanelMsg::Cfg(
+                        crate::config_panel::CfgMsg::SelectTopic(name),
+                    ))),
+                ]);
+            }
             PanelMsg::CommClose => {
                 self.comm_open = false;
                 self.tab = Tab::Runs;
@@ -915,6 +925,16 @@ impl Panel {
             PanelMsg::SnapFilterAgent(a) => self.snap_agent_filter = a,
             PanelMsg::SnapFilterReason(r) => self.snap_reason_filter = r,
             PanelMsg::NewPattern => {
+                // the spec: a new pattern is a copy of the orchestrator-worker template, saved in this project
+                if let Ok(view) = pattern_graph::load(&ctx.data.root, "orchestrator-worker") {
+                    let mut editor = PatternEditor::from_view(view);
+                    editor.copy_as("new-pattern");
+                    self.tab = Tab::Patterns;
+                    self.pattern_sel = None;
+                    self.edit = Some(editor);
+                    self.notice = "New pattern new-pattern from the orchestrator-worker template. Rename it, then save.".into();
+                    return Task::none();
+                }
                 use shepherd_app_core::shepherd_core::patterns::{
                     Pattern, PatternAgent, PatternKind, PatternSource, Topic,
                 };
@@ -4487,7 +4507,7 @@ impl Panel {
             .into(),
         };
         row![
-            list_box_with(Some(top), items, vec![]),
+            list_box_sized(260.0, Some(top), items, vec![]),
             container(detail)
                 .padding([16, 20])
                 .width(Length::Fill)
@@ -4554,6 +4574,12 @@ impl Panel {
 
     /// Activity: what every agent did over the window, and how far each reader is behind on the bus.
     fn monitor_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        // one flexible region: the page keeps at least 900 px and scrolls both ways when narrower
+        let (this, ctx) = (self, ctx.clone());
+        crate::ui::flex(900.0, [20.0, 28.0], move || this.activity_page(&ctx))
+    }
+
+    fn activity_page<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
         use shepherd_app_core::timeline;
         let d = ctx.data;
         let secs = self.activity_secs();
@@ -4601,43 +4627,63 @@ impl Panel {
             } else {
                 a.state.as_str()
             };
+            // columns: 170 (state, id, word) | lane (flexible, 400 at least) | 250 (current task); the row opens the agent
             rows = rows.push(
-                row![
+                button(
                     row![
-                        text("■").size(10).color(status_color(status)),
-                        text(a.id.clone())
-                            .font(theme::MONO_BOLD)
-                            .size(12.5)
-                            .color(theme::HI),
-                        text(word).size(11).color(status_color(status)),
+                        row![
+                            text("■").size(10).color(status_color(status)),
+                            text(a.id.clone())
+                                .font(theme::MONO_BOLD)
+                                .size(12.5)
+                                .color(theme::HI),
+                            text(word).size(11).color(status_color(status)),
+                        ]
+                        .spacing(8)
+                        .width(170),
+                        container(bar)
+                            .padding([2, 2])
+                            .width(Length::Fill)
+                            .style(|_| container::Style {
+                                background: Some(Background::Color(Color::from_rgb8(8, 8, 11))),
+                                border: iced::Border {
+                                    color: Color::from_rgb8(0x15, 0x15, 0x1C),
+                                    width: 1.0,
+                                    radius: 3.0.into(),
+                                },
+                                ..container::Style::default()
+                            }),
+                        container(
+                            text(if a.task_text.is_empty() {
+                                String::new()
+                            } else {
+                                a.task_text.chars().take(32).collect()
+                            })
+                            .size(11.5)
+                            .color(DIM)
+                        )
+                        .width(250)
+                        .clip(true),
                     ]
-                    .spacing(8)
-                    .width(Length::FillPortion(3)),
-                    container(bar).width(Length::FillPortion(8)),
-                    text(if a.task_text.is_empty() {
-                        String::new()
-                    } else {
-                        a.task_text.chars().take(44).collect()
-                    })
-                    .size(11.5)
-                    .color(DIM)
-                    .width(Length::FillPortion(4)),
-                ]
-                .spacing(16)
-                .align_y(iced::Alignment::Center),
+                    .spacing(16)
+                    .align_y(iced::Alignment::Center),
+                )
+                .width(Length::Fill)
+                .height(38)
+                .padding([0, 4])
+                .style(item_style(false))
+                .on_press(Message::Panel(PanelMsg::SelectAgent(a.id.clone()))),
             );
         }
         // time axis: five marks from the start of the window to now
-        let mut axis = row![container(text("")).width(Length::FillPortion(3))].spacing(16);
-        let mut marks = row![].width(Length::FillPortion(8));
+        let mut axis = row![container(text("")).width(170)].spacing(16);
+        let mut marks = row![].width(Length::Fill);
         for k in 0..5u64 {
             let t = from + secs * k / 4;
             let label = if k == 4 { "now".to_owned() } else { clock(t) };
             marks = marks.push(text(label).size(10.5).color(DIM).width(Length::Fill));
         }
-        axis = axis
-            .push(marks)
-            .push(container(text("")).width(Length::FillPortion(4)));
+        axis = axis.push(marks).push(container(text("")).width(250));
         let timelines = card(
             "AGENT TIMELINES",
             Some(
@@ -4681,40 +4727,58 @@ impl Panel {
                         .join(", ")
                 };
                 let reach = 0.08 + 0.9 * lag as f64 / max_lag as f64;
+                // columns: 120 (#topic) | 220 (group, members) | lag bar (flexible) | 150 (lag, per partition);
+                // the row opens the topic in Events
                 lag_rows = lag_rows.push(
-                    row![
-                        text(format!("#{}", t.name))
-                            .size(12.5)
-                            .color(theme::VIOLET)
-                            .width(Length::FillPortion(2)),
+                    button(
                         row![
-                            text(g.group.clone())
-                                .font(theme::MONO_BOLD)
+                            text(format!("#{}", t.name))
                                 .size(12.5)
-                                .color(theme::HI),
-                            text(g.members.join(", ")).size(11).color(DIM),
+                                .color(theme::VIOLET)
+                                .width(120),
+                            container(
+                                row![
+                                    text(g.group.clone())
+                                        .font(theme::MONO_BOLD)
+                                        .size(12.5)
+                                        .color(theme::HI),
+                                    text(g.members.join(", ")).size(11).color(DIM),
+                                ]
+                                .spacing(8)
+                            )
+                            .width(220)
+                            .clip(true),
+                            Canvas::new(Prism {
+                                preset: Preset::lag(reach, (k as f64) * 7.0),
+                                frame: ctx.frame.wrapping_add(k as u32 * 3),
+                            })
+                            .width(Length::Fill)
+                            .height(16),
+                            container(
+                                row![
+                                    if lag == 0 {
+                                        text("caught up").size(12).color(OK)
+                                    } else {
+                                        text(format!("lag {lag}")).size(12).color(if lag > 1 {
+                                            WARN
+                                        } else {
+                                            FG
+                                        })
+                                    },
+                                    text(detail).size(11).color(theme::FAINT),
+                                ]
+                                .spacing(8)
+                            )
+                            .width(150)
+                            .clip(true),
                         ]
-                        .spacing(8)
-                        .width(Length::FillPortion(3)),
-                        Canvas::new(Prism {
-                            preset: Preset::lag(reach, (k as f64) * 7.0),
-                            frame: ctx.frame.wrapping_add(k as u32 * 3),
-                        })
-                        .width(Length::FillPortion(8))
-                        .height(14),
-                        row![
-                            if lag == 0 {
-                                text("caught up").size(12).color(OK)
-                            } else {
-                                text(format!("lag {lag}")).size(12).color(WARN)
-                            },
-                            text(detail).size(11).color(DIM),
-                        ]
-                        .spacing(8)
-                        .width(Length::FillPortion(4)),
-                    ]
-                    .spacing(16)
-                    .align_y(iced::Alignment::Center),
+                        .spacing(16)
+                        .align_y(iced::Alignment::Center),
+                    )
+                    .width(Length::Fill)
+                    .padding([6, 4])
+                    .style(item_style(false))
+                    .on_press(Message::Panel(PanelMsg::OpenTopic(t.name.clone()))),
                 );
             }
         }
@@ -5444,10 +5508,17 @@ mod tests {
         let mut panel = Panel::default();
         let _ = panel.update(PanelMsg::NewPattern, &ctx);
         let edit = panel.edit.as_ref().expect("the editor opens");
-        assert_eq!(edit.editor.pattern.name, "my-pattern");
+        assert_eq!(edit.editor.pattern.name, "new-pattern");
+        assert_eq!(
+            edit.editor.pattern.kind,
+            shepherd_app_core::shepherd_core::patterns::PatternKind::OrchestratorWorker
+        );
         assert!(edit.editor.dirty, "a new pattern has something to save");
+        assert!(panel
+            .notice
+            .starts_with("New pattern new-pattern from the orchestrator-worker template"));
         let _ = panel.patterns_view(&ctx);
-        let delete = Armed::DeletePattern("my-pattern".into());
+        let delete = Armed::DeletePattern("new-pattern".into());
         let _ = panel.update(PanelMsg::Arm(delete.clone()), &ctx);
         assert_eq!(panel.armed, Some(delete));
     }

@@ -1122,30 +1122,54 @@ impl ConfigPanel {
                     );
                 }
                 let lines = s.body.lines().count();
+                // a 48 px gutter of line numbers (#4A4A5C); the front matter lines `name:` and `description:` are
+                // violet, headings bright
                 let mut source = column![].spacing(2);
                 for (i, l) in s.body.lines().enumerate() {
+                    let color = if l.starts_with("name:") || l.starts_with("description:") {
+                        crate::theme::VIOLET
+                    } else if l.starts_with('#') {
+                        crate::theme::HI
+                    } else {
+                        crate::theme::FG
+                    };
                     source = source.push(
                         row![
                             text((i + 1).to_string())
                                 .size(12)
-                                .color(crate::theme::LINE2)
-                                .width(30)
+                                .color(crate::theme::LINE3)
+                                .width(48)
                                 .align_x(iced::alignment::Horizontal::Right),
-                            text(l.to_owned()).size(12.5).color(crate::theme::FG),
+                            text(l.to_owned()).size(12.5).color(color),
                         ]
                         .spacing(14),
                     );
                 }
+                let note = if s.scope == "Default" {
+                    "Customize makes your own copy, which you can edit. The built-in one stays as it is."
+                } else if s.global {
+                    "Global: every agent gets it, whatever its role."
+                } else {
+                    "Agents get it when their role lists it or its description fits."
+                };
                 col.push(actions)
-                    .push(
-                        text("A global skill goes to every agent, whatever its role.")
-                            .size(11)
-                            .color(DIM),
-                    )
+                    .push(text(note).size(11.5).color(DIM))
                     .push(used.wrap())
                     .push(crate::panel::card(
                         "SKILL.md",
-                        Some(text(format!("{lines} lines")).size(11).color(DIM).into()),
+                        Some(
+                            text(format!(
+                                "{}  {lines} lines",
+                                if s.scope == "Default" {
+                                    "ships with Shepherd".to_owned()
+                                } else {
+                                    s.dir.clone()
+                                }
+                            ))
+                            .size(11)
+                            .color(DIM)
+                            .into(),
+                        ),
                         source.into(),
                     ))
                     .into()
@@ -1270,7 +1294,12 @@ impl ConfigPanel {
         .into()
     }
 
+    /// Git: one flexible region whose table keeps its fixed columns (1120 px), scrolling when narrower.
     pub fn git_view<'a>(&'a self) -> Element<'a, Message> {
+        crate::ui::flex(1120.0, [20.0, 28.0], move || self.git_content())
+    }
+
+    fn git_content<'a>(&'a self) -> Element<'a, Message> {
         let Some(git) = &self.git else {
             if self.loading {
                 return loading_state("Loading Git worktrees…");
@@ -1322,16 +1351,17 @@ impl ConfigPanel {
             .as_deref()
             .and_then(|p| git.worktrees.iter().find(|w| w.path == p))
             .unwrap_or(&git.worktrees[0]);
-        let cell = |w: u16, e: Element<'a, Message>| container(e).width(Length::FillPortion(w));
-        let head = |s: &'static str, w: u16| cell(w, text(s).size(11.5).color(DIM).into());
+        // fixed columns: Branch 260, Worktree 260, Changes 140, Ahead / behind 120, Agents 160, Pull request 180
+        let cell = |w: f32, e: Element<'a, Message>| container(e).width(w).clip(true);
+        let head = |s: &'static str, w: f32| cell(w, text(s).size(11.5).color(DIM).into());
         let mut table = column![container(
             row![
-                head("Branch", 3),
-                head("Worktree", 4),
-                head("Changes", 2),
-                head("Ahead / behind", 2),
-                head("Agents", 2),
-                head("Pull request", 3)
+                head("Branch", 260.0),
+                head("Worktree", 260.0),
+                head("Changes", 140.0),
+                head("Ahead / behind", 120.0),
+                head("Agents", 160.0),
+                head("Pull request", 180.0)
             ]
             .spacing(10)
         )
@@ -1391,30 +1421,31 @@ impl ConfigPanel {
                 None => text("none").size(12).color(DIM).into(),
             };
             let line = row![
-                cell(3, branch),
+                cell(260.0, branch),
                 cell(
-                    4,
+                    260.0,
                     text(display(Path::new(&w.path))).size(12).color(DIM).into()
                 ),
-                cell(2, changes),
+                cell(140.0, changes),
                 cell(
-                    2,
+                    120.0,
                     text(format!("+{} / {}", w.ahead, w.behind)).size(12).into()
                 ),
                 cell(
-                    2,
+                    160.0,
                     text(w.agent_id.clone().unwrap_or_else(|| "none".into()))
                         .size(12)
                         .into()
                 ),
-                cell(3, pr),
+                cell(180.0, pr),
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center);
             table = table.push(
                 button(line)
                     .width(Length::Fill)
-                    .padding([10, 16])
+                    .height(44)
+                    .padding([0, 16])
                     .style(move |_, status| {
                         let hot =
                             matches!(status, button::Status::Hovered | button::Status::Pressed);
@@ -1567,13 +1598,7 @@ impl ConfigPanel {
             .spacing(16)
             .into(),
         };
-        crate::theme::scroll(
-            container(column![note, table, lower].spacing(16))
-                .padding([20, 28])
-                .width(Length::Fill),
-        )
-        .height(Length::Fill)
-        .into()
+        column![note, table, lower].spacing(16).into()
     }
 
     /// The one form for a new branch (name, base) or a new worktree (folder, branch).
