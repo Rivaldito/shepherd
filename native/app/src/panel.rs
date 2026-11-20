@@ -1893,6 +1893,7 @@ impl Panel {
     }
 
     pub fn view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
+        crate::ui::nav_reset();
         let body = match self.tab {
             Tab::Overview => self.overview_view(ctx),
             Tab::Runs => self.runs_view(ctx),
@@ -2365,7 +2366,13 @@ impl Panel {
                             .or(ctx.data.runs.first().map(|f| f.run.id.as_str()))
                             == Some(r.run.id.as_str()),
                     ))
-                    .on_press(Message::Panel(PanelMsg::SelectRun(r.run.id.clone())))
+                    .on_press(crate::ui::nav(
+                        self.run
+                            .as_deref()
+                            .or(ctx.data.runs.first().map(|f| f.run.id.as_str()))
+                            == Some(r.run.id.as_str()),
+                        Message::Panel(PanelMsg::SelectRun(r.run.id.clone())),
+                    ))
                     .into()
             })
             .collect();
@@ -4523,7 +4530,10 @@ impl Panel {
                 .width(Length::Fill)
                 .padding([8, 10])
                 .style(item_style(self.pattern_sel.as_deref() == Some(p.name.as_str())))
-                .on_press(Message::Panel(PanelMsg::SelectPattern(p.name.clone())))
+                .on_press(crate::ui::nav(
+                    self.pattern_sel.as_deref() == Some(p.name.as_str()),
+                    Message::Panel(PanelMsg::SelectPattern(p.name.clone())),
+                ))
                 .into()
         };
         let heading = |s: &'static str| {

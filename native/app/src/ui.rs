@@ -13,6 +13,38 @@ pub const TOAST_MS: u64 = 4200;
 /// Notices kept for the status bar history.
 pub const HISTORY: usize = 30;
 
+thread_local! {
+    /// The rows of the list on screen, in order, with what pressing each one sends: Up and Down walk it.
+    static NAV: std::cell::RefCell<Vec<(bool, Message)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Forgets the rows of the last frame (called at the start of every panel view).
+pub fn nav_reset() {
+    NAV.with(|n| n.borrow_mut().clear());
+}
+
+/// Wraps what a list row sends when pressed and remembers it, with whether the row is the selected one.
+pub fn nav(selected: bool, message: Message) -> Message {
+    NAV.with(|n| n.borrow_mut().push((selected, message.clone())));
+    message
+}
+
+/// What selecting the row `delta` places from the selected one sends (the first row when none is selected).
+pub fn nav_step(delta: i32) -> Option<Message> {
+    NAV.with(|n| {
+        let rows = n.borrow();
+        if rows.is_empty() {
+            return None;
+        }
+        let at = rows.iter().position(|(s, _)| *s);
+        let next = match at {
+            Some(i) => (i as i32 + delta).clamp(0, rows.len() as i32 - 1) as usize,
+            None => 0,
+        };
+        Some(rows[next].1.clone())
+    })
+}
+
 /// The view's title and subtitle on the left, its actions on the right (`create` first, filled button last).
 pub fn page_header<'a>(
     title: &'a str,
@@ -220,4 +252,28 @@ pub fn flex<'a>(
         .into()
     })
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn up_and_down_walk_the_rows_of_the_frame_and_stop_at_the_ends() {
+        let id = |m: Option<Message>| match m {
+            Some(Message::Panel(PanelMsg::SelectRun(id))) => id,
+            other => panic!("{other:?}"),
+        };
+        nav_reset();
+        assert!(nav_step(1).is_none(), "no list on screen");
+        for (i, name) in ["a", "b", "c"].into_iter().enumerate() {
+            nav(i == 1, Message::Panel(PanelMsg::SelectRun(name.into())));
+        }
+        assert_eq!(id(nav_step(1)), "c");
+        assert_eq!(id(nav_step(-1)), "a");
+        assert_eq!(id(nav_step(-5)), "a");
+        nav_reset();
+        nav(false, Message::Panel(PanelMsg::SelectRun("x".into())));
+        assert_eq!(id(nav_step(1)), "x", "nothing selected: the first row");
+    }
 }

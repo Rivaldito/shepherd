@@ -264,7 +264,10 @@ impl Panel {
                         .width(Length::Fill)
                         .padding([8, 10])
                         .style(item_style(sel))
-                        .on_press(Message::Panel(PanelMsg::SnapSelect(s.id.clone())))
+                        .on_press(crate::ui::nav(
+                            sel,
+                            Message::Panel(PanelMsg::SnapSelect(s.id.clone())),
+                        ))
                         .into(),
                 );
             }

@@ -592,6 +592,23 @@ impl App {
                     {
                         return Task::done(Message::NewSessionCancel);
                     }
+                    // Up and Down walk the list on screen (not while a text field is being typed in)
+                    if self.mode == Mode::Shepherd
+                        && self.palette.is_none()
+                        && !self.panel.comm_open()
+                        && !modifiers.control()
+                    {
+                        let step = match key {
+                            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => 1,
+                            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => -1,
+                            _ => 0,
+                        };
+                        if step != 0 {
+                            if let Some(message) = ui::nav_step(step) {
+                                return Task::done(message);
+                            }
+                        }
+                    }
                     if self.palette.is_some() {
                         return match key {
                             keyboard::Key::Named(keyboard::key::Named::Escape) => {

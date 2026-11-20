@@ -1023,7 +1023,10 @@ impl ConfigPanel {
                 .width(Length::Fill)
                 .padding([8, 10])
                 .style(item_style(self.skill.as_deref() == Some(s.name.as_str())))
-                .on_press(cfg(CfgMsg::SelectSkill(s.name.clone())))
+                .on_press(crate::ui::nav(
+                    self.skill.as_deref() == Some(s.name.as_str()),
+                    cfg(CfgMsg::SelectSkill(s.name.clone())),
+                ))
                 .into()
         };
         let heading = |s: String| {
@@ -1866,7 +1869,10 @@ impl ConfigPanel {
                     .width(Length::Fill)
                     .padding([4, 8])
                     .style(item_style(self.topic.as_deref() == Some(t.name.as_str())))
-                    .on_press(cfg(CfgMsg::SelectTopic(t.name.clone())))
+                    .on_press(crate::ui::nav(
+                        self.topic.as_deref() == Some(t.name.as_str()),
+                        cfg(CfgMsg::SelectTopic(t.name.clone())),
+                    ))
                     .into()
             })
             .collect();
@@ -2048,7 +2054,10 @@ impl ConfigPanel {
                 .width(Length::Fill)
                 .padding([4, 8])
                 .style(item_style(selected))
-                .on_press(cfg(CfgMsg::SelectVendor(name.clone())))
+                .on_press(crate::ui::nav(
+                    selected,
+                    cfg(CfgMsg::SelectVendor(name.clone())),
+                ))
                 .into(),
             );
         }
@@ -2065,7 +2074,10 @@ impl ConfigPanel {
                 .width(Length::Fill)
                 .padding([4, 8])
                 .style(item_style(selected))
-                .on_press(cfg(CfgMsg::SelectRole(name.clone())))
+                .on_press(crate::ui::nav(
+                    selected,
+                    cfg(CfgMsg::SelectRole(name.clone())),
+                ))
                 .into(),
             );
         }
@@ -2674,7 +2686,10 @@ mod tests {
             root,
         );
         // the summary first, then the server's words as sent
-        assert_eq!(panel.notice, "Not done.\nthe main checkout cannot be removed");
+        assert_eq!(
+            panel.notice,
+            "Not done.\nthe main checkout cannot be removed"
+        );
     }
 
     #[test]
