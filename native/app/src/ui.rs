@@ -178,3 +178,33 @@ pub fn toasts_view<'a>(toasts: Vec<(usize, &'a Toast)>) -> Element<'a, Message> 
         .align_y(iced::alignment::Vertical::Bottom)
         .into()
 }
+
+/// The flexible region of a view: its viewport takes the width that is left, its content keeps at least
+/// `min_w`; when the viewport is narrower the region scrolls (both ways) instead of squashing the content.
+pub fn flex<'a>(
+    min_w: f32,
+    pad: [f32; 2],
+    build: impl Fn() -> Element<'a, Message> + 'a,
+) -> Element<'a, Message> {
+    iced::widget::responsive(move |size| {
+        let w = (size.width - 8.0).max(min_w);
+        let bar = || {
+            iced::widget::scrollable::Scrollbar::new()
+                .width(8)
+                .scroller_width(8)
+        };
+        theme::scroll(
+            container(build())
+                .padding([pad[0], pad[1]])
+                .width(Length::Fixed(w)),
+        )
+        .direction(iced::widget::scrollable::Direction::Both {
+            vertical: bar(),
+            horizontal: bar(),
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    })
+    .into()
+}

@@ -277,6 +277,7 @@ pub struct Panel {
 }
 
 /// What the panel needs from the app to act.
+#[derive(Clone)]
 pub struct Ctx<'a> {
     pub api: PathBuf,
     pub data: &'a Data,
@@ -2274,22 +2275,18 @@ impl Panel {
             })
             .collect();
         let footer: Vec<Element<'a, Message>> = vec![];
+        // the gate strip lives at the top of the run's own detail; the detail is the flexible region
         let detail = if self.launching {
-            self.launcher_view(ctx)
+            self.detail(self.launcher_view(ctx))
         } else {
-            self.run_detail(ctx)
+            let (this, ctx) = (self, ctx.clone());
+            crate::ui::flex(720.0, [22.0, 28.0], move || this.run_detail(&ctx))
         };
-        let mut page = column![].spacing(8);
-        for g in &ctx.data.gates {
-            page = page.push(self.gate_card(ctx, g));
-        }
-        page.push(
-            row![
-                self.filtered_list("Filter by pattern, run or task", &chips, items, footer),
-                self.detail(detail)
-            ]
-            .height(Length::Fill),
-        )
+        row![
+            self.filtered_list("Filter by pattern, run or task", &chips, items, footer),
+            detail
+        ]
+        .height(Length::Fill)
         .into()
     }
 
@@ -2728,9 +2725,8 @@ impl Panel {
 
         // Active work: task -> run -> agents -> branches -> publish, one line per running run
         let work_card = {
-            let col_head = |s: &'static str, w: u16| {
-                container(text(s).size(11).color(DIM)).width(Length::FillPortion(w))
-            };
+            let col_head =
+                |s: &'static str, w: f32| container(text(s).size(11).color(DIM)).width(w);
             let chip = |label: String, color: Color| {
                 container(text(label).size(12).color(FG))
                     .padding([5, 10])
@@ -2745,11 +2741,11 @@ impl Panel {
                     })
             };
             let mut body = column![row![
-                col_head("Task", 3),
-                col_head("Run", 3),
-                col_head("Agents", 3),
-                col_head("Branches", 3),
-                col_head("Publish", 3),
+                col_head("Task", 130.0),
+                col_head("Run", 150.0),
+                col_head("Agents", 160.0),
+                col_head("Branches", 150.0),
+                col_head("Publish", 140.0),
             ]
             .spacing(8)]
             .spacing(10);
@@ -2801,7 +2797,7 @@ impl Panel {
                 };
                 body = body.push(
                     row![
-                        container(chip(task_label, theme::LINE2)).width(Length::FillPortion(3)),
+                        container(chip(task_label, theme::LINE2)).width(130),
                         container(
                             button(column![
                                 text(r.run.id.clone()).size(12).color(ACCENT),
@@ -2812,9 +2808,9 @@ impl Panel {
                             .on_press(Message::Panel(PanelMsg::SelectRun(r.run.id.clone())))
                         )
                         .width(Length::FillPortion(3)),
-                        container(agent_col).width(Length::FillPortion(3)),
-                        container(branch_col).width(Length::FillPortion(3)),
-                        container(publish).width(Length::FillPortion(3)),
+                        container(agent_col).width(160),
+                        container(branch_col).width(150),
+                        container(publish).width(140),
                     ]
                     .spacing(8)
                     .align_y(iced::Alignment::Center),
@@ -3393,7 +3389,8 @@ impl Panel {
                 ]
                 .spacing(8);
                 button(body)
-                    .width(Length::Fill)
+                    .width(300)
+                    .height(Length::Shrink)
                     .padding([12, 12])
                     .style(move |_, status| {
                         let hot = msg_hot(status);
@@ -3433,14 +3430,7 @@ impl Panel {
             }
         };
         // cards on the left (two per row), the selected agent on the right
-        let mut grid = column![].spacing(12);
-        let mut cards = items.into_iter();
-        while let Some(first) = cards.next() {
-            let second = cards
-                .next()
-                .unwrap_or_else(|| container(text("")).width(Length::Fill).into());
-            grid = grid.push(row![first, second].spacing(12));
-        }
+        let grid = row(items).spacing(14).wrap().vertical_spacing(14);
         let left = column![
             crate::ui::filter_bar(
                 "Filter by name, role, vendor or task",
@@ -3461,7 +3451,10 @@ impl Panel {
                     background: Some(Background::Color(LINE)),
                     ..container::Style::default()
                 }),
-            container(self.detail(detail)).width(440),
+            container(self.detail(detail))
+                .width(460)
+                .height(Length::Fill)
+                .style(theme::inspector_style),
         ]
         .height(Length::Fill),]
         .spacing(8)
@@ -4184,7 +4177,10 @@ impl Panel {
                     background: Some(Background::Color(LINE)),
                     ..container::Style::default()
                 }),
-            container(self.detail(detail)).width(430),
+            container(self.detail(detail))
+                .width(430)
+                .height(Length::Fill)
+                .style(theme::inspector_style),
         ]
         .height(Length::Fill)
         .into()
@@ -4883,6 +4879,16 @@ pub fn list_box_with<'a>(
     items: Vec<Element<'a, Message>>,
     footer: Vec<Element<'a, Message>>,
 ) -> Element<'a, Message> {
+    list_box_sized(320.0, top, items, footer)
+}
+
+/// A fixed list pane `width` wide (320 for Runs and Skills, 250 for Events, 260 for Patterns, ...).
+pub fn list_box_sized<'a>(
+    width: f32,
+    top: Option<Element<'a, Message>>,
+    items: Vec<Element<'a, Message>>,
+    footer: Vec<Element<'a, Message>>,
+) -> Element<'a, Message> {
     let line = || {
         container(text(""))
             .width(Length::Fill)
@@ -4904,7 +4910,7 @@ pub fn list_box_with<'a>(
             .push(container(row(footer).spacing(4).wrap()).padding(8));
     }
     row![
-        container(col).width(300).height(Length::Fill),
+        container(col).width(width).height(Length::Fill),
         container(text(""))
             .width(1)
             .height(Length::Fill)

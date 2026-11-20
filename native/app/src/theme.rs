@@ -563,6 +563,19 @@ pub fn editor_style(
 
 /// The iced theme of the app: Shepherd's palette, so that the widgets nobody styled by hand (pick lists, check
 /// boxes, scrollbars, text selection) wear the same colours as the rest.
+/// The fixed inspector or drawer on the right of a view: `bar` background and a hairline on its left edge.
+pub fn inspector_style(_: &Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        background: Some(Background::Color(BAR)),
+        border: Border {
+            color: LINE,
+            width: 0.5,
+            radius: 0.0.into(),
+        },
+        ..iced::widget::container::Style::default()
+    }
+}
+
 /// A thin vertical scrollbar (8 px, transparent track, thumb `line2`, lighter on hover).
 pub fn scrollbar_style(
     _: &Theme,
