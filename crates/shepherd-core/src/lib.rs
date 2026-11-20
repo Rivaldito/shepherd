@@ -446,7 +446,7 @@ fn record_state_changes(registry_path: &Path, new: &AgentRegistryFile) {
         let _ = file.write_all(lines.as_bytes());
     }
     // keep the file small: past 512 KB only the newest 2000 lines stay
-    if std::fs::metadata(&log).map_or(false, |m| m.len() > 512 * 1024) {
+    if std::fs::metadata(&log).is_ok_and(|m| m.len() > 512 * 1024) {
         if let Ok(text) = std::fs::read_to_string(&log) {
             let all: Vec<&str> = text.lines().collect();
             let keep = &all[all.len().saturating_sub(2000)..];
