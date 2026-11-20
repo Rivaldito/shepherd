@@ -162,7 +162,7 @@ pub fn build(snapshot: &Snapshot, data: &Data) -> Vec<Command> {
         "New workspace",
         "",
         neutral,
-        vec![Message::Act(Action::NewSpace)],
+        vec![Message::NewSpaceOpen],
     ));
     if let Some(workspace) = snapshot.focused_workspace_id.clone() {
         all.push(cmd(

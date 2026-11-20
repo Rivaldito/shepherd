@@ -142,7 +142,6 @@ pub(crate) enum Action {
     FocusAgent(String),
     FocusPane(String),
     NewTab(String),
-    NewSpace,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +176,10 @@ enum Message {
     NewSessionInput(String),
     NewSessionSubmit,
     NewSessionCancel,
+    NewSpaceOpen,
+    NewSpaceInput(String),
+    NewSpaceSubmit,
+    NewSpaceCancel,
     /// A started session answered (its client socket), or why it did not.
     SessionStarted(Result<PathBuf, String>),
     /// The `×` of a session: the first click warns, the second one stops it (or deletes it when it is stopped).
@@ -338,6 +341,8 @@ struct App {
     sent: Option<(u16, u16)>,
     api_socket: PathBuf,
     context_menu: Option<(iced::Point, ContextMenuTarget)>,
+    /// The folder typed in the New workspace popover, while it is open.
+    new_space: Option<String>,
     /// The destructive item of the context menu that waits for its second click.
     menu_armed: Option<&'static str>,
     rename: Option<RenameState>,
@@ -387,6 +392,7 @@ impl App {
             api_socket: api::api_socket_for(&client_socket()),
             context_menu: None,
             menu_armed: None,
+            new_space: None,
             rename: None,
             mouse_position: iced::Point::ORIGIN,
             reloads: shepherd_app_core::reload::Coalesce::running(), // the first load starts below
@@ -510,6 +516,14 @@ impl App {
                     self.panel.notify(ui::info("Reconnected."));
                 }
                 self.sync_size();
+                // verification aid: `SHEPHERD_NATIVE_NEWSPACE=1` opens the New workspace popover once
+                static SPACE_DONE: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if std::env::var_os("SHEPHERD_NATIVE_NEWSPACE").is_some()
+                    && !SPACE_DONE.swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    self.new_space = Some(String::new());
+                }
                 // verification aid: `SHEPHERD_NATIVE_NEWSESSION=<name>` types that name in the `+` box and submits it
                 if let Some(name) = std::env::var_os("SHEPHERD_NATIVE_NEWSESSION") {
                     if !NEW_DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -634,6 +648,11 @@ impl App {
                     {
                         return Task::done(Message::NewSessionCancel);
                     }
+                    if self.new_space.is_some()
+                        && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
+                    {
+                        return Task::done(Message::NewSpaceCancel);
+                    }
                     // Up and Down walk the list on screen (not while a text field is being typed in)
                     if self.mode == Mode::Shepherd
                         && self.palette.is_none()
@@ -715,6 +734,37 @@ impl App {
             }
             Message::NewSessionInput(text) => self.new_session = Some((text, None)),
             Message::NewSessionCancel => self.new_session = None,
+            Message::NewSpaceOpen => self.new_space = Some(String::new()),
+            Message::NewSpaceInput(text) => self.new_space = Some(text),
+            Message::NewSpaceCancel => self.new_space = None,
+            Message::NewSpaceSubmit => {
+                let Some(folder) = self.new_space.clone() else {
+                    return Task::none();
+                };
+                let folder = folder.trim().to_owned();
+                let folder = match folder.strip_prefix('~') {
+                    Some(rest) => std::env::var("HOME")
+                        .map(|h| format!("{h}{rest}"))
+                        .unwrap_or(folder),
+                    None => folder,
+                };
+                if !folder.is_empty() && !std::path::Path::new(&folder).is_dir() {
+                    // the popover stays open so the folder can be fixed
+                    self.panel
+                        .notify(ui::invalid(&format!("{folder} is not a folder.")));
+                    return Task::none();
+                }
+                self.new_space = None;
+                let mut params = serde_json::json!({ "focus": true });
+                if !folder.is_empty() {
+                    params["cwd"] = serde_json::json!(folder);
+                }
+                let socket = self.api_socket.clone();
+                return Task::perform(
+                    async move { api::call(&socket, "workspace.create", params).map(|_| ()) },
+                    Message::Acted,
+                );
+            }
             Message::NewSessionSubmit => {
                 let Some((name, _)) = self.new_session.take() else {
                     return Task::none();
@@ -883,7 +933,6 @@ impl App {
                         "tab.create",
                         serde_json::json!({ "workspace_id": workspace, "focus": true }),
                     ),
-                    Action::NewSpace => ("workspace.create", serde_json::json!({ "focus": true })),
                 };
                 let socket = self.api_socket.clone();
                 return Task::perform(
@@ -1237,7 +1286,9 @@ impl App {
             None => base,
         };
         // Overlay: rename dialog takes precedence, then context menu
-        if self.rename.is_some() {
+        if let Some(folder) = &self.new_space {
+            iced::widget::stack![content, self.new_space_view(folder)].into()
+        } else if self.rename.is_some() {
             iced::widget::stack![content, self.rename_view()].into()
         } else if self.context_menu.is_some() {
             iced::widget::stack![content, self.context_menu_view()].into()
@@ -1838,6 +1889,48 @@ impl App {
         .into()
     }
 
+    /// The popover of the sidebar's `+`: the folder the new workspace opens in (empty: the server's folder).
+    fn new_space_view<'a>(&'a self, folder: &'a str) -> Element<'a, Message> {
+        let panel = container(
+            column![
+                text("New workspace").font(theme::MONO_BOLD).size(14).color(theme::HI),
+                text("The folder its first terminal starts in. Leave it empty for the server's folder.")
+                    .size(11.5)
+                    .color(DIM),
+                text_input("~/projects/webgo", folder)
+                    .on_input(Message::NewSpaceInput)
+                    .on_submit(Message::NewSpaceSubmit)
+                    .style(theme::input_style)
+                    .padding([8, 10])
+                    .size(13),
+                row![
+                    button(container(text("Create").size(13)).center_y(Length::Fill))
+                        .padding([0, 12])
+                        .height(30)
+                        .style(theme::primary_button_style())
+                        .on_press(Message::NewSpaceSubmit),
+                    button(container(text("Cancel").size(13)).center_y(Length::Fill))
+                        .padding([0, 12])
+                        .height(30)
+                        .style(theme::outline_button_style(false))
+                        .on_press(Message::NewSpaceCancel),
+                ]
+                .spacing(8),
+            ]
+            .spacing(10),
+        )
+        .padding(14)
+        .width(320)
+        .style(theme::toast_style(theme::LINE2));
+        let overlay = mouse_area(container(text("")).width(Length::Fill).height(Length::Fill))
+            .on_press(Message::NewSpaceCancel);
+        iced::widget::stack![
+            overlay,
+            container(panel).padding(pad(110.0, 0.0, 0.0, 14.0))
+        ]
+        .into()
+    }
+
     /// The context menu overlay (right-click menu): Rename, and the destructive items with the two-click rule.
     fn context_menu_view(&self) -> Element<'_, Message> {
         let Some((position, target)) = &self.context_menu else {
@@ -2197,7 +2290,7 @@ impl App {
             button(text("+").size(14).color(theme::ACCENT))
                 .padding([0, 6])
                 .style(mini_button_style())
-                .on_press(Message::Act(Action::NewSpace)),
+                .on_press(Message::NewSpaceOpen),
         ]
         .align_y(iced::Alignment::Center)
         .padding(pad(10.0, 4.0, 4.0, 8.0))]
