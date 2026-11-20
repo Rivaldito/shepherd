@@ -14,6 +14,7 @@ pub(super) fn run_server_command(args: &[String]) -> std::io::Result<Option<i32>
 
     match subcommand {
         "stop" => server_stop(&args[1..]).map(Some),
+        "restart" => server_restart(&args[1..]).map(Some),
         "live-handoff" => server_live_handoff(&args[1..]).map(Some),
         "--handoff-import" => Ok(None),
         "reload-config" => server_reload_config(&args[1..]).map(Some),
@@ -43,6 +44,27 @@ fn server_stop(args: &[String]) -> std::io::Result<i32> {
 
     match crate::session::stop_active_server() {
         Ok(()) => Ok(0),
+        Err(err) => {
+            eprintln!("{err}");
+            Ok(1)
+        }
+    }
+}
+
+fn server_restart(args: &[String]) -> std::io::Result<i32> {
+    if !args.is_empty() {
+        eprintln!("usage: shepherd server restart");
+        return Ok(2);
+    }
+    if super::target::is_remote() {
+        eprintln!("shepherd server restart works on this machine only; use `shepherd server stop` and start it there");
+        return Ok(2);
+    }
+    match crate::session::restart_active_server() {
+        Ok(()) => {
+            println!("server restarted");
+            Ok(0)
+        }
         Err(err) => {
             eprintln!("{err}");
             Ok(1)
@@ -260,6 +282,7 @@ fn print_server_help() {
     #[cfg(windows)]
     eprintln!("  shepherd server --allow-unelevated-clients  allow ordinary same-account clients to control an elevated server");
     eprintln!("  shepherd server stop           stop the running server via the API socket");
+    eprintln!("  shepherd server restart        stop the server (if running) and start a new one; closes its terminals and agents");
     eprintln!("  shepherd server live-handoff   hand off live panes to a new local server");
     eprintln!("  shepherd server reload-config  reload config.toml in the running server");
     eprintln!("  shepherd server agent-manifests [--json]  show agent detection manifest status");

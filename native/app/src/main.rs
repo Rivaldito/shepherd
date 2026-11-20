@@ -196,6 +196,9 @@ enum Message {
     Sessions(Result<Vec<sessions::Session>, String>),
     /// Leave the current session for the one whose client socket this is.
     SwitchSession(PathBuf),
+    ToggleServerMenu,
+    ServerOp(sessions::ServerOp),
+    ServerDone(sessions::ServerOp, Result<(), String>),
     /// The `+` of the session row: open the name box.
     NewSessionOpen,
     NewSessionInput(String),
@@ -366,6 +369,9 @@ struct App {
     /// The connection was lost and has not come back yet (one toast per outage).
     was_lost: bool,
     pending_close: Option<PendingClose>,
+    /// The gear menu at the bottom of the sidebar is open; `server_armed` is the entry clicked once (a second click does it).
+    server_menu: bool,
+    server_armed: Option<sessions::ServerOp>,
     /// Animation step of the prism canvases.
     frame: u32,
     /// Demo recording (`SHEPHERD_NATIVE_FILM=<dir>`), see [`Film`].
@@ -431,6 +437,8 @@ impl App {
             status: "connecting…".into(),
             was_lost: false,
             pending_close: None,
+            server_menu: false,
+            server_armed: None,
             window: start_size(),
             sent: None,
             api_socket: api::api_socket_for(&client_socket()),
@@ -572,6 +580,13 @@ impl App {
                 // verification aid: `SHEPHERD_NATIVE_HIDESIDEBAR=1` starts with the sidebar hidden
                 if std::env::var_os("SHEPHERD_NATIVE_HIDESIDEBAR").is_some() {
                     self.sidebar_visible = false;
+                }
+                // verification aid: `SHEPHERD_NATIVE_SERVERMENU=1` opens the gear menu (`=armed`: with Restart clicked once)
+                if let Some(v) = std::env::var_os("SHEPHERD_NATIVE_SERVERMENU") {
+                    self.server_menu = true;
+                    if v == "armed" {
+                        self.server_armed = Some(sessions::ServerOp::Restart);
+                    }
                 }
                 // verification aid: `SHEPHERD_NATIVE_NEWSPACE=1` opens the New workspace popover once
                 static SPACE_DONE: std::sync::atomic::AtomicBool =
@@ -1237,6 +1252,35 @@ impl App {
                     }
                 }
             }
+            Message::ToggleServerMenu => {
+                self.server_menu = !self.server_menu;
+                self.server_armed = None;
+            }
+            Message::ServerOp(op) => {
+                if self.server_armed == Some(op) {
+                    self.server_armed = None;
+                    self.server_menu = false;
+                    self.panel.notify(ui::info(match op {
+                        sessions::ServerOp::Restart => "Restarting the server…",
+                        sessions::ServerOp::Stop => "Stopping the server…",
+                    }));
+                    let api = self.api_socket.clone();
+                    return Task::perform(
+                        async move { sessions::server_control(op, &api) },
+                        move |result| Message::ServerDone(op, result),
+                    );
+                }
+                self.server_armed = Some(op);
+            }
+            Message::ServerDone(op, result) => match result {
+                Ok(()) => self.panel.notify(ui::info(match op {
+                    sessions::ServerOp::Restart => "The server restarted.",
+                    sessions::ServerOp::Stop => {
+                        "The server stopped. Use the gear, Restart server, or run `shepherd` to start it again."
+                    }
+                })),
+                Err(why) => self.panel.notify(ui::invalid(&why)),
+            },
             Message::ToggleNavGroup(i) => {
                 if let Some(c) = self.nav_collapsed.get_mut(usize::from(i)) {
                     *c = !*c;
@@ -2975,7 +3019,76 @@ impl App {
         .height(28)
         .style(theme::ghost_button_style())
         .on_press(Message::ToggleSidebar);
-        let body = column![workspaces, nav, hide]
+        let gear = tooltip(
+            button(
+                container(text("⚙").size(15))
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill),
+            )
+            .padding(0)
+            .width(28)
+            .height(28)
+            .style(theme::ghost_button_style())
+            .on_press(Message::ToggleServerMenu),
+            text("Server: restart or stop").size(11),
+            tooltip::Position::Top,
+        );
+        let bottom: Element<'_, Message> = {
+            let bar = row![hide, gear].spacing(4).align_y(iced::Alignment::Center);
+            if self.server_menu {
+                let entry = |op: sessions::ServerOp, label: &'static str| {
+                    let armed = self.server_armed == Some(op);
+                    button(
+                        container(
+                            text(if armed {
+                                "Click again: closes every terminal and agent"
+                            } else {
+                                label
+                            })
+                            .size(11.5),
+                        )
+                        .center_y(Length::Fill),
+                    )
+                    .padding([0, 8])
+                    .width(Length::Fill)
+                    .height(30)
+                    .style(move |t, status| {
+                        if armed {
+                            theme::destructive_button_style()(t, status)
+                        } else {
+                            theme::ghost_button_style()(t, status)
+                        }
+                    })
+                    .on_press(Message::ServerOp(op))
+                };
+                column![
+                    container(
+                        column![
+                            text("SERVER").size(10).color(theme::FAINT),
+                            entry(sessions::ServerOp::Restart, "Restart server"),
+                            entry(sessions::ServerOp::Stop, "Stop server"),
+                        ]
+                        .spacing(4)
+                    )
+                    .padding(8)
+                    .width(Length::Fill)
+                    .style(|_| container::Style {
+                        border: Border {
+                            color: theme::LINE,
+                            width: 1.0,
+                            radius: 4.0.into(),
+                        },
+                        ..container::Style::default()
+                    }),
+                    bar
+                ]
+                .spacing(6)
+                .into()
+            } else {
+                bar.into()
+            }
+        };
+        let body = column![workspaces, nav, bottom]
             .spacing(20)
             .padding(pad(16.0, 10.0, 14.0, 10.0));
         let body: Element<'_, Message> = if short {

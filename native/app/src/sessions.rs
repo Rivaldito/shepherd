@@ -117,6 +117,45 @@ fn run(args: &[&str]) -> Result<(), String> {
     })
 }
 
+/// What the gear menu can ask of the server of the session in use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerOp {
+    Restart,
+    Stop,
+}
+
+impl ServerOp {
+    /// The `shepherd server <this>` command that does it.
+    pub fn command(self) -> &'static str {
+        match self {
+            ServerOp::Restart => "restart",
+            ServerOp::Stop => "stop",
+        }
+    }
+}
+
+/// Runs `shepherd server restart|stop` against the server whose API socket is `api`. Blocking (up to 15 s each for
+/// the stop and the start): call it off the UI thread. The new server of a restart is detached, so it outlives this app.
+pub fn server_control(op: ServerOp, api: &Path) -> Result<(), String> {
+    let output = Command::new(binary())
+        .args(["server", op.command()])
+        .env("SHEPHERD_SOCKET_PATH", api)
+        .env_remove("SHEPHERD_CLIENT_SOCKET_PATH")
+        .env_remove("SHEPHERD_SESSION")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("could not run `shepherd server {}`: {e}", op.command()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let why = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    Err(if why.is_empty() {
+        format!("`shepherd server {}` failed", op.command())
+    } else {
+        why
+    })
+}
+
 /// Stops a running session: its server ends and every terminal and agent in it closes. Blocking (up to
 /// 15 s while the server shuts down): call it off the UI thread.
 pub fn stop(name: &str) -> Result<(), String> {
@@ -260,5 +299,11 @@ mod tests {
         assert!(running.contains("terminals and agents will close"));
         let stopped = close_hint(&sessions[1], false);
         assert!(stopped.contains("delete `work`") && stopped.contains("saved state"));
+    }
+
+    #[test]
+    fn the_gear_menu_runs_the_server_commands() {
+        assert_eq!(ServerOp::Restart.command(), "restart");
+        assert_eq!(ServerOp::Stop.command(), "stop");
     }
 }

@@ -64,6 +64,12 @@ The top bar holds the `Terminal | Shepherd` switch. A row of **sessions** lists 
 
 Closing and deleting always take two clicks, because the app has no pop-up dialogs.
 
+### The server: restart and stop
+
+The gear at the bottom of the sidebar, next to "Hide sidebar", opens a small **Server** menu with *Restart server* and *Stop server*. Both close every terminal and agent of that server, so each takes two clicks. After a restart the app reconnects on its own; after a stop, use *Restart server* again (it also starts a stopped server) or run `shepherd`.
+
+The same from a terminal: `shepherd server restart` (stops the server if it is running, starts a new one detached from the command, and waits until it answers) and `shepherd server stop`. After installing a new version, restart the server so it runs the new binary.
+
 ### Shortcuts
 
 | Keys | Action |
