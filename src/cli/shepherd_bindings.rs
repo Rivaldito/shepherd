@@ -726,6 +726,9 @@ pub(crate) fn command() -> Command {
 // =========================================================================
 
 pub(crate) fn parse_operation(args: &[String]) -> Result<ShepherdOperation, ParseError> {
+    if let Some(help) = crate::cli::shepherd_help::help_text(args) {
+        return Err(ParseError::Usage(help));
+    }
     if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
         let usage = if args.first().map(String::as_str) == Some("snapshot") {
             SNAPSHOT_USAGE
@@ -1680,7 +1683,6 @@ mod tests {
             &["snapshot", "show"],
             &["snapshot", "restore"],
             &["snapshot", "nope"],
-            &["snapshot", "--help"],
         ] {
             match parse_operation(&args(a)) {
                 Err(ParseError::Usage(msg)) => assert!(
@@ -1695,6 +1697,22 @@ mod tests {
             parse_operation(&args(&["snapshot", "capture", "a", "--bogus"])),
             Err(ParseError::Usage(_) | ParseError::Clap(_))
         ));
+        // asking for help is answered per command (see shepherd_help), not with the long usage
+        for (line, starts) in [
+            (
+                &["snapshot", "--help"][..],
+                "usage: shepherd snapshot <command>",
+            ),
+            (
+                &["snapshot", "restore", "--help"],
+                "usage: shepherd snapshot restore <id>",
+            ),
+        ] {
+            match parse_operation(&args(line)) {
+                Err(ParseError::Usage(msg)) => assert!(msg.starts_with(starts), "{line:?}: {msg}"),
+                other => panic!("{line:?}: {:?}", other.map(|_| ())),
+            }
+        }
     }
 
     #[test]

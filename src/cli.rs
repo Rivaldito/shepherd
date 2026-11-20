@@ -34,6 +34,7 @@ mod server_not_running;
 pub(crate) mod shepherd;
 pub(crate) mod shepherd_bindings;
 pub(crate) mod shepherd_extra;
+pub(crate) mod shepherd_help;
 
 /// First words the CLI hands to the Shepherd command parser.
 pub(crate) const SHEPHERD_DIRECT_COMMANDS: &[&str] = &[
