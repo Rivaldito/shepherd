@@ -164,6 +164,7 @@ pub(crate) enum Action {
     CloseSpace(String, bool),
     FocusTab(String),
     CloseTab(String),
+    ClosePane(String),
     FocusAgent(String),
     FocusPane(String),
     NewTab(String),
@@ -176,6 +177,8 @@ enum PendingClose {
         tab_id: String,
         workspace_id: String,
     },
+    /// A terminal of the sidebar: its `×` was clicked once.
+    Pane(String),
 }
 
 fn focus_action_for_pane(pane: String) -> Action {
@@ -250,6 +253,8 @@ enum Message {
     /// One frame of the demo film: its number and the picture.
     FilmShot(u32, iced::window::Screenshot),
     ArmClose(PendingClose),
+    /// The `×` of a terminal in the sidebar: the first click arms it, the second closes the terminal.
+    ClosePane(String, String),
     ContextMenuOpened(ContextMenuTarget),
     ContextMenuClosed,
     /// A destructive item of the context menu: the first click arms it, the second sends `then`.
@@ -1031,6 +1036,7 @@ impl App {
                     ),
                     Action::FocusTab(id) => ("tab.focus", serde_json::json!({ "tab_id": id })),
                     Action::CloseTab(id) => ("tab.close", serde_json::json!({ "tab_id": id })),
+                    Action::ClosePane(id) => ("pane.close", serde_json::json!({ "pane_id": id })),
                     Action::FocusAgent(id) => ("agent.focus", serde_json::json!({ "target": id })),
                     Action::FocusPane(id) => ("pane.focus", serde_json::json!({ "pane_id": id })),
                     Action::NewTab(workspace) => (
@@ -1043,6 +1049,15 @@ impl App {
                     async move { api::call(&socket, method, params).map(|_| ()) },
                     Message::Acted,
                 );
+            }
+            Message::ClosePane(pane, name) => {
+                let pending = PendingClose::Pane(pane.clone());
+                if self.pending_close.as_ref() == Some(&pending) {
+                    self.pending_close = None;
+                    self.panel.notify(ui::info(&format!("Closed {name}.")));
+                    return Task::done(Message::Act(Action::ClosePane(pane)));
+                }
+                self.pending_close = Some(pending);
             }
             Message::ArmClose(pending) => {
                 self.pending_close = Some(pending);
@@ -2705,11 +2720,43 @@ impl App {
                 // the tabs themselves are in the tab bar of the terminal
                 let tabs: Vec<_> = self.snapshot.tabs_of(&id).collect();
                 let mut inner = column![].spacing(0).width(Length::Fill);
+                // the `×` of a terminal row: two clicks (the first turns it red), because it ends what runs in it
+                let close_button = |pane_id: &str, name: String| -> Element<'_, Message> {
+                    let armed = self.pending_close == Some(PendingClose::Pane(pane_id.to_owned()));
+                    tooltip(
+                        button(
+                            container(text("×").size(13).color(if armed {
+                                theme::BG
+                            } else {
+                                DIM
+                            }))
+                            .center_x(Length::Fill)
+                            .center_y(Length::Fill),
+                        )
+                        .padding(0)
+                        .width(22)
+                        .height(sidebar::AGENT_ROW_H)
+                        .style(move |t, status| {
+                            if armed {
+                                theme::destructive_button_style()(t, status)
+                            } else {
+                                theme::ghost_button_style()(t, status)
+                            }
+                        })
+                        .on_press(Message::ClosePane(pane_id.to_owned(), name)),
+                        text(if armed {
+                            "Click again: closes this terminal"
+                        } else {
+                            "Close this terminal"
+                        })
+                        .size(11),
+                        tooltip::Position::Left,
+                    )
+                    .into()
+                };
                 // one row per pane that runs an agent, in tab order and then pane order
-                let mut agent_rows = 0;
                 for tab in &tabs {
                     for agent in mine.iter().filter(|a| a.tab_id == tab.tab_id) {
-                        agent_rows += 1;
                         let status = agent_state(agent);
                         let flagged = needs_human(agent);
                         let urgent = status == Status::Blocked || flagged;
@@ -2746,64 +2793,146 @@ impl App {
                         } else {
                             Message::Act(Action::FocusPane(agent.pane_id.clone()))
                         };
-                        inner = inner.push(
-                            button(
-                                container(
-                                    row![
-                                        icon,
-                                        text(sidebar::ellipsize(
-                                            &agent.display_name(),
-                                            sidebar::agent_name_max_chars(&word)
-                                        ))
-                                        .size(12.5)
-                                        .color(theme::FG),
-                                        container(text("")).width(Length::Fill),
-                                        text(word).size(10.5).color(color),
-                                    ]
-                                    .spacing(8)
-                                    .align_y(iced::Alignment::Center),
-                                )
-                                .center_y(Length::Fill),
+                        let pane_for_close = agent.pane_id.clone();
+                        let name_for_close = agent.display_name();
+                        let agent_button = button(
+                            container(
+                                row![
+                                    icon,
+                                    text(sidebar::ellipsize(
+                                        &agent.display_name(),
+                                        sidebar::agent_name_max_chars(&word)
+                                    ))
+                                    .size(12.5)
+                                    .color(theme::FG),
+                                    container(text("")).width(Length::Fill),
+                                    text(word).size(10.5).color(color),
+                                ]
+                                .spacing(8)
+                                .align_y(iced::Alignment::Center),
                             )
-                            .padding([0, 6])
-                            .width(Length::Fill)
-                            .height(sidebar::AGENT_ROW_H)
-                            .style(move |_, status| {
-                                let hot = matches!(
-                                    status,
-                                    button::Status::Hovered | button::Status::Pressed
-                                );
-                                button::Style {
-                                    background: if focused {
-                                        Some(Background::Color(theme::SURFACE))
+                            .center_y(Length::Fill),
+                        )
+                        .padding([0, 6])
+                        .width(Length::Fill)
+                        .height(sidebar::AGENT_ROW_H)
+                        .style(move |_, status| {
+                            let hot =
+                                matches!(status, button::Status::Hovered | button::Status::Pressed);
+                            button::Style {
+                                background: if focused {
+                                    Some(Background::Color(theme::SURFACE))
+                                } else {
+                                    hot.then_some(Background::Color(theme::HOVER))
+                                },
+                                text_color: theme::FG,
+                                border: Border {
+                                    color: if focused {
+                                        Color {
+                                            a: 0.55,
+                                            ..theme::ACCENT
+                                        }
                                     } else {
-                                        hot.then_some(Background::Color(theme::HOVER))
+                                        Color::TRANSPARENT
                                     },
-                                    text_color: theme::FG,
-                                    border: Border {
-                                        color: if focused {
-                                            Color {
-                                                a: 0.55,
-                                                ..theme::ACCENT
-                                            }
-                                        } else {
-                                            Color::TRANSPARENT
-                                        },
-                                        width: 1.0,
-                                        radius: 5.0.into(),
-                                    },
-                                    ..button::Style::default()
-                                }
-                            })
-                            .on_press(target),
+                                    width: 1.0,
+                                    radius: 5.0.into(),
+                                },
+                                ..button::Style::default()
+                            }
+                        })
+                        .on_press(target);
+                        inner = inner.push(
+                            row![agent_button, close_button(&pane_for_close, name_for_close)]
+                                .spacing(2)
+                                .align_y(iced::Alignment::Center),
                         );
                     }
                 }
-                if let Some(line) = sidebar::shells_line(shells, agent_rows) {
-                    inner = inner.push(
-                        container(text(line).size(10.5).color(theme::FAINT))
-                            .padding(pad(3.0, 6.0, 0.0, 6.0)),
-                    );
+                // the plain shells, one row each, after the agents
+                for tab in &tabs {
+                    for pane in self.snapshot.panes.iter().filter(|p| {
+                        p.tab_id == tab.tab_id && !mine.iter().any(|a| a.pane_id == p.pane_id)
+                    }) {
+                        let name =
+                            pane.label
+                                .clone()
+                                .filter(|l| !l.is_empty())
+                                .unwrap_or_else(|| {
+                                    // an unnamed shell is called after its tab ("terminal 2", or the tab's own name)
+                                    if tab.label.chars().all(|c| c.is_ascii_digit()) {
+                                        format!("terminal {}", tab.label)
+                                    } else {
+                                        tab.label.clone()
+                                    }
+                                });
+                        let where_ = pane
+                            .cwd
+                            .as_deref()
+                            .and_then(|c| std::path::Path::new(c).file_name())
+                            .map(|f| f.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        let focused = !in_shepherd && pane.focused;
+                        let target = if in_shepherd {
+                            Message::GoToPane(pane.pane_id.clone())
+                        } else {
+                            Message::Act(Action::FocusPane(pane.pane_id.clone()))
+                        };
+                        let shell_button = button(
+                            container(
+                                row![
+                                    container(text(sidebar::SHELL_ICON).size(11))
+                                        .width(15)
+                                        .height(15)
+                                        .center(15),
+                                    text(sidebar::ellipsize(&name, 14))
+                                        .size(12.5)
+                                        .color(theme::FG),
+                                    container(text("")).width(Length::Fill),
+                                    text(sidebar::ellipsize(&where_, 12))
+                                        .size(10.5)
+                                        .color(theme::FAINT),
+                                ]
+                                .spacing(8)
+                                .align_y(iced::Alignment::Center),
+                            )
+                            .center_y(Length::Fill),
+                        )
+                        .padding([0, 6])
+                        .width(Length::Fill)
+                        .height(sidebar::AGENT_ROW_H)
+                        .style(move |_, status| {
+                            let hot =
+                                matches!(status, button::Status::Hovered | button::Status::Pressed);
+                            button::Style {
+                                background: if focused {
+                                    Some(Background::Color(theme::SURFACE))
+                                } else {
+                                    hot.then_some(Background::Color(theme::HOVER))
+                                },
+                                text_color: theme::FG,
+                                border: Border {
+                                    color: if focused {
+                                        Color {
+                                            a: 0.55,
+                                            ..theme::ACCENT
+                                        }
+                                    } else {
+                                        Color::TRANSPARENT
+                                    },
+                                    width: 1.0,
+                                    radius: 5.0.into(),
+                                },
+                                ..button::Style::default()
+                            }
+                        })
+                        .on_press(target);
+                        inner = inner.push(
+                            row![shell_button, close_button(&pane.pane_id, name.clone())]
+                                .spacing(2)
+                                .align_y(iced::Alignment::Center),
+                        );
+                    }
                 }
                 if panes == 0 {
                     inner = inner.push(

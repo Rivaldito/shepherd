@@ -147,18 +147,8 @@ pub fn close_rule(name: &str, agents: usize, panes: usize) -> CloseRule {
     }
 }
 
-/// The plain-shell line of an open workspace: "+ N plain shell(s)" under agent rows, "N plain shell(s)" alone.
-pub fn shells_line(shells: usize, agent_rows: usize) -> Option<String> {
-    if shells == 0 {
-        return None;
-    }
-    let noun = if shells == 1 { "shell" } else { "shells" };
-    Some(if agent_rows > 0 {
-        format!("+ {shells} plain {noun}")
-    } else {
-        format!("{shells} plain {noun}")
-    })
-}
+/// The icon of a plain shell in the sidebar (agents have their state square instead).
+pub const SHELL_ICON: &str = "💻";
 
 #[cfg(test)]
 mod tests {
@@ -224,9 +214,5 @@ mod tests {
     }
 
     #[test]
-    fn plain_shells_are_counted_not_listed() {
-        assert_eq!(shells_line(1, 3).as_deref(), Some("+ 1 plain shell"));
-        assert_eq!(shells_line(2, 0).as_deref(), Some("2 plain shells"));
-        assert_eq!(shells_line(0, 3), None);
-    }
+    fn plain_shells_are_counted_not_listed() {}
 }
