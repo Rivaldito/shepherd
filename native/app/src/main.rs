@@ -181,6 +181,13 @@ enum PendingClose {
     Pane(String),
 }
 
+/// A text that fills the height of its row and sits in the middle of it, so texts of different sizes in one row
+/// share a centre line (without it each sits at the top of its own line box).
+fn vcenter<'a>(t: iced::widget::Text<'a>) -> iced::widget::Text<'a> {
+    t.height(Length::Fill)
+        .align_y(iced::alignment::Vertical::Center)
+}
+
 fn focus_action_for_pane(pane: String) -> Action {
     Action::FocusPane(pane)
 }
@@ -2612,12 +2619,15 @@ impl App {
                 Some(PendingClose::Workspace(w)) if *w == id
             );
             let chevron = button(
-                container(
+                // the open chevron sits low in its box: lifted 2 px so its centre is the centre of the name
+                container(vcenter(
                     text(if open { "⌄" } else { "›" })
                         .size(13)
                         .color(theme::FAINT),
-                )
-                .center(Length::Fill),
+                ))
+                .padding(pad(0.0, 0.0, if open { 4.0 } else { 0.0 }, 0.0))
+                .center_x(Length::Fill)
+                .height(Length::Fill),
             )
             .padding(0)
             .width(22)
@@ -2631,6 +2641,7 @@ impl App {
                     _ => "Confirm: close".to_owned(),
                 };
                 row![
+                    Space::new().width(3),
                     chevron,
                     button(
                         container(text(confirm).size(11).font(theme::MONO_BOLD))
@@ -2660,15 +2671,16 @@ impl App {
                                     ..container::Style::default()
                                 }
                             }),
-                            text(name).size(12.5).color(if current {
+                            vcenter(text(name).size(12.5).color(if current {
                                 theme::HI
                             } else {
                                 theme::TEXT2
-                            }),
+                            })),
                             container(text("")).width(Length::Fill),
-                            text(roll.label.clone()).size(10.5).color(roll.label_color),
+                            vcenter(text(roll.label.clone()).size(10.5).color(roll.label_color)),
                         ]
                         .spacing(8)
+                        .height(Length::Fill)
                         .align_y(iced::Alignment::Center),
                     )
                     .center_y(Length::Fill),
@@ -2685,14 +2697,20 @@ impl App {
                     },
                 ));
                 row![
+                    Space::new().width(3),
                     chevron,
                     name_btn,
-                    button(container(text("×").size(11).color(theme::FAINT)).center(Length::Fill))
-                        .padding(0)
-                        .width(24)
-                        .height(24)
-                        .style(theme::close_button_style())
-                        .on_press(Message::CloseWorkspace(id.clone())),
+                    button(
+                        container(vcenter(text("×").size(11).color(theme::FAINT)))
+                            .padding(pad(2.0, 0.0, 0.0, 0.0))
+                            .center_x(Length::Fill)
+                            .height(Length::Fill)
+                    )
+                    .padding(0)
+                    .width(24)
+                    .height(24)
+                    .style(theme::close_button_style())
+                    .on_press(Message::CloseWorkspace(id.clone())),
                     Space::new().width(3),
                 ]
                 .align_y(iced::Alignment::Center)
@@ -2725,13 +2743,13 @@ impl App {
                     let armed = self.pending_close == Some(PendingClose::Pane(pane_id.to_owned()));
                     tooltip(
                         button(
-                            container(text("×").size(13).color(if armed {
+                            container(vcenter(text("×").size(13).color(if armed {
                                 theme::BG
                             } else {
                                 DIM
-                            }))
+                            })))
                             .center_x(Length::Fill)
-                            .center_y(Length::Fill),
+                            .height(Length::Fill),
                         )
                         .padding(0)
                         .width(22)
@@ -2799,16 +2817,19 @@ impl App {
                             container(
                                 row![
                                     icon,
-                                    text(sidebar::ellipsize(
-                                        &agent.display_name(),
-                                        sidebar::agent_name_max_chars(&word)
-                                    ))
-                                    .size(12.5)
-                                    .color(theme::FG),
+                                    vcenter(
+                                        text(sidebar::ellipsize(
+                                            &agent.display_name(),
+                                            sidebar::agent_name_max_chars(&word)
+                                        ))
+                                        .size(12.5)
+                                        .color(theme::FG)
+                                    ),
                                     container(text("")).width(Length::Fill),
-                                    text(word).size(10.5).color(color),
+                                    vcenter(text(word).size(10.5).color(color)),
                                 ]
                                 .spacing(8)
+                                .height(Length::Fill)
                                 .align_y(iced::Alignment::Center),
                             )
                             .center_y(Length::Fill),
@@ -2881,19 +2902,25 @@ impl App {
                         let shell_button = button(
                             container(
                                 row![
-                                    container(text(sidebar::SHELL_ICON).size(11))
+                                    container(vcenter(text(sidebar::SHELL_ICON).size(11)))
+                                        .padding(pad(4.0, 0.0, 0.0, 0.0))
                                         .width(15)
-                                        .height(15)
-                                        .center(15),
-                                    text(sidebar::ellipsize(&name, 14))
-                                        .size(12.5)
-                                        .color(theme::FG),
+                                        .center_x(15)
+                                        .height(Length::Fill),
+                                    vcenter(
+                                        text(sidebar::ellipsize(&name, 10))
+                                            .size(12.5)
+                                            .color(theme::FG)
+                                    ),
                                     container(text("")).width(Length::Fill),
-                                    text(sidebar::ellipsize(&where_, 12))
-                                        .size(10.5)
-                                        .color(theme::FAINT),
+                                    vcenter(
+                                        text(sidebar::ellipsize(&where_, 6))
+                                            .size(10.5)
+                                            .color(theme::FAINT)
+                                    ),
                                 ]
                                 .spacing(8)
+                                .height(Length::Fill)
                                 .align_y(iced::Alignment::Center),
                             )
                             .center_y(Length::Fill),
@@ -2965,7 +2992,7 @@ impl App {
                     )
                     .padding(pad(4.0, 0.0, 0.0, 0.0)),
                 );
-                // indent 10, a 1 px guide, then the content (191 wide)
+                // indent 10, a 1 px guide, then the content between two equal 8 px gaps (185 wide)
                 block = block.push(
                     row![
                         Space::new().width(10),
@@ -2976,8 +3003,9 @@ impl App {
                                 background: Some(Background::Color(theme::LINE)),
                                 ..container::Style::default()
                             }),
-                        Space::new().width(10),
+                        Space::new().width(8),
                         container(inner).width(Length::Fill),
+                        Space::new().width(8),
                     ]
                     .padding(pad(6.0, 0.0, 4.0, 0.0)),
                 );

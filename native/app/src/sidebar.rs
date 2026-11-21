@@ -107,17 +107,19 @@ pub fn ellipsize(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// Workspace name: the 161 px button − 8 padding − 7 square − 2 × 8 gaps = 130 px, minus the label
+/// Workspace name: the 158 px button (3 px gap at each end, as wide as the room between them) − 8 padding − 7 square
+/// − 2 × 8 gaps = 127 px, minus the label
 /// (JetBrains Mono advances 0.6 em: 7.5 px at 12.5, 6.3 px at 10.5).
 pub fn ws_name_max_chars(label: &str) -> usize {
     let label_px = label.chars().count() as f32 * 6.3;
-    ((130.0 - label_px) / 7.5).floor().max(3.0) as usize
+    ((127.0 - label_px) / 7.5).floor().max(3.0) as usize
 }
 
-/// Agent name: the 191 px row − 2 border − 12 padding − 15 icon − 2 × 8 gaps = 146 px, minus the label.
+/// Agent name: the 185 px row (two equal 8 px gaps beside the guide) − 22 close button − 2 gap = 161 px button
+/// − 2 border − 12 padding − 15 icon − 2 × 8 gaps = 116 px, minus the label.
 pub fn agent_name_max_chars(label: &str) -> usize {
     let label_px = label.chars().count() as f32 * 6.3;
-    ((146.0 - label_px) / 7.5).floor().max(3.0) as usize
+    ((116.0 - label_px) / 7.5).floor().max(3.0) as usize
 }
 
 /// What closing a workspace asks for (spec 4.2.7).
@@ -186,12 +188,14 @@ mod tests {
 
     #[test]
     fn long_names_end_in_an_ellipsis_by_the_character_counts_of_the_spec() {
-        // the spec's example: the label "1 needs you" leaves 8 characters
-        assert_eq!(ws_name_max_chars("1 needs you"), 8);
+        // the spec's example leaves 8 characters for the label "1 needs you"; with the same 3 px gap at both ends of
+        // the workspace row it leaves 7
+        assert_eq!(ws_name_max_chars("1 needs you"), 7);
         assert_eq!(ellipsize("alpha", 8), "alpha");
         assert_eq!(ellipsize("frontend-redesign", 8), "fronten…");
         assert_eq!(ws_name_max_chars(&"x".repeat(40)), 3, "never under 3");
-        assert!(agent_name_max_chars("working") > ws_name_max_chars("working"));
+        // an agent row also holds the close button, so it has less room than a workspace row
+        assert!(agent_name_max_chars("working") < ws_name_max_chars("working"));
     }
 
     #[test]
