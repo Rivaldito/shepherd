@@ -16,6 +16,8 @@ publish() { # <asset> <script body>
 }
 publish "$core" core-binary
 publish "$gui" native-binary
+publish shepherd-icon-256.png icon256
+publish shepherd-icon-512.png icon512
 
 PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')"
 (cd "$T/rel" && python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1) & SRV=$!
@@ -29,11 +31,18 @@ fresh; sh "$ROOT/install.sh" >/dev/null 2>&1
 [ "$("$T/home/bin/shepherd")" = "core-binary" ] || fail "the core does not run"
 [ "$("$T/home/bin/shepherd-native")" = "native-binary" ] || fail "the desktop app does not run"
 echo "ok: installs the core and the desktop app"
+D="$T/home/.local/share"
+grep -q icon256 "$D/icons/hicolor/256x256/apps/shepherd-native.png" || fail "no 256 icon"
+grep -q icon512 "$D/icons/hicolor/512x512/apps/shepherd-native.png" || fail "no 512 icon"
+grep -q '^Icon=shepherd-native$' "$D/applications/shepherd-native.desktop" || fail "no desktop entry with the icon"
+grep -q "^Exec=$T/home/bin/shepherd-native\$" "$D/applications/shepherd-native.desktop" || fail "desktop entry does not run the installed app"
+echo "ok: adds the menu entry and the icon (Linux)"
 
 # 2. SHEPHERD_NO_GUI=1 skips the app
-fresh; SHEPHERD_NO_GUI=1 sh "$ROOT/install.sh" >/dev/null 2>&1
+rm -rf "$D"; fresh; SHEPHERD_NO_GUI=1 sh "$ROOT/install.sh" >/dev/null 2>&1
 [ -x "$T/home/bin/shepherd" ] || fail "no core with SHEPHERD_NO_GUI=1"
 [ ! -e "$T/home/bin/shepherd-native" ] || fail "installed the app despite SHEPHERD_NO_GUI=1"
+[ ! -e "$D/applications/shepherd-native.desktop" ] || fail "added a menu entry despite SHEPHERD_NO_GUI=1"
 echo "ok: SHEPHERD_NO_GUI=1 installs only the core"
 
 # 3. a release without the app still installs the core and succeeds

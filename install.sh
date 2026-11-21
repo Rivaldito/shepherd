@@ -2,7 +2,8 @@
 # Shepherd installer: downloads the prebuilt binaries for your system from a GitHub release, checks their
 # SHA-256 and installs them into ~/.local/bin:
 #   shepherd         the server, the cli and the terminal ui
-#   shepherd-native  the native desktop app (skipped with SHEPHERD_NO_GUI=1)
+#   shepherd-native  the native desktop app (skipped with SHEPHERD_NO_GUI=1); on Linux it also gets a menu entry
+#                    and its icon under ~/.local/share (applications/ and icons/)
 #
 #   curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh | sh
 #
@@ -78,6 +79,7 @@ main() {
         log "skipping the desktop app (SHEPHERD_NO_GUI=1)"
     elif fetch "shepherd-native-${os}-${arch}" "shepherd-native" optional; then
         GUI=1
+        [ "$os" = "linux" ] && install_desktop_entry
     else
         warn "the desktop app was not installed; the terminal ui in 'shepherd' works without it"
     fi
@@ -123,9 +125,27 @@ HINT
     echo ""
 }
 
-# fetch <asset> <installed name> <required|optional>: download, verify the SHA-256 and install one binary.
+# install_desktop_entry: a menu entry and the icon, so the menu and the dock show Shepherd with its logo (under Wayland
+# the dock finds the icon through the entry, whose id is shepherd-native). Optional: without it the app still runs.
+install_desktop_entry() {
+    DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
+    ICONS="${DATA}/icons/hicolor"
+    for size in 256 512; do
+        fetch "shepherd-icon-${size}.png" "shepherd-native.png" optional "${ICONS}/${size}x${size}/apps" || return 0
+    done
+    mkdir -p "${DATA}/applications"
+    printf '[Desktop Entry]\nType=Application\nName=Shepherd\nComment=Teams of coding agents\nExec=%s\nIcon=shepherd-native\nTerminal=false\nCategories=Development;\nStartupWMClass=shepherd-native\n' \
+        "${INSTALL_DIR}/shepherd-native" > "${DATA}/applications/shepherd-native.desktop"
+    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "${DATA}/applications" 2>/dev/null
+    command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t "$ICONS" 2>/dev/null
+    log "added ${DATA}/applications/shepherd-native.desktop"
+    return 0
+}
+
+# fetch <asset> <installed name> <required|optional> [dir]: download, verify the SHA-256 and install one file (a
+# binary into the install dir by default; with a dir it is copied there, not made executable).
 fetch() {
-    asset="$1"; name="$2"; mode="$3"
+    asset="$1"; name="$2"; mode="$3"; dir="${4:-}"
     fail() { if [ "$mode" = "required" ]; then err "$1"; else warn "$1"; return 1; fi; }
 
     curl -fsSL --retry 3 --connect-timeout 10 --max-time 180 "${BASE}/${asset}" -o "${TMP}/${asset}" \
@@ -143,9 +163,11 @@ fetch() {
     esac
     [ "$actual" = "$expected" ] || { fail "${asset} does not match its checksum; it was not installed"; return 1; }
 
-    mv "${TMP}/${asset}" "${INSTALL_DIR}/${name}"
-    chmod +x "${INSTALL_DIR}/${name}"
-    log "installed ${INSTALL_DIR}/${name} (checksum ok)"
+    dest="${dir:-$INSTALL_DIR}"
+    mkdir -p "$dest"
+    mv "${TMP}/${asset}" "${dest}/${name}"
+    [ -n "$dir" ] || chmod +x "${dest}/${name}"
+    log "installed ${dest}/${name} (checksum ok)"
 }
 
 log()  { printf '  \033[32m>\033[0m %s\n' "$1"; }
