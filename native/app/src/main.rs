@@ -164,6 +164,7 @@ pub(crate) enum Action {
     CloseSpace(String, bool),
     FocusTab(String),
     CloseTab(String),
+    ClosePane(String),
     FocusAgent(String),
     FocusPane(String),
     NewTab(String),
@@ -176,6 +177,15 @@ enum PendingClose {
         tab_id: String,
         workspace_id: String,
     },
+    /// A terminal of the sidebar: its `×` was clicked once.
+    Pane(String),
+}
+
+/// A text that fills the height of its row and sits in the middle of it, so texts of different sizes in one row
+/// share a centre line (without it each sits at the top of its own line box).
+fn vcenter<'a>(t: iced::widget::Text<'a>) -> iced::widget::Text<'a> {
+    t.height(Length::Fill)
+        .align_y(iced::alignment::Vertical::Center)
 }
 
 fn focus_action_for_pane(pane: String) -> Action {
@@ -250,6 +260,8 @@ enum Message {
     /// One frame of the demo film: its number and the picture.
     FilmShot(u32, iced::window::Screenshot),
     ArmClose(PendingClose),
+    /// The `×` of a terminal in the sidebar: the first click arms it, the second closes the terminal.
+    ClosePane(String, String),
     ContextMenuOpened(ContextMenuTarget),
     ContextMenuClosed,
     /// A destructive item of the context menu: the first click arms it, the second sends `then`.
@@ -479,6 +491,18 @@ impl App {
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
     }
 
+    /// What a (re)connection asks for: the data again, now and once more a few seconds later. The server of a restart
+    /// answers before its Shepherd layer is up, and the version and layer notice must not outlive the old server.
+    fn refresh_after_connect(&mut self) -> Task<Message> {
+        Task::batch([
+            self.reload(),
+            Task::perform(async { std::thread::sleep(Duration::from_secs(3)) }, |_| {
+                Message::Reload
+            }),
+            refresh_sessions(),
+        ])
+    }
+
     /// Asks for a data load. While one runs, the request is kept and one more load starts when it ends.
     fn reload(&mut self) -> Task<Message> {
         if !self.reloads.request() {
@@ -610,7 +634,7 @@ impl App {
                         refresh_sessions(),
                     ]);
                 }
-                return refresh_sessions();
+                return self.refresh_after_connect();
             }
             Message::Lost(why) => {
                 self.sender = None;
@@ -1019,6 +1043,7 @@ impl App {
                     ),
                     Action::FocusTab(id) => ("tab.focus", serde_json::json!({ "tab_id": id })),
                     Action::CloseTab(id) => ("tab.close", serde_json::json!({ "tab_id": id })),
+                    Action::ClosePane(id) => ("pane.close", serde_json::json!({ "pane_id": id })),
                     Action::FocusAgent(id) => ("agent.focus", serde_json::json!({ "target": id })),
                     Action::FocusPane(id) => ("pane.focus", serde_json::json!({ "pane_id": id })),
                     Action::NewTab(workspace) => (
@@ -1031,6 +1056,15 @@ impl App {
                     async move { api::call(&socket, method, params).map(|_| ()) },
                     Message::Acted,
                 );
+            }
+            Message::ClosePane(pane, name) => {
+                let pending = PendingClose::Pane(pane.clone());
+                if self.pending_close.as_ref() == Some(&pending) {
+                    self.pending_close = None;
+                    self.panel.notify(ui::info(&format!("Closed {name}.")));
+                    return Task::done(Message::Act(Action::ClosePane(pane)));
+                }
+                self.pending_close = Some(pending);
             }
             Message::ArmClose(pending) => {
                 self.pending_close = Some(pending);
@@ -2585,12 +2619,15 @@ impl App {
                 Some(PendingClose::Workspace(w)) if *w == id
             );
             let chevron = button(
-                container(
+                // the open chevron sits low in its box: lifted 2 px so its centre is the centre of the name
+                container(vcenter(
                     text(if open { "⌄" } else { "›" })
                         .size(13)
                         .color(theme::FAINT),
-                )
-                .center(Length::Fill),
+                ))
+                .padding(pad(0.0, 0.0, if open { 4.0 } else { 0.0 }, 0.0))
+                .center_x(Length::Fill)
+                .height(Length::Fill),
             )
             .padding(0)
             .width(22)
@@ -2604,6 +2641,7 @@ impl App {
                     _ => "Confirm: close".to_owned(),
                 };
                 row![
+                    Space::new().width(3),
                     chevron,
                     button(
                         container(text(confirm).size(11).font(theme::MONO_BOLD))
@@ -2633,15 +2671,16 @@ impl App {
                                     ..container::Style::default()
                                 }
                             }),
-                            text(name).size(12.5).color(if current {
+                            vcenter(text(name).size(12.5).color(if current {
                                 theme::HI
                             } else {
                                 theme::TEXT2
-                            }),
+                            })),
                             container(text("")).width(Length::Fill),
-                            text(roll.label.clone()).size(10.5).color(roll.label_color),
+                            vcenter(text(roll.label.clone()).size(10.5).color(roll.label_color)),
                         ]
                         .spacing(8)
+                        .height(Length::Fill)
                         .align_y(iced::Alignment::Center),
                     )
                     .center_y(Length::Fill),
@@ -2658,14 +2697,20 @@ impl App {
                     },
                 ));
                 row![
+                    Space::new().width(3),
                     chevron,
                     name_btn,
-                    button(container(text("×").size(11).color(theme::FAINT)).center(Length::Fill))
-                        .padding(0)
-                        .width(24)
-                        .height(24)
-                        .style(theme::close_button_style())
-                        .on_press(Message::CloseWorkspace(id.clone())),
+                    button(
+                        container(vcenter(text("×").size(11).color(theme::FAINT)))
+                            .padding(pad(2.0, 0.0, 0.0, 0.0))
+                            .center_x(Length::Fill)
+                            .height(Length::Fill)
+                    )
+                    .padding(0)
+                    .width(24)
+                    .height(24)
+                    .style(theme::close_button_style())
+                    .on_press(Message::CloseWorkspace(id.clone())),
                     Space::new().width(3),
                 ]
                 .align_y(iced::Alignment::Center)
@@ -2693,11 +2738,43 @@ impl App {
                 // the tabs themselves are in the tab bar of the terminal
                 let tabs: Vec<_> = self.snapshot.tabs_of(&id).collect();
                 let mut inner = column![].spacing(0).width(Length::Fill);
+                // the `×` of a terminal row: two clicks (the first turns it red), because it ends what runs in it
+                let close_button = |pane_id: &str, name: String| -> Element<'_, Message> {
+                    let armed = self.pending_close == Some(PendingClose::Pane(pane_id.to_owned()));
+                    tooltip(
+                        button(
+                            container(vcenter(text("×").size(13).color(if armed {
+                                theme::BG
+                            } else {
+                                DIM
+                            })))
+                            .center_x(Length::Fill)
+                            .height(Length::Fill),
+                        )
+                        .padding(0)
+                        .width(22)
+                        .height(sidebar::AGENT_ROW_H)
+                        .style(move |t, status| {
+                            if armed {
+                                theme::destructive_button_style()(t, status)
+                            } else {
+                                theme::ghost_button_style()(t, status)
+                            }
+                        })
+                        .on_press(Message::ClosePane(pane_id.to_owned(), name)),
+                        text(if armed {
+                            "Click again: closes this terminal"
+                        } else {
+                            "Close this terminal"
+                        })
+                        .size(11),
+                        tooltip::Position::Left,
+                    )
+                    .into()
+                };
                 // one row per pane that runs an agent, in tab order and then pane order
-                let mut agent_rows = 0;
                 for tab in &tabs {
                     for agent in mine.iter().filter(|a| a.tab_id == tab.tab_id) {
-                        agent_rows += 1;
                         let status = agent_state(agent);
                         let flagged = needs_human(agent);
                         let urgent = status == Status::Blocked || flagged;
@@ -2734,64 +2811,155 @@ impl App {
                         } else {
                             Message::Act(Action::FocusPane(agent.pane_id.clone()))
                         };
-                        inner = inner.push(
-                            button(
-                                container(
-                                    row![
-                                        icon,
+                        let pane_for_close = agent.pane_id.clone();
+                        let name_for_close = agent.display_name();
+                        let agent_button = button(
+                            container(
+                                row![
+                                    icon,
+                                    vcenter(
                                         text(sidebar::ellipsize(
                                             &agent.display_name(),
                                             sidebar::agent_name_max_chars(&word)
                                         ))
                                         .size(12.5)
-                                        .color(theme::FG),
-                                        container(text("")).width(Length::Fill),
-                                        text(word).size(10.5).color(color),
-                                    ]
-                                    .spacing(8)
-                                    .align_y(iced::Alignment::Center),
-                                )
-                                .center_y(Length::Fill),
+                                        .color(theme::FG)
+                                    ),
+                                    container(text("")).width(Length::Fill),
+                                    vcenter(text(word).size(10.5).color(color)),
+                                ]
+                                .spacing(8)
+                                .height(Length::Fill)
+                                .align_y(iced::Alignment::Center),
                             )
-                            .padding([0, 6])
-                            .width(Length::Fill)
-                            .height(sidebar::AGENT_ROW_H)
-                            .style(move |_, status| {
-                                let hot = matches!(
-                                    status,
-                                    button::Status::Hovered | button::Status::Pressed
-                                );
-                                button::Style {
-                                    background: if focused {
-                                        Some(Background::Color(theme::SURFACE))
+                            .center_y(Length::Fill),
+                        )
+                        .padding([0, 6])
+                        .width(Length::Fill)
+                        .height(sidebar::AGENT_ROW_H)
+                        .style(move |_, status| {
+                            let hot =
+                                matches!(status, button::Status::Hovered | button::Status::Pressed);
+                            button::Style {
+                                background: if focused {
+                                    Some(Background::Color(theme::SURFACE))
+                                } else {
+                                    hot.then_some(Background::Color(theme::HOVER))
+                                },
+                                text_color: theme::FG,
+                                border: Border {
+                                    color: if focused {
+                                        Color {
+                                            a: 0.55,
+                                            ..theme::ACCENT
+                                        }
                                     } else {
-                                        hot.then_some(Background::Color(theme::HOVER))
+                                        Color::TRANSPARENT
                                     },
-                                    text_color: theme::FG,
-                                    border: Border {
-                                        color: if focused {
-                                            Color {
-                                                a: 0.55,
-                                                ..theme::ACCENT
-                                            }
-                                        } else {
-                                            Color::TRANSPARENT
-                                        },
-                                        width: 1.0,
-                                        radius: 5.0.into(),
-                                    },
-                                    ..button::Style::default()
-                                }
-                            })
-                            .on_press(target),
+                                    width: 1.0,
+                                    radius: 5.0.into(),
+                                },
+                                ..button::Style::default()
+                            }
+                        })
+                        .on_press(target);
+                        inner = inner.push(
+                            row![agent_button, close_button(&pane_for_close, name_for_close)]
+                                .spacing(2)
+                                .align_y(iced::Alignment::Center),
                         );
                     }
                 }
-                if let Some(line) = sidebar::shells_line(shells, agent_rows) {
-                    inner = inner.push(
-                        container(text(line).size(10.5).color(theme::FAINT))
-                            .padding(pad(3.0, 6.0, 0.0, 6.0)),
-                    );
+                // the plain shells, one row each, after the agents
+                for tab in &tabs {
+                    for pane in self.snapshot.panes.iter().filter(|p| {
+                        p.tab_id == tab.tab_id && !mine.iter().any(|a| a.pane_id == p.pane_id)
+                    }) {
+                        let name =
+                            pane.label
+                                .clone()
+                                .filter(|l| !l.is_empty())
+                                .unwrap_or_else(|| {
+                                    // an unnamed shell is called after its tab ("terminal 2", or the tab's own name)
+                                    if tab.label.chars().all(|c| c.is_ascii_digit()) {
+                                        format!("terminal {}", tab.label)
+                                    } else {
+                                        tab.label.clone()
+                                    }
+                                });
+                        let where_ = pane
+                            .cwd
+                            .as_deref()
+                            .and_then(|c| std::path::Path::new(c).file_name())
+                            .map(|f| f.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        let focused = !in_shepherd && pane.focused;
+                        let target = if in_shepherd {
+                            Message::GoToPane(pane.pane_id.clone())
+                        } else {
+                            Message::Act(Action::FocusPane(pane.pane_id.clone()))
+                        };
+                        let shell_button = button(
+                            container(
+                                row![
+                                    container(vcenter(text(sidebar::SHELL_ICON).size(11)))
+                                        .padding(pad(4.0, 0.0, 0.0, 0.0))
+                                        .width(15)
+                                        .center_x(15)
+                                        .height(Length::Fill),
+                                    vcenter(
+                                        text(sidebar::ellipsize(&name, 10))
+                                            .size(12.5)
+                                            .color(theme::FG)
+                                    ),
+                                    container(text("")).width(Length::Fill),
+                                    vcenter(
+                                        text(sidebar::ellipsize(&where_, 6))
+                                            .size(10.5)
+                                            .color(theme::FAINT)
+                                    ),
+                                ]
+                                .spacing(8)
+                                .height(Length::Fill)
+                                .align_y(iced::Alignment::Center),
+                            )
+                            .center_y(Length::Fill),
+                        )
+                        .padding([0, 6])
+                        .width(Length::Fill)
+                        .height(sidebar::AGENT_ROW_H)
+                        .style(move |_, status| {
+                            let hot =
+                                matches!(status, button::Status::Hovered | button::Status::Pressed);
+                            button::Style {
+                                background: if focused {
+                                    Some(Background::Color(theme::SURFACE))
+                                } else {
+                                    hot.then_some(Background::Color(theme::HOVER))
+                                },
+                                text_color: theme::FG,
+                                border: Border {
+                                    color: if focused {
+                                        Color {
+                                            a: 0.55,
+                                            ..theme::ACCENT
+                                        }
+                                    } else {
+                                        Color::TRANSPARENT
+                                    },
+                                    width: 1.0,
+                                    radius: 5.0.into(),
+                                },
+                                ..button::Style::default()
+                            }
+                        })
+                        .on_press(target);
+                        inner = inner.push(
+                            row![shell_button, close_button(&pane.pane_id, name.clone())]
+                                .spacing(2)
+                                .align_y(iced::Alignment::Center),
+                        );
+                    }
                 }
                 if panes == 0 {
                     inner = inner.push(
@@ -2824,7 +2992,7 @@ impl App {
                     )
                     .padding(pad(4.0, 0.0, 0.0, 0.0)),
                 );
-                // indent 10, a 1 px guide, then the content (191 wide)
+                // indent 10, a 1 px guide, then the content between two equal 8 px gaps (185 wide)
                 block = block.push(
                     row![
                         Space::new().width(10),
@@ -2835,8 +3003,9 @@ impl App {
                                 background: Some(Background::Color(theme::LINE)),
                                 ..container::Style::default()
                             }),
-                        Space::new().width(10),
+                        Space::new().width(8),
                         container(inner).width(Length::Fill),
+                        Space::new().width(8),
                     ]
                     .padding(pad(6.0, 0.0, 4.0, 0.0)),
                 );
@@ -3293,6 +3462,18 @@ fn connection() -> impl iced::futures::Stream<Item = Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// After a restart the app reconnects to a new server; the data (its version, its Shepherd layer) is read again,
+    /// else the "older server" notice stays on screen.
+    #[test]
+    fn connecting_asks_for_the_data_again() {
+        let (mut app, _) = App::boot();
+        // boot started a load; let it end as it would
+        let _ = app.reloads.finished();
+        let _ = app.refresh_after_connect();
+        // a load is now running: a new request is kept for later instead of starting one
+        assert!(!app.reloads.request());
+    }
 
     /// The window opens on a terminal. A view of the sidebar (Orchestrate, Inspect) must open on the first click,
     /// not only select a tab of a panel that is not on screen.
