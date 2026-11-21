@@ -95,19 +95,25 @@ pub struct Data {
     pub layer_off: bool,
 }
 
+/// Whether two versions are the same release: the build channel (`-beta`) is not part of it. The server reports
+/// `0.3.6-beta` while the app is built as `0.3.6` from the same source, and that is not a mismatch.
+fn same_release(a: &str, b: &str) -> bool {
+    a.split('-').next() == b.split('-').next()
+}
+
 /// What to tell the person when the server is not the one this app belongs to, or has the Shepherd layer off.
 /// `None` when all is as it should be.
 pub fn server_notice(data: &Data, app_version: &str) -> Option<String> {
     if data.layer_off {
         return Some(match data.server_version.as_deref() {
-            Some(v) if v != app_version => format!(
+            Some(v) if !same_release(v, app_version) => format!(
                 "The server that is running is {v}, an older version than this app ({app_version}), and its orchestration is off. Restart it to get patterns, runs and agents: `shepherd server stop`, then `shepherd` (that closes the terminals of this session)."
             ),
             _ => "The orchestration is off on this server (`shepherd.enabled = false` in your config), so patterns, runs and agents are unavailable. Turn it on in `~/.config/shepherd/config.toml`, then restart the server: `shepherd server stop`, then `shepherd`.".to_owned(),
         });
     }
     match data.server_version.as_deref() {
-        Some(v) if v != app_version => Some(format!(
+        Some(v) if !same_release(v, app_version) => Some(format!(
             "The server that is running is {v}; this app is {app_version}. Restart the server to use the new version: `shepherd server stop`, then `shepherd` (that closes the terminals of this session)."
         )),
         _ => None,
@@ -757,6 +763,13 @@ mod tests {
         assert!(off_old.contains("orchestration is off") && off_old.contains("0.2.3-beta"));
         data.server_version = Some("0.3.1-beta".into());
         assert!(server_notice(&data, "0.3.1-beta").unwrap().contains("shepherd.enabled = false"));
+    }
+
+    #[test]
+    fn the_build_channel_is_not_a_version_mismatch() {
+        let data = Data { server_version: Some("0.3.6-beta".into()), ..Data::default() };
+        assert_eq!(server_notice(&data, "0.3.6"), None, "same release, only the channel differs");
+        assert!(server_notice(&data, "0.3.7").is_some(), "a different release still asks for a restart");
     }
 
     #[test]
