@@ -6,10 +6,16 @@ use iced::widget::canvas;
 use iced::{Font, Point, Rectangle, Size, Theme};
 use shepherd_app_core::wire::{style, Color as Cell, PaneSurface, PaneSurfacePane};
 
-/// JetBrains Mono at 13 px: 0.6 em of advance, and 17 px of line.
-pub const CELL_W: f32 = 7.8;
-pub const CELL_H: f32 = 17.0;
-pub const FONT_SIZE: f32 = 13.0;
+/// JetBrains Mono at 13 px: 0.6 em of advance, and 17 px of line; the terminal zoom scales all three.
+pub fn cell_w() -> f32 {
+    7.8 * crate::zoom::terminal()
+}
+pub fn cell_h() -> f32 {
+    17.0 * crate::zoom::terminal()
+}
+pub fn font_size() -> f32 {
+    13.0 * crate::zoom::terminal()
+}
 
 /// What happened in the terminal area, in terminal cells.
 #[derive(Debug, Clone)]
@@ -66,7 +72,7 @@ type Piece = (f32, f32, f32, f32, f32);
 /// its glyphs leave gaps between rows and between neighbours, which breaks the borders, tables and block
 /// logos that terminal programs draw with them. `None` for anything else (it is drawn as text).
 fn pieces(ch: char) -> Option<Vec<Piece>> {
-    let (w, h) = (CELL_W, CELL_H);
+    let (w, h) = (cell_w(), cell_h());
     let full = |x: f32, y: f32, pw: f32, ph: f32| (x, y, pw, ph, 1.0);
     let c = ch as u32;
     // U+2580..U+259F: halves, eighths, shades and quadrants
@@ -162,7 +168,10 @@ fn pieces(ch: char) -> Option<Vec<Piece>> {
 
 fn cell_of(bounds: Rectangle, cursor: mouse::Cursor) -> Option<(u16, u16)> {
     let position = cursor.position_in(bounds)?;
-    Some(((position.x / CELL_W) as u16, (position.y / CELL_H) as u16))
+    Some((
+        (position.x / cell_w()) as u16,
+        (position.y / cell_h()) as u16,
+    ))
 }
 
 impl canvas::Program<crate::Message> for Grid<'_> {
@@ -229,6 +238,7 @@ impl canvas::Program<crate::Message> for Grid<'_> {
             self.surface.surface_revision,
             self.surface.frame.width,
             self.surface.frame.height,
+            crate::zoom::percent(crate::zoom::Target::Terminal),
         );
         if state.key.get() != Some(key) {
             state.cache.clear();
@@ -241,8 +251,8 @@ impl canvas::Program<crate::Message> for Grid<'_> {
         if let Some(cursor) = self.surface.frame.cursor.as_ref().filter(|c| c.visible) {
             let mut frame = canvas::Frame::new(renderer, bounds.size());
             frame.fill_rectangle(
-                Point::new(cursor.x as f32 * CELL_W, cursor.y as f32 * CELL_H),
-                Size::new(CELL_W, CELL_H),
+                Point::new(cursor.x as f32 * cell_w(), cursor.y as f32 * cell_h()),
+                Size::new(cell_w(), cell_h()),
                 iced::Color {
                     a: 0.45,
                     ..palette::DEFAULT_FG
@@ -254,11 +264,14 @@ impl canvas::Program<crate::Message> for Grid<'_> {
     }
 }
 
+/// What the painted cells depend on: the surface revisions, its size and the terminal zoom.
+type GridKey = (u64, u64, u16, u16, u32);
+
 /// What the grid keeps between frames: the painted cells and the surface they were painted from.
 #[derive(Default)]
 pub struct GridState {
     cache: canvas::Cache,
-    key: std::cell::Cell<Option<(u64, u64, u16, u16)>>,
+    key: std::cell::Cell<Option<GridKey>>,
 }
 
 /// How a run of text looks: all of its cells share it.
@@ -276,8 +289,8 @@ impl Grid<'_> {
         let width = data.width.max(1) as usize;
         let origin_of = |index: usize| {
             Point::new(
-                (index % width) as f32 * CELL_W,
-                (index / width) as f32 * CELL_H,
+                (index % width) as f32 * cell_w(),
+                (index / width) as f32 * cell_h(),
             )
         };
         // what each cell looks like once reverse video and dim are applied
@@ -305,7 +318,7 @@ impl Grid<'_> {
             if let Some((first, n, color)) = run.take() {
                 frame.fill_rectangle(
                     origin_of(first),
-                    Size::new(CELL_W * n as f32, CELL_H),
+                    Size::new(cell_w() * n as f32, cell_h()),
                     color,
                 );
             }
@@ -335,7 +348,7 @@ impl Grid<'_> {
                     content,
                     position: origin_of(first),
                     color: look.color,
-                    size: FONT_SIZE.into(),
+                    size: font_size().into(),
                     font: font_of(look),
                     ..canvas::Text::default()
                 });
@@ -359,8 +372,8 @@ impl Grid<'_> {
                 if ch == '\u{23FA}' {
                     put(frame, &mut text);
                     let circle = canvas::Path::circle(
-                        Point::new(origin.x + CELL_W / 2.0, origin.y + CELL_H / 2.0),
-                        CELL_W * 0.4,
+                        Point::new(origin.x + cell_w() / 2.0, origin.y + cell_h() / 2.0),
+                        cell_w() * 0.4,
                     );
                     frame.fill(&circle, color);
                     continue;
@@ -405,7 +418,7 @@ impl Grid<'_> {
                             content: cell.symbol.clone(),
                             position: origin,
                             color,
-                            size: FONT_SIZE.into(),
+                            size: font_size().into(),
                             font: font_of(look),
                             ..canvas::Text::default()
                         });
@@ -414,15 +427,15 @@ impl Grid<'_> {
             }
             if cell.modifier & style::UNDERLINED != 0 {
                 frame.fill_rectangle(
-                    Point::new(origin.x, origin.y + CELL_H - 2.0),
-                    Size::new(CELL_W, 1.0),
+                    Point::new(origin.x, origin.y + cell_h() - 2.0),
+                    Size::new(cell_w(), 1.0),
                     color,
                 );
             }
             if cell.modifier & style::CROSSED_OUT != 0 {
                 frame.fill_rectangle(
-                    Point::new(origin.x, origin.y + CELL_H / 2.0),
-                    Size::new(CELL_W, 1.0),
+                    Point::new(origin.x, origin.y + cell_h() / 2.0),
+                    Size::new(cell_w(), 1.0),
                     color,
                 );
             }
@@ -482,10 +495,10 @@ mod tests {
     #[test]
     fn blocks_and_box_lines_fill_their_cell_without_gaps() {
         // a full block is the whole cell, a half block is half of it
-        assert_eq!(pieces('█'), Some(vec![(0.0, 0.0, CELL_W, CELL_H, 1.0)]));
+        assert_eq!(pieces('█'), Some(vec![(0.0, 0.0, cell_w(), cell_h(), 1.0)]));
         assert_eq!(
             pieces('▀'),
-            Some(vec![(0.0, 0.0, CELL_W, CELL_H / 2.0, 1.0)])
+            Some(vec![(0.0, 0.0, cell_w(), cell_h() / 2.0, 1.0)])
         );
         // the logo's quadrant blocks: ▛ is three quarters, ▝ one
         assert_eq!(pieces('▛').map(|p| p.len()), Some(3));
@@ -494,7 +507,7 @@ mod tests {
         assert_eq!(pieces('▒').map(|p| p[0].4), Some(0.5));
         // a vertical line reaches both edges of its cell, so rows join up
         let v = pieces('│').unwrap();
-        assert_eq!((v[0].1, v[1].1 + v[1].3), (0.0, CELL_H));
+        assert_eq!((v[0].1, v[1].1 + v[1].3), (0.0, cell_h()));
         // a corner has two arms, a cross four; rounded corners are drawn like square ones
         assert_eq!(pieces('┌').map(|p| p.len()), Some(2));
         assert_eq!(pieces('┼').map(|p| p.len()), Some(4));
