@@ -16,6 +16,7 @@ mod sessions;
 mod sidebar;
 mod theme;
 mod ui;
+mod zoom;
 
 use iced::keyboard;
 use iced::widget::canvas::Canvas;
@@ -40,8 +41,6 @@ use theme::{
 const SIDEBAR_W: f32 = 232.0;
 /// The least height of the main area: below it the area scrolls.
 const MAIN_MIN_H: f32 = 600.0;
-/// The height of a terminal row, which the pane headers take.
-const CELL_ROW: f32 = grid::CELL_H;
 const TABBAR_H: f32 = 44.0;
 const STATUS_H: f32 = 28.0;
 /// The top bar is 48 high in all: the 4 px prism strip and the items under it.
@@ -83,6 +82,7 @@ fn main() -> iced::Result {
         .default_font(theme::MONO)
         .subscription(App::subscription)
         .theme(App::theme)
+        .scale_factor(|_| zoom::interface())
         .window(iced::window::Settings {
             size: start_size(),
             icon: window_icon(),
@@ -207,6 +207,8 @@ enum Message {
     /// Leave the current session for the one whose client socket this is.
     SwitchSession(PathBuf),
     ToggleServerMenu,
+    /// A size control of the gear menu: the interface or the terminal, smaller, bigger or back to 100 %.
+    Zoom(zoom::Target, zoom::Change),
     ServerOp(sessions::ServerOp),
     ServerDone(sessions::ServerOp, Result<(), String>),
     /// The `+` of the session row: open the name box.
@@ -411,16 +413,17 @@ struct App {
 
 /// Terminal cells that fit in the window once the sidebar, tab bar and status line are taken out.
 fn terminal_cells(window: Size, sidebar_width: f32) -> (u16, u16) {
-    let cols = ((window.width - sidebar_width - TERM_FRAME) / grid::CELL_W)
+    let cols = ((window.width - sidebar_width - TERM_FRAME) / grid::cell_w())
         .floor()
         .max(20.0) as u16;
     let chrome = STRIP_H + TOPBAR_H + TABBAR_H + STATUS_H + TERM_FRAME;
-    let rows = ((window.height - chrome) / grid::CELL_H).floor().max(5.0) as u16;
+    let rows = ((window.height - chrome) / grid::cell_h()).floor().max(5.0) as u16;
     (cols, rows)
 }
 
 impl App {
     fn boot() -> (Self, Task<Message>) {
+        zoom::load();
         let app = Self {
             palette: std::env::var("SHEPHERD_NATIVE_PALETTE")
                 .ok()
@@ -531,8 +534,8 @@ impl App {
         Geometry {
             cols,
             rows,
-            cell_width_px: grid::CELL_W.round() as u32,
-            cell_height_px: grid::CELL_H.round() as u32,
+            cell_width_px: grid::cell_w().round() as u32,
+            cell_height_px: grid::cell_h().round() as u32,
         }
     }
 
@@ -1271,6 +1274,12 @@ impl App {
                     }
                 }
             }
+            Message::Zoom(target, change) => {
+                zoom::apply(target, change);
+                // the terminal has a different number of cells (and cell size) now: tell the server again
+                self.sent = None;
+                self.sync_size();
+            }
             Message::ToggleServerMenu => {
                 self.server_menu = !self.server_menu;
                 self.server_armed = None;
@@ -1866,10 +1875,10 @@ impl App {
             };
             let place = |x: u16, y: u16| {
                 pad(
-                    f32::from(y) * grid::CELL_H,
+                    f32::from(y) * grid::cell_h(),
                     0.0,
                     0.0,
-                    f32::from(x) * grid::CELL_W,
+                    f32::from(x) * grid::cell_w(),
                 )
             };
             // an outline: orange when the agent needs the human, cyan on the focused pane of several
@@ -1887,8 +1896,8 @@ impl App {
                 out.push(
                     container(
                         container(text(""))
-                            .width(f32::from(pane.rect.width) * grid::CELL_W)
-                            .height(f32::from(pane.rect.height) * grid::CELL_H)
+                            .width(f32::from(pane.rect.width) * grid::cell_w())
+                            .height(f32::from(pane.rect.height) * grid::cell_h())
                             .style(move |_| container::Style {
                                 border: Border {
                                     color,
@@ -1905,7 +1914,7 @@ impl App {
             let mini = |label: &'static str, msg: Message| {
                 button(text(label).size(10.5))
                     .padding([0, 7])
-                    .height(CELL_ROW)
+                    .height(grid::cell_h())
                     .style(theme::link_button_style())
                     .on_press(msg)
             };
@@ -1933,8 +1942,8 @@ impl App {
             ));
             let strip = container(strip)
                 .padding([0, 8])
-                .width(f32::from(pane.rect.width) * grid::CELL_W)
-                .height(CELL_ROW)
+                .width(f32::from(pane.rect.width) * grid::cell_w())
+                .height(grid::cell_h())
                 .style(theme::bar_style);
             out.push(
                 container(strip)
@@ -3091,7 +3100,7 @@ impl App {
             .height(28)
             .style(theme::ghost_button_style())
             .on_press(Message::ToggleServerMenu),
-            text("Server: restart or stop").size(11),
+            text("Sizes and server").size(11),
             tooltip::Position::Top,
         );
         let bottom: Element<'_, Message> = {
@@ -3122,9 +3131,43 @@ impl App {
                     })
                     .on_press(Message::ServerOp(op))
                 };
+                let size_row = |label: &'static str, target: zoom::Target| {
+                    let step = |glyph: &'static str, change: zoom::Change| {
+                        button(
+                            container(text(glyph).size(13))
+                                .center_x(Length::Fill)
+                                .center_y(Length::Fill),
+                        )
+                        .padding(0)
+                        .width(28)
+                        .height(28)
+                        .style(theme::ghost_button_style())
+                        .on_press(Message::Zoom(target, change))
+                    };
+                    row![
+                        text(label).size(11.5).width(Length::Fill),
+                        step("−", zoom::Change::Smaller),
+                        button(
+                            container(text(format!("{}%", zoom::percent(target))).size(11.5))
+                                .center_x(Length::Fill)
+                                .center_y(Length::Fill)
+                        )
+                        .padding(0)
+                        .width(48)
+                        .height(28)
+                        .style(theme::ghost_button_style())
+                        .on_press(Message::Zoom(target, zoom::Change::Reset)),
+                        step("+", zoom::Change::Bigger),
+                    ]
+                    .spacing(2)
+                    .align_y(iced::Alignment::Center)
+                };
                 column![
                     container(
                         column![
+                            text("SIZE").size(10).color(theme::FAINT),
+                            size_row("Interface", zoom::Target::Interface),
+                            size_row("Terminal", zoom::Target::Terminal),
                             text("SERVER").size(10).color(theme::FAINT),
                             entry(sessions::ServerOp::Restart, "Restart server"),
                             entry(sessions::ServerOp::Stop, "Stop server"),
@@ -3416,8 +3459,8 @@ fn connection() -> impl iced::futures::Stream<Item = Message> {
             let geometry = Geometry {
                 cols: 120,
                 rows: 36,
-                cell_width_px: grid::CELL_W.round() as u32,
-                cell_height_px: grid::CELL_H.round() as u32,
+                cell_width_px: grid::cell_w().round() as u32,
+                cell_height_px: grid::cell_h().round() as u32,
             };
             match Endpoint::connect(&client_socket(), geometry) {
                 Err(e) => {
