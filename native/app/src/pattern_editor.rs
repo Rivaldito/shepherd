@@ -4,7 +4,8 @@
 use crate::theme::{primary_button_style, surface_style, DIM};
 use crate::Message;
 use iced::widget::{
-    button, canvas::Canvas, checkbox, column, container, row, scrollable, text, text_input,
+    button, canvas::Canvas, checkbox, column, container, row, scrollable, text, text_editor,
+    text_input,
 };
 use iced::{Color, Element, Length};
 use shepherd_app_core::pattern_edit::{AgentField, Editor, Sel};
@@ -12,6 +13,18 @@ use shepherd_app_core::pattern_graph::{relayout_keep, Graph, PatternView, NODE_H
 use shepherd_app_core::shepherd_core::config::{self, Config};
 use shepherd_app_core::shepherd_core::patterns::{self, Severity};
 use std::path::Path;
+
+/// What the editor shows of the pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewMode {
+    #[default]
+    Graph,
+    /// The text the pattern is saved as, to read (it cannot be typed into).
+    Yaml,
+}
+
+/// The most characters of a persona (the server's limit).
+const PERSONA_MAX: usize = 16_384;
 
 /// What the dropdowns of an agent offer, from the configuration.
 #[derive(Default)]
@@ -82,6 +95,12 @@ pub enum EditMsg {
     Field(Field, String),
     /// The vendor was picked from its list: the model belongs to a vendor, so a new vendor clears it.
     PickVendor(String),
+    /// Something done in the persona box of the selected agent.
+    Persona(text_editor::Action),
+    /// Something done in the YAML view (which only reads: selecting and scrolling, never typing).
+    Yaml(text_editor::Action),
+    /// Switches between the graph and the read-only YAML of the pattern.
+    View(ViewMode),
     Start(bool),
 }
 
@@ -108,6 +127,13 @@ pub struct PatternEditor {
     pub path: Option<String>,
     pub zoom: f32,
     delete_armed: bool,
+    view_mode: ViewMode,
+    /// The persona box of the selected agent, and the agent it holds the text of (kept while typing, so the
+    /// cursor does not jump when the pattern is revalidated).
+    persona: text_editor::Content,
+    persona_for: Option<String>,
+    /// The YAML shown in the YAML view, read when it is opened.
+    yaml: text_editor::Content,
 }
 
 impl PatternEditor {
@@ -127,12 +153,42 @@ impl PatternEditor {
             path: view.path,
             zoom: 1.0,
             delete_armed: false,
+            view_mode: ViewMode::Graph,
+            persona: text_editor::Content::new(),
+            persona_for: None,
+            yaml: text_editor::Content::new(),
         };
         me.refresh_fields();
+        // `SHEPHERD_NATIVE_PATTERNVIEW=yaml` opens the editor on the YAML view (for pictures)
+        if std::env::var("SHEPHERD_NATIVE_PATTERNVIEW").is_ok_and(|v| v == "yaml") {
+            if let Ok(yaml) = me.editor.yaml() {
+                me.yaml = text_editor::Content::with_text(&yaml);
+                me.view_mode = ViewMode::Yaml;
+            }
+        }
         me
     }
 
+    /// Loads the persona of the selected agent into its box, when the selection moved to another agent.
+    fn sync_persona(&mut self) {
+        let id = match &self.selected {
+            Some(Sel::Agent(id)) => Some(id.clone()),
+            _ => None,
+        };
+        if id == self.persona_for {
+            return;
+        }
+        let text = id
+            .as_ref()
+            .and_then(|id| self.editor.pattern.agents.iter().find(|a| &a.id == id))
+            .and_then(|a| a.prompt.clone())
+            .unwrap_or_default();
+        self.persona = text_editor::Content::with_text(&text);
+        self.persona_for = id;
+    }
+
     fn refresh_fields(&mut self) {
+        self.sync_persona();
         let p = &self.editor.pattern;
         self.fields = vec![
             (Field::PatternName, p.name.clone()),
@@ -348,6 +404,38 @@ impl PatternEditor {
                     self.changed(root);
                 }
             }
+            EditMsg::View(mode) => {
+                self.view_mode = mode;
+                if mode == ViewMode::Yaml {
+                    match self.editor.yaml() {
+                        Ok(yaml) => self.yaml = text_editor::Content::with_text(&yaml),
+                        Err(e) => return Some(format!("The YAML could not be written: {e}")),
+                    }
+                }
+            }
+            EditMsg::Yaml(action) => {
+                // read-only: moving, selecting and scrolling are fine, typing and deleting are not
+                if !action.is_edit() {
+                    self.yaml.perform(action);
+                }
+            }
+            EditMsg::Persona(action) => {
+                let Some(Sel::Agent(id)) = self.selected.clone() else {
+                    return None;
+                };
+                if !action.is_edit() {
+                    self.persona.perform(action);
+                    return None;
+                }
+                if self.editor.read_only() {
+                    return None;
+                }
+                self.persona.perform(action);
+                let text = self.persona.text();
+                let result = self.editor.set_agent_field(&id, AgentField::Prompt, &text);
+                self.changed(root);
+                return result.err();
+            }
             EditMsg::PickVendor(vendor) => {
                 if self.field(Field::Agent(AgentField::Vendor)) == vendor {
                     return None;
@@ -402,6 +490,44 @@ impl PatternEditor {
             }
         }
         None
+    }
+
+    /// The persona of the selected agent: what it reads, does and publishes. In a pattern run it replaces the
+    /// script of the role, so an agent without one only knows its topics.
+    fn persona_box<'a>(&'a self, read_only: bool) -> Element<'a, Message> {
+        let used = self.persona.text().chars().count();
+        let counter =
+            text(format!("{used} / {PERSONA_MAX}"))
+                .size(11)
+                .color(if used > PERSONA_MAX {
+                    crate::theme::BAD
+                } else {
+                    DIM
+                });
+        column![
+            row![
+                text("persona").size(12).color(DIM).width(Length::Fill),
+                counter
+            ],
+            text_editor(&self.persona)
+                .on_action(|a| Message::Panel(crate::panel::PanelMsg::EditPattern(
+                    EditMsg::Persona(a)
+                )))
+                .height(Length::Fixed(150.0))
+                .wrapping(iced::widget::text::Wrapping::Word)
+                .size(12.5)
+                .padding(8)
+                .style(crate::theme::editor_style),
+            text(if read_only {
+                "Built-in patterns are read-only."
+            } else {
+                "What this agent reads, does and publishes. It replaces the role's script in a run."
+            })
+            .size(11)
+            .color(DIM),
+        ]
+        .spacing(4)
+        .into()
     }
 
     /// A field of the agent chosen from a list (`empty` is the entry that leaves it unset).
@@ -531,9 +657,21 @@ impl PatternEditor {
                 b
             }
         };
-        let mut actions = row![hbtn("Duplicate", edit(EditMsg::Duplicate), 3, true)]
-            .spacing(8)
-            .align_y(iced::Alignment::Center);
+        let mode_btn = |label: &'static str, mode: ViewMode| {
+            let on = self.view_mode == mode;
+            button(container(text(label).size(13)).center_y(Length::Fill))
+                .padding([0, 12])
+                .height(32)
+                .style(crate::theme::outline_button_style(!on))
+                .on_press(edit(EditMsg::View(mode)))
+        };
+        let mut actions = row![
+            mode_btn("Graph", ViewMode::Graph),
+            mode_btn("YAML", ViewMode::Yaml),
+            hbtn("Duplicate", edit(EditMsg::Duplicate), 3, true)
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center);
         if !read_only {
             actions = actions.push(hbtn("Save", edit(EditMsg::Save), 3, dirty));
         }
@@ -719,7 +857,8 @@ impl PatternEditor {
                         level_options(self.editor.pattern.agents.len()),
                         Some("(none)"),
                     ))
-                    .push(self.labelled("group", Field::Agent(AgentField::Group)));
+                    .push(self.labelled("group", Field::Agent(AgentField::Group)))
+                    .push(self.persona_box(read_only));
                 let start = self
                     .editor
                     .pattern
@@ -831,7 +970,24 @@ impl PatternEditor {
         ]
         .width(Length::Fill)
         .height(Length::Fill);
-        col = col.push(row![viewport, inspector].spacing(14).height(Length::Fill));
+        if self.view_mode == ViewMode::Yaml {
+            let note = if self.editor.dirty {
+                "Read-only. This is the YAML the pattern is saved as, with your changes not saved yet. Edit the pattern in the graph."
+            } else {
+                "Read-only. This is the YAML the pattern is saved as. Edit the pattern in the graph."
+            };
+            col = col.push(text(note).size(11.5).color(DIM));
+            col = col.push(
+                container(crate::editor::view(&self.yaml, |a| {
+                    Message::Panel(crate::panel::PanelMsg::EditPattern(EditMsg::Yaml(a)))
+                }))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(crate::theme::graph_style),
+            );
+        } else {
+            col = col.push(row![viewport, inspector].spacing(14).height(Length::Fill));
+        }
         col = col.push(container(checks).padding([6, 0]));
         col.height(Length::Fill).into()
     }
@@ -879,6 +1035,134 @@ mod tests {
         assert_eq!(choices.model_options("claude", "coder"), ["opus", "haiku"]);
         assert_eq!(choices.model_options("", "coder"), ["gpt"]);
         assert!(choices.model_options("", "unknown").is_empty());
+    }
+
+    fn type_text(e: &mut PatternEditor, text: &str) {
+        let root = Path::new("/nowhere");
+        for ch in text.chars() {
+            let _ = e.update(
+                EditMsg::Persona(text_editor::Action::Edit(text_editor::Edit::Insert(ch))),
+                root,
+            );
+        }
+    }
+
+    #[test]
+    fn typing_a_persona_extends_the_one_the_agent_has_and_each_agent_keeps_its_own() {
+        let root = Path::new("/nowhere");
+        let mut e = builtin();
+        e.copy_as("mine");
+        let own = |e: &PatternEditor, i: usize| {
+            e.editor.pattern.agents[i]
+                .prompt
+                .clone()
+                .unwrap_or_default()
+        };
+        let (first, second) = (
+            e.editor.pattern.agents[0].id.clone(),
+            e.editor.pattern.agents[1].id.clone(),
+        );
+        let (old_first, old_second) = (own(&e, 0), own(&e, 1));
+        assert_ne!(old_first, old_second);
+        let _ = e.update(EditMsg::Press(format!("agent:{first}")), root);
+        assert_eq!(
+            e.persona.text().trim_end(),
+            old_first,
+            "the box opens with the agent's persona"
+        );
+        type_text(&mut e, "!");
+        assert_eq!(
+            own(&e, 0),
+            format!("!{old_first}"),
+            "typing is saved on the selected agent"
+        );
+        assert_eq!(own(&e, 1), old_second, "the others are not touched");
+        assert!(
+            e.persona.text().starts_with('!'),
+            "typing does not reset the box"
+        );
+        let _ = e.update(EditMsg::Press(format!("agent:{second}")), root);
+        assert_eq!(e.persona.text().trim_end(), old_second);
+        let _ = e.update(EditMsg::Press(format!("agent:{first}")), root);
+        assert!(
+            e.persona.text().starts_with('!'),
+            "coming back shows what was typed"
+        );
+    }
+
+    #[test]
+    fn a_persona_can_be_emptied_and_an_agent_without_one_starts_from_nothing() {
+        let root = Path::new("/nowhere");
+        let mut e = builtin();
+        e.copy_as("mine");
+        let _ = e.update(EditMsg::AddAgent, root);
+        let Some(Sel::Agent(id)) = e.selected.clone() else {
+            panic!("a new agent is selected");
+        };
+        assert_eq!(
+            e.persona.text().trim_end(),
+            "",
+            "a new agent has no persona"
+        );
+        type_text(&mut e, "Do X");
+        let agent = |e: &PatternEditor| {
+            e.editor
+                .pattern
+                .agents
+                .iter()
+                .find(|a| a.id == id)
+                .unwrap()
+                .prompt
+                .clone()
+        };
+        assert_eq!(agent(&e).as_deref(), Some("Do X"));
+        e.editor
+            .set_agent_field(&id, AgentField::Prompt, "")
+            .unwrap();
+        assert_eq!(agent(&e), None, "an empty persona is no persona");
+    }
+
+    #[test]
+    fn a_built_in_pattern_does_not_take_a_persona() {
+        let root = Path::new("/nowhere");
+        let mut e = builtin();
+        let id = e.editor.pattern.agents[0].id.clone();
+        let before = e.editor.pattern.agents[0].prompt.clone();
+        let _ = e.update(EditMsg::Press(format!("agent:{id}")), root);
+        type_text(&mut e, "nope");
+        assert_eq!(e.editor.pattern.agents[0].prompt, before);
+    }
+
+    #[test]
+    fn the_yaml_view_shows_the_saved_text_and_cannot_be_typed_into() {
+        let root = Path::new("/nowhere");
+        let mut e = builtin();
+        e.copy_as("mine");
+        assert_eq!(e.view_mode, ViewMode::Graph);
+        let _ = e.update(EditMsg::View(ViewMode::Yaml), root);
+        assert_eq!(e.view_mode, ViewMode::Yaml);
+        let shown = e.yaml.text();
+        assert_eq!(shown.trim_end(), e.editor.yaml().unwrap().trim_end());
+        let _ = e.update(
+            EditMsg::Yaml(text_editor::Action::Edit(text_editor::Edit::Insert('x'))),
+            root,
+        );
+        let _ = e.update(
+            EditMsg::Yaml(text_editor::Action::Edit(text_editor::Edit::Backspace)),
+            root,
+        );
+        assert_eq!(
+            e.yaml.text(),
+            shown,
+            "typing and deleting do nothing in the YAML view"
+        );
+        assert_eq!(
+            e.editor.yaml().unwrap().trim_end(),
+            shown.trim_end(),
+            "the pattern is untouched"
+        );
+        let _ = e.update(EditMsg::View(ViewMode::Graph), root);
+        assert_eq!(e.view_mode, ViewMode::Graph);
     }
 
     #[test]

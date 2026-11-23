@@ -1092,12 +1092,16 @@ pub fn load_pattern(
     Err(PatternError::NotFound(name.to_string()))
 }
 
+/// The YAML a pattern is saved as (what `save_pattern_to_dir` writes, and what a viewer should show).
+pub fn pattern_to_yaml(pattern: &Pattern) -> Result<String, PatternError> {
+    serde_yaml_ng::to_string(pattern).map_err(|e| PatternError::Serialization(e.to_string()))
+}
+
 pub fn save_pattern_to_dir(pattern: &Pattern, dir: &Path) -> Result<PathBuf, PatternError> {
     validate_pattern_name(&pattern.name)?;
     std::fs::create_dir_all(dir)?;
     let target = dir.join(format!("{}.yaml", pattern.name));
-    let yaml_str = serde_yaml_ng::to_string(pattern)
-        .map_err(|e| PatternError::Serialization(e.to_string()))?;
+    let yaml_str = pattern_to_yaml(pattern)?;
 
     let mut tmp = target.as_os_str().to_owned();
     tmp.push(".tmp");
