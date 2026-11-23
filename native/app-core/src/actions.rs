@@ -5,6 +5,7 @@
 use crate::api::call;
 use serde_json::{json, Value};
 use shepherd_core::snapshot::{CaptureResult, RestoreResult, ShowResult};
+use shepherd_core::SkillAdjust;
 use std::path::Path;
 
 pub struct Launched {
@@ -202,6 +203,27 @@ pub fn archive_task(api: &Path, id: u32, root: Option<&str>) -> Result<(), Strin
 }
 
 /// Spawns a single agent with a Shepherd role. Returns the agent data from the server.
+/// What to add to and remove from a role's own skills so that an agent gets exactly `chosen`.
+/// Skills every agent gets anyway (global ones) are not the role's to give, so they are left out of both lists.
+pub fn skill_adjust(role: &[String], chosen: &[String], global: &[String]) -> SkillAdjust {
+    let own = |s: &&String| !global.contains(s);
+    SkillAdjust {
+        add: chosen
+            .iter()
+            .filter(own)
+            .filter(|s| !role.contains(s))
+            .cloned()
+            .collect(),
+        remove: role
+            .iter()
+            .filter(own)
+            .filter(|s| !chosen.contains(s))
+            .cloned()
+            .collect(),
+    }
+}
+
+/// Starts an agent of `role`; `skills` is what this agent adds to and drops from the role's (empty: the role's).
 pub fn spawn_agent(
     api: &Path,
     role: &str,
@@ -212,6 +234,7 @@ pub fn spawn_agent(
     model: Option<&str>,
     worktree: bool,
     task_id: Option<u32>,
+    skills: &SkillAdjust,
 ) -> Result<Value, String> {
     let mut args = json!({
         "role": role,
@@ -220,6 +243,9 @@ pub fn spawn_agent(
         "root": root,
         "workspace_id": workspace_id,
     });
+    if !skills.add.is_empty() || !skills.remove.is_empty() {
+        args["skills"] = json!(skills);
+    }
     if let Some(id) = task_id {
         // links the agent to the task: its result closes a direct task
         args["task_id"] = json!(id.to_string());
@@ -550,6 +576,71 @@ mod tests {
         assert_eq!(seen[1]["method"], "shepherd.snapshot.diff");
         assert_eq!(seen[1]["params"]["from"], "a/3");
         assert!(seen[1]["params"].get("to").is_none());
+    }
+
+    #[test]
+    fn an_agent_gets_the_chosen_skills_by_adding_and_dropping_from_its_role() {
+        let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let role = v(&["debug", "lang-go"]);
+        let same = skill_adjust(&role, &v(&["debug", "lang-go"]), &[]);
+        assert_eq!(
+            same,
+            SkillAdjust::default(),
+            "the role's own skills ask for nothing"
+        );
+        let changed = skill_adjust(&role, &v(&["debug", "review"]), &[]);
+        assert_eq!(
+            (changed.add, changed.remove),
+            (v(&["review"]), v(&["lang-go"]))
+        );
+        let global = skill_adjust(&role, &v(&["debug", "lang-go", "comms"]), &v(&["comms"]));
+        assert_eq!(
+            global,
+            SkillAdjust::default(),
+            "a global skill is not added to the agent"
+        );
+    }
+
+    #[test]
+    fn a_spawn_carries_its_skills_only_when_they_differ_from_the_role() {
+        let (path, server) = fake_server(vec![
+            r#"{"id":"1","result":{"type":"shepherd_call","data":{}}}"#,
+            r#"{"id":"2","result":{"type":"shepherd_call","data":{}}}"#,
+        ]);
+        let extra = SkillAdjust {
+            add: vec!["review".into()],
+            remove: vec!["debug".into()],
+        };
+        spawn_agent(
+            &path,
+            "coder",
+            "t",
+            Some("/p"),
+            None,
+            None,
+            None,
+            false,
+            None,
+            &extra,
+        )
+        .unwrap();
+        spawn_agent(
+            &path,
+            "coder",
+            "t",
+            Some("/p"),
+            None,
+            None,
+            None,
+            false,
+            None,
+            &SkillAdjust::default(),
+        )
+        .unwrap();
+        let seen = server.join().unwrap();
+        assert_eq!(seen[0]["params"]["args"]["skills"]["add"][0], "review");
+        assert_eq!(seen[0]["params"]["args"]["skills"]["remove"][0], "debug");
+        assert!(seen[1]["params"]["args"].get("skills").is_none());
     }
 
     #[test]

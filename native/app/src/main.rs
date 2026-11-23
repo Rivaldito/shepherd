@@ -73,6 +73,8 @@ fn window_icon() -> Option<iced::window::Icon> {
 pub const APP_ID: &str = "shepherd-native";
 
 fn main() -> iced::Result {
+    // here and not in `boot`, so that a test that builds the app never reads the sizes of the person running it
+    zoom::load();
     iced::application(App::boot, App::update, App::view)
         .title("Shepherd")
         .font(theme::FONT_FILES[0])
@@ -423,7 +425,6 @@ fn terminal_cells(window: Size, sidebar_width: f32) -> (u16, u16) {
 
 impl App {
     fn boot() -> (Self, Task<Message>) {
-        zoom::load();
         let app = Self {
             palette: std::env::var("SHEPHERD_NATIVE_PALETTE")
                 .ok()
