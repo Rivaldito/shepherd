@@ -179,6 +179,10 @@ pub enum PanelMsg {
     SpawnAgentModel(String),
     SpawnAgentTask(String),
     SpawnAgentWorktree(bool),
+    /// A skill ticked or unticked for the agent being launched.
+    SpawnAgentSkill(String, bool),
+    /// Opens the editor of a new role (in Models).
+    NewRole,
     SpawnAgent,
     // Agent actions
     KillAgent(String),
@@ -298,6 +302,8 @@ pub struct Panel {
     spawn_model: String,
     spawn_task_text: String,
     spawn_worktree: bool,
+    /// The skills the agent being launched will carry: the role's own at first, then what was ticked.
+    spawn_skills: Vec<String>,
     /// The task an agent is being launched for (set by "Run with an agent").
     spawn_task_id: Option<u32>,
     /// The form to create or edit a task, while it is open.
@@ -388,6 +394,7 @@ impl Default for Panel {
             spawn_model: String::new(),
             spawn_task_text: String::new(),
             spawn_worktree: false,
+            spawn_skills: Vec::new(),
             spawn_task_id: None,
             // picture aid: `SHEPHERD_NATIVE_TASKFORM=new` opens the new-task form (`edit:N` waits for the data)
             task_form: (std::env::var("SHEPHERD_NATIVE_TASKFORM").as_deref() == Ok("new"))
@@ -1524,11 +1531,13 @@ impl Panel {
                 self.spawn_task_id = None;
                 self.spawn_worktree = false;
                 // Pre-select first role and workspace
+                self.spawn_skills.clear();
                 if let Some(first_role) = ctx.data.models.roles.iter().next() {
                     self.spawn_role = Some(Choice {
                         name: first_role.0.clone(),
                         label: first_role.0.clone(),
                     });
+                    self.spawn_skills = first_role.1.skills.clone();
                 }
                 if let Some(first_ws) = ctx.snapshot.workspaces.first() {
                     self.spawn_workspace = Some(Choice {
@@ -1542,6 +1551,8 @@ impl Panel {
                 self.spawn_role = Some(choice.clone());
                 // Auto-select vendor from role
                 if let Some(role) = ctx.data.models.roles.get(&choice.name) {
+                    // a different role carries different skills: start from its own again
+                    self.spawn_skills = role.skills.clone();
                     if !role.vendor.is_empty() {
                         self.spawn_vendor = Some(Choice {
                             name: role.vendor.clone(),
@@ -1555,6 +1566,23 @@ impl Panel {
             PanelMsg::SpawnAgentModel(model) => self.spawn_model = model,
             PanelMsg::SpawnAgentTask(text) => self.spawn_task_text = text,
             PanelMsg::SpawnAgentWorktree(on) => self.spawn_worktree = on,
+            PanelMsg::SpawnAgentSkill(skill, on) => {
+                self.spawn_skills.retain(|s| *s != skill);
+                if on {
+                    self.spawn_skills.push(skill);
+                }
+            }
+            PanelMsg::NewRole => {
+                // the editor of a role lives in Models: open it there, empty, while the tab loads its data
+                self.tab = Tab::Models;
+                let editor = self
+                    .cfg
+                    .update(crate::config_panel::CfgMsg::NewRole, &ctx.data.root);
+                let load = self
+                    .load_config_tab(Tab::Models, ctx)
+                    .unwrap_or_else(Task::none);
+                return Task::batch([editor, load]);
+            }
             PanelMsg::SpawnAgent => {
                 let Some(role) = self.spawn_role.clone() else {
                     self.notice = "Pick a role first.".into();
@@ -1575,6 +1603,20 @@ impl Panel {
                 let root = ctx.data.root.display().to_string();
                 let worktree = self.spawn_worktree;
                 let task_id = self.spawn_task_id;
+                let global: Vec<String> = self
+                    .cfg
+                    .skill_catalog()
+                    .into_iter()
+                    .filter_map(|(name, global)| global.then_some(name))
+                    .collect();
+                let role_skills = ctx
+                    .data
+                    .models
+                    .roles
+                    .get(&role.name)
+                    .map(|r| r.skills.clone())
+                    .unwrap_or_default();
+                let skills = actions::skill_adjust(&role_skills, &self.spawn_skills, &global);
                 self.notice = format!("Starting {} agent…", role.name);
                 return Task::perform(
                     async move {
@@ -1588,6 +1630,7 @@ impl Panel {
                             model.as_deref(),
                             worktree,
                             task_id,
+                            &skills,
                         )
                         .map(|agent| {
                             format!(
@@ -1804,6 +1847,15 @@ impl Panel {
             if self.task_form.is_none() && ctx.data.task(id).is_some() {
                 let _ = self.update(PanelMsg::TaskEditOpen(id), ctx);
             }
+        }
+        // picture aid: `SHEPHERD_NATIVE_SPAWN=1` opens the launch form once (with `SHEPHERD_NATIVE_TAB=agents`)
+        static SPAWN_AID_DONE: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if std::env::var_os("SHEPHERD_NATIVE_SPAWN").is_some()
+            && !ctx.data.models.roles.is_empty()
+            && !SPAWN_AID_DONE.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let _ = self.update(PanelMsg::OpenSpawnAgent, ctx);
         }
         if !std::mem::replace(&mut self.cfg_started, true) {
             let counts = crate::config_panel::ConfigPanel::load_counts(&ctx.data.root, &ctx.api);
@@ -2175,6 +2227,7 @@ impl Panel {
                             ),
                         ),
                         btn("Resume idle", PanelMsg::ResumeAgents),
+                        btn("+ New role", PanelMsg::NewRole),
                         btn_primary("+ New agent", PanelMsg::OpenSpawnAgent),
                     ],
                 )
@@ -3882,6 +3935,31 @@ impl Panel {
 
     /// Form for launching a single agent with a Shepherd role.
     /// The detail of one agent (`V.agents`): header, actions, live output, approval notice and context cards.
+    /// A list of the skills this agent does not have yet; picking one adds it for the agent's next start.
+    fn add_skill_picker<'a>(
+        &self,
+        a: &shepherd_app_core::shepherd_core::Agent,
+    ) -> Element<'a, Message> {
+        let missing: Vec<String> = self
+            .cfg
+            .skill_catalog()
+            .into_iter()
+            .map(|(name, _)| name)
+            .filter(|n| !a.active_skills.contains(n) && !a.skills.add.contains(n))
+            .collect();
+        if missing.is_empty() {
+            return column![].into();
+        }
+        let id = a.id.clone();
+        pick_list(missing, None::<String>, move |skill| {
+            Message::Panel(PanelMsg::AgentSkill(id.clone(), skill, Some(true)))
+        })
+        .placeholder("Add a skill…")
+        .text_size(12)
+        .width(Length::Fill)
+        .into()
+    }
+
     fn agent_detail<'a>(
         &'a self,
         ctx: &Ctx<'a>,
@@ -3996,6 +4074,7 @@ impl Panel {
                     .map(|line| text(line).size(12.5).into()),
             )
             .push(column(agent_skill_buttons(a)).spacing(2))
+            .push(self.add_skill_picker(a))
             .spacing(4)
             .into(),
         ));
@@ -4158,6 +4237,35 @@ impl Panel {
             .as_ref()
             .map(|w| w.label.clone())
             .unwrap_or_else(|| "(no space)".into());
+        // every skill of the catalog: the role's are ticked, a global one goes to every agent (ticked, fixed)
+        let catalog = self.cfg.skill_catalog();
+        let skills_list: Element<'a, Message> = if catalog.is_empty() {
+            text("No skills found.").size(11).color(DIM).into()
+        } else {
+            theme::scroll(
+                column(catalog.into_iter().map(|(name, global)| {
+                    let on = global || self.spawn_skills.contains(&name);
+                    let label = if global {
+                        format!("{name} (every agent)")
+                    } else {
+                        name.clone()
+                    };
+                    let tick = checkbox(on).label(label).text_size(12);
+                    if global {
+                        tick.into()
+                    } else {
+                        tick.on_toggle(move |v| {
+                            Message::Panel(PanelMsg::SpawnAgentSkill(name.clone(), v))
+                        })
+                        .into()
+                    }
+                }))
+                .spacing(4)
+                .padding([0, 12]),
+            )
+            .height(Length::Fixed(132.0))
+            .into()
+        };
         column![
             text("LAUNCH AGENT").size(10).color(DIM),
             text("Role").size(12).color(DIM),
@@ -4180,6 +4288,8 @@ impl Panel {
             .width(Length::Fill),
             text("Model (optional)").size(12).color(DIM),
             model_dropdown,
+            text("Skills (the role's are ticked)").size(12).color(DIM),
+            skills_list,
             text("Task").size(12).color(DIM),
             text_input("Agent task description", &self.spawn_task_text)
                 .on_input(|v| Message::Panel(PanelMsg::SpawnAgentTask(v)))

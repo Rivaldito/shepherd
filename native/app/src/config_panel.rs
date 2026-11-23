@@ -258,6 +258,15 @@ fn words(text: &str) -> Vec<String> {
 }
 
 impl ConfigPanel {
+    /// The skills an agent can carry, by name, and whether each one goes to every agent (a global one).
+    pub fn skill_catalog(&self) -> Vec<(String, bool)> {
+        self.skills
+            .iter()
+            .filter(|s| s.enabled)
+            .map(|s| (s.name.clone(), s.global))
+            .collect()
+    }
+
     pub fn load_skills(root: &Path) -> Task<Message> {
         let root = root.to_path_buf();
         Task::perform(async move { config_data::skills(&root) }, |r| {
