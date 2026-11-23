@@ -35,7 +35,7 @@ D="$T/home/.local/share"
 grep -q icon256 "$D/icons/hicolor/256x256/apps/shepherd-native.png" || fail "no 256 icon"
 grep -q icon512 "$D/icons/hicolor/512x512/apps/shepherd-native.png" || fail "no 512 icon"
 grep -q '^Icon=shepherd-native$' "$D/applications/shepherd-native.desktop" || fail "no desktop entry with the icon"
-grep -q "^Exec=$T/home/bin/shepherd-native\$" "$D/applications/shepherd-native.desktop" || fail "desktop entry does not run the installed app"
+grep -q "^Exec=$T/home/bin/shepherd --gui\$" "$D/applications/shepherd-native.desktop" || fail "desktop entry does not open the app with shepherd --gui"
 echo "ok: adds the menu entry and the icon (Linux)"
 
 # 2. SHEPHERD_NO_GUI=1 skips the app
@@ -67,3 +67,26 @@ fresh
 if sh "$ROOT/install.sh" >/dev/null 2>&1; then fail "installed a corrupted core"; fi
 [ ! -e "$T/home/bin/shepherd" ] || fail "left a corrupted core behind"
 echo "ok: refuses a core that does not match its checksum"
+
+# 6. macOS: Shepherd.app in the applications folder, with a script that runs `shepherd --gui` and an icon. This
+#    runs anywhere: `uname` says Darwin and `iconutil` is a stand-in that writes the file it is asked for.
+SHIM="$T/shim"; mkdir -p "$SHIM"
+printf '#!/bin/sh\nif [ "${1:-}" = "-s" ]; then echo Darwin; else exec /usr/bin/uname "$@"; fi\n' > "$SHIM/uname"
+printf '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done\necho icns > "$out"\n' > "$SHIM/iconutil"
+chmod +x "$SHIM/uname" "$SHIM/iconutil"
+[ -x /usr/bin/uname ] || { echo "skip: no /usr/bin/uname for the macOS case"; exit 0; }
+publish "shepherd-macos-$arch" core-binary
+publish "shepherd-native-macos-$arch" native-binary
+APPS="$T/home/Applications"
+fresh; rm -rf "$APPS"
+PATH="$SHIM:$PATH" SHEPHERD_APP_DIR="$APPS" sh "$ROOT/install.sh" >/dev/null 2>&1 || fail "the macOS install failed"
+B="$APPS/Shepherd.app/Contents"
+[ -x "$B/MacOS/Shepherd" ] || fail "no launcher script in Shepherd.app"
+grep -q "shepherd\" --gui" "$B/MacOS/Shepherd" || fail "Shepherd.app does not run shepherd --gui"
+grep -q '<string>Shepherd</string>' "$B/Info.plist" || fail "no Info.plist"
+[ -s "$B/Resources/Shepherd.icns" ] || fail "no icon in Shepherd.app"
+echo "ok: macOS gets Shepherd.app with its launcher and icon"
+fresh; rm -rf "$APPS"
+PATH="$SHIM:$PATH" SHEPHERD_NO_GUI=1 SHEPHERD_APP_DIR="$APPS" sh "$ROOT/install.sh" >/dev/null 2>&1
+[ ! -e "$APPS/Shepherd.app" ] || fail "made Shepherd.app despite SHEPHERD_NO_GUI=1"
+echo "ok: macOS with SHEPHERD_NO_GUI=1 makes no app"

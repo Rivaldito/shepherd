@@ -407,6 +407,38 @@ pub(crate) fn prepare_server_process(_handoff_import: bool) -> std::io::Result<b
     Ok(false)
 }
 
+/// Whether a window can be opened here: on Linux that needs a display server; macOS and Windows always have one.
+#[cfg(target_os = "linux")]
+pub fn has_graphical_session() -> bool {
+    ["DISPLAY", "WAYLAND_DISPLAY"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn has_graphical_session() -> bool {
+    true
+}
+
+/// Lets the desktop app outlive the terminal that started it (its own session, so the terminal closing does not
+/// hang it up).
+#[cfg(unix)]
+pub fn detach_gui_command(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+pub fn detach_gui_command(_command: &mut std::process::Command) {}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn detach_server_daemon_command(command: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;

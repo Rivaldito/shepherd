@@ -314,6 +314,15 @@ pub fn auto_detect_launch(saved_federation: bool) -> io::Result<()> {
             format!("cannot attach without a usable terminal: {err}; run inside a terminal"),
         )
     })?;
+    ensure_server(saved_federation)?;
+
+    // Now attach as a thin client.
+    crate::client::run_client()
+}
+
+/// Makes sure the server is running and one this version can talk to, starting it when nothing listens. With saved
+/// SSH machines a local failure is only logged: the saved machines stay available.
+pub fn ensure_server(saved_federation: bool) -> io::Result<()> {
     let socket_path = client_socket_path();
     info!(path = %socket_path.display(), "auto-detect launch starting");
 
@@ -337,9 +346,7 @@ pub fn auto_detect_launch(saved_federation: bool) -> io::Result<()> {
         }
         tracing::warn!(%error, "Local startup failed; keeping saved machines available");
     }
-
-    // Now attach as a thin client.
-    crate::client::run_client()
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

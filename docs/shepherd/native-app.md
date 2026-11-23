@@ -13,7 +13,7 @@ There is no mode switch: click a workspace name or an agent row to get a termina
 
 ### Install
 
-The installer puts the app next to the core, as `shepherd-native` in `~/.local/bin`:
+The installer puts the app next to the core, as `shepherd-native` in `~/.local/bin`, and adds a launcher with its icon: a menu entry on Linux, `Shepherd.app` in `~/Applications` on macOS:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh | sh
@@ -30,13 +30,17 @@ cargo build --release -p shepherd-native     # the binary is native/target/relea
 
 ### Against your own server
 
-Start the server as usual (`shepherd`, or `shepherd server` in the background), then run the app:
+Run `shepherd` (or `shepherd --gui`): it starts the server if it is not running and then opens the app. Without a screen, or without the app installed, `shepherd` opens the terminal UI instead, and `shepherd --gui` says why it cannot open and points to `shepherd --tui`.
 
 ```bash
-shepherd-native
+shepherd            # the app (the terminal UI where the app cannot open)
+shepherd --gui      # the app, or an error with the way out
+shepherd --tui      # the terminal UI
 ```
 
-It finds the running server by itself: it asks `shepherd status server` (the `shepherd` binary from `SHEPHERD_BIN`, or the one on your `PATH`) and uses the client socket next to the API socket. If you open it before the server is up, it keeps trying every few seconds and connects once the server starts.
+`SHEPHERD_NO_GUI=1 shepherd` opens the terminal UI even where the app is installed. Saved SSH machines are attached to from the terminal UI, so `shepherd` opens it as well while you have any.
+
+You can also start the server yourself (`shepherd server` in the background) and run `shepherd-native` directly. It finds the running server by itself: it asks `shepherd status server` (the `shepherd` binary from `SHEPHERD_BIN`, or the one on your `PATH`) and uses the client socket next to the API socket. If you open it before the server is up, it keeps trying every few seconds and connects once the server starts.
 
 To point it somewhere else, set `SHEPHERD_CLIENT_SOCKET_PATH` (the client socket, `shepherd-client.sock`) or `SHEPHERD_SOCKET_PATH` (the API socket). The `Sessions` row at the top switches between named sessions.
 
@@ -122,7 +126,7 @@ Taken with `native/dev/media.sh` (see section 6) against a sample project with s
 
 ## 4. How it relates to the terminal
 
-The native app does not replace the terminal UI; it is another way in. Use whichever fits:
+The native app does not replace the terminal UI; it is another way in (`shepherd` or `shepherd --gui` for the app, `shepherd --tui` for the terminal UI). Use whichever fits:
 
 | | Terminal UI | Native app | CLI |
 |---|---|---|---|

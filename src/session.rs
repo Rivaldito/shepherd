@@ -50,6 +50,8 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
             return Err("usage: shepherd session attach <name>".to_string());
         }
         apply_explicit_name(name)?;
+        // attaching is the terminal UI: plain `shepherd` would open the desktop app when it can
+        cleaned.push("--tui".to_string());
         return Ok(cleaned);
     }
 
@@ -106,6 +108,15 @@ pub fn local_attach_command() -> String {
     match active_name() {
         Some(name) => format!("shepherd session attach {name}"),
         None => "shepherd".to_string(),
+    }
+}
+
+/// The command that attaches the terminal UI again after it detached: plain `shepherd` opens the desktop app when
+/// it can, so the default session needs `--tui`.
+pub fn local_tui_attach_command() -> String {
+    match active_name() {
+        Some(name) => format!("shepherd session attach {name}"),
+        None => "shepherd --tui".to_string(),
     }
 }
 
@@ -875,7 +886,11 @@ mod tests {
 
         assert_eq!(std::env::var(SESSION_ENV_VAR).as_deref(), Ok("work"));
         assert!(explicit_session_requested());
-        assert_eq!(cleaned, vec!["shepherd"]);
+        assert_eq!(
+            cleaned,
+            vec!["shepherd", "--tui"],
+            "attaching a session is the terminal UI, not the desktop app"
+        );
         std::env::remove_var(SESSION_ENV_VAR);
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
         clear_explicit_session_for_test();
@@ -992,6 +1007,17 @@ mod tests {
         std::env::remove_var(SESSION_ENV_VAR);
 
         assert_eq!(local_attach_command(), "shepherd");
+    }
+
+    #[test]
+    fn the_terminal_ui_is_reattached_with_tui_for_the_default_session_and_session_attach_for_a_named_one(
+    ) {
+        let _guard = env_lock().lock().unwrap();
+        std::env::remove_var(SESSION_ENV_VAR);
+        assert_eq!(local_tui_attach_command(), "shepherd --tui");
+        std::env::set_var(SESSION_ENV_VAR, "work");
+        assert_eq!(local_tui_attach_command(), "shepherd session attach work");
+        std::env::remove_var(SESSION_ENV_VAR);
     }
 
     #[test]

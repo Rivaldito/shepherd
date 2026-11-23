@@ -227,7 +227,7 @@ fn print_ready_message(api_socket: &Path, client_socket: &Path) {
          api socket: {}\n\
          client socket: {}\n\
          logs: {}\n\
-         did you mean to open the Shepherd TUI? run `shepherd`; you do not need `shepherd server`.\n",
+         did you mean to open Shepherd? run `shepherd` for the desktop app or `shepherd --tui` for the terminal UI; you do not need `shepherd server`.\n",
         api_socket.display(),
         client_socket.display(),
         crate::session::data_dir()
