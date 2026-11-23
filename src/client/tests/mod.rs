@@ -665,7 +665,7 @@ fn client_error_display_detached_default_session_reattach_hint() {
     };
     let msg = err.to_string();
     assert!(
-        msg.contains("Run `shepherd` to reattach"),
+        msg.contains("Run `shepherd --tui` to reattach"),
         "should suggest default reattach command: {msg}"
     );
 }

@@ -1,9 +1,10 @@
 #!/bin/sh
 # Shepherd installer: downloads the prebuilt binaries for your system from a GitHub release, checks their
 # SHA-256 and installs them into ~/.local/bin:
-#   shepherd         the server, the cli and the terminal ui
-#   shepherd-native  the native desktop app (skipped with SHEPHERD_NO_GUI=1); on Linux it also gets a menu entry
-#                    and its icon under ~/.local/share (applications/ and icons/)
+#   shepherd         the server, the cli and the terminal ui (`shepherd` opens the desktop app when it is installed
+#                    and there is a screen; `shepherd --gui` and `shepherd --tui` choose)
+#   shepherd-native  the native desktop app (skipped with SHEPHERD_NO_GUI=1); it also gets a launcher with its icon:
+#                    a menu entry under ~/.local/share on Linux, Shepherd.app in ~/Applications on macOS
 #
 #   curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh | sh
 #
@@ -79,7 +80,10 @@ main() {
         log "skipping the desktop app (SHEPHERD_NO_GUI=1)"
     elif fetch "shepherd-native-${os}-${arch}" "shepherd-native" optional; then
         GUI=1
-        [ "$os" = "linux" ] && install_desktop_entry
+        case "$os" in
+            linux) install_desktop_entry ;;
+            macos) install_macos_app ;;
+        esac
     else
         warn "the desktop app was not installed; the terminal ui in 'shepherd' works without it"
     fi
@@ -116,11 +120,15 @@ main() {
 
     echo ""
     log "next: start it in a git repository (the orchestrator is on by default)"
-    cat <<'HINT'
+    if [ "$GUI" = "1" ]; then
+        cat <<'HINT'
+    shepherd             # opens the desktop app (and starts the server)
+    shepherd --tui       # the terminal ui instead
+HINT
+    else
+        cat <<'HINT'
     cd ~/your-repo && shepherd
 HINT
-    if [ "$GUI" = "1" ]; then
-        echo "    shepherd-native      # the desktop app, in a second terminal while shepherd runs"
     fi
     echo ""
 }
@@ -135,10 +143,52 @@ install_desktop_entry() {
     done
     mkdir -p "${DATA}/applications"
     printf '[Desktop Entry]\nType=Application\nName=Shepherd\nComment=Teams of coding agents\nExec=%s\nIcon=shepherd-native\nTerminal=false\nCategories=Development;\nStartupWMClass=shepherd-native\n' \
-        "${INSTALL_DIR}/shepherd-native" > "${DATA}/applications/shepherd-native.desktop"
+        "${INSTALL_DIR}/shepherd --gui" > "${DATA}/applications/shepherd-native.desktop"
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "${DATA}/applications" 2>/dev/null
     command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t "$ICONS" 2>/dev/null
     log "added ${DATA}/applications/shepherd-native.desktop"
+    return 0
+}
+
+# install_macos_app: Shepherd.app in ~/Applications (SHEPHERD_APP_DIR), so Spotlight and Launchpad open the desktop app
+# and show it with its logo. The app is a script that runs `shepherd --gui`. Optional: without it the app still runs
+# from a terminal with `shepherd`.
+install_macos_app() {
+    APPS="${SHEPHERD_APP_DIR:-$HOME/Applications}"
+    BUNDLE="${APPS}/Shepherd.app"
+    mkdir -p "${BUNDLE}/Contents/MacOS" "${BUNDLE}/Contents/Resources" || { warn "could not create ${BUNDLE}"; return 0; }
+    printf '#!/bin/sh\nexec "%s/shepherd" --gui\n' "${INSTALL_DIR}" > "${BUNDLE}/Contents/MacOS/Shepherd"
+    chmod +x "${BUNDLE}/Contents/MacOS/Shepherd"
+    cat > "${BUNDLE}/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>Shepherd</string>
+    <key>CFBundleDisplayName</key><string>Shepherd</string>
+    <key>CFBundleIdentifier</key><string>com.rivaldito.shepherd</string>
+    <key>CFBundleExecutable</key><string>Shepherd</string>
+    <key>CFBundleIconFile</key><string>Shepherd</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
+</dict>
+</plist>
+PLIST
+    # the icon: macOS wants an .icns, built from the two sizes the release has
+    ICONSET="${TMP}/Shepherd.iconset"
+    mkdir -p "$ICONSET"
+    if command -v iconutil >/dev/null 2>&1 \
+        && fetch "shepherd-icon-256.png" "icon_256x256.png" optional "$ICONSET" \
+        && fetch "shepherd-icon-512.png" "icon_512x512.png" optional "$ICONSET"; then
+        cp "${ICONSET}/icon_256x256.png" "${ICONSET}/icon_128x128@2x.png"
+        cp "${ICONSET}/icon_512x512.png" "${ICONSET}/icon_256x256@2x.png"
+        iconutil -c icns "$ICONSET" -o "${BUNDLE}/Contents/Resources/Shepherd.icns" 2>/dev/null \
+            || warn "could not build the icon; Shepherd.app shows the generic one"
+    else
+        warn "no icon for Shepherd.app (it shows the generic one)"
+    fi
+    log "added ${BUNDLE}"
     return 0
 }
 

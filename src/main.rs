@@ -21,6 +21,7 @@ mod cli;
 mod client;
 mod config;
 mod copy_mode;
+mod desktop_app;
 mod detect;
 mod events;
 use ghostty_vt as ghostty;
@@ -557,6 +558,7 @@ fn main() -> io::Result<()> {
                     | "--default-config"
                     | "--skill"
                     | "--shepherd-skill"
+                    | "--tui"
             )
         })
     {
@@ -777,6 +779,8 @@ fn main() -> io::Result<()> {
         "--default-config",
         "--skill",
         "--shepherd-skill",
+        "--gui",
+        "--tui",
         "--help",
         "-h",
     ];
@@ -826,7 +830,39 @@ fn main() -> io::Result<()> {
 
     let saved_federation =
         client::endpoint::EndpointCatalog::load().is_ok_and(|catalog| catalog.has_enabled_ssh());
-    if let Err(err) = server::autodetect::auto_detect_launch(saved_federation) {
+    let asked = match desktop_app::asked(
+        &args,
+        desktop_app::prefers_tui(std::env::var_os("SHEPHERD_NO_GUI").as_deref()),
+    ) {
+        Ok(asked) => asked,
+        Err(err) => {
+            eprintln!("error: {err}");
+            eprintln!("run 'shepherd --help' for usage");
+            std::process::exit(2);
+        }
+    };
+    let app = desktop_app::installed_app();
+    let interface = match desktop_app::choose(
+        asked,
+        app.as_deref(),
+        platform::has_graphical_session(),
+        saved_federation,
+    ) {
+        Ok(interface) => interface,
+        Err(err) => {
+            eprintln!("shepherd: {err}");
+            std::process::exit(1);
+        }
+    };
+    let launched = match (interface, app) {
+        (desktop_app::Interface::Gui, Some(app)) => {
+            // the app only shows a server, so the server is running before it opens
+            server::autodetect::ensure_server(saved_federation)
+                .and_then(|()| desktop_app::open(&app))
+        }
+        _ => server::autodetect::auto_detect_launch(saved_federation),
+    };
+    if let Err(err) = launched {
         eprintln!("shepherd: {err}");
         std::process::exit(1);
     }

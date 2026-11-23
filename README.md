@@ -48,8 +48,10 @@ It downloads the prebuilt binaries of the latest [release](https://github.com/Ri
 
 | Binary | What it is |
 |---|---|
-| `shepherd` | The server, the CLI and the terminal UI with the Shepherd section |
-| `shepherd-native` | The desktop app: eleven views, the pattern graph editor, the event feed |
+| `shepherd` | The server, the CLI and the terminal UI. Run alone it opens the desktop app when it is installed and there is a screen; `shepherd --tui` opens the terminal UI |
+| `shepherd-native` | The desktop app: eleven views, the pattern graph editor, the event feed. `shepherd` and `shepherd --gui` open it |
+
+The installer also adds a launcher for the desktop app: a menu entry with its icon on Linux, and `Shepherd.app` in `~/Applications` on macOS.
 
 <details>
 <summary><b>Headless servers, desktop requirements, building from source</b></summary>
@@ -64,11 +66,13 @@ It downloads the prebuilt binaries of the latest [release](https://github.com/Ri
 ### Run it
 
 ```bash
-cd ~/your-repo && shepherd      # ctrl+b a opens the Shepherd section, ctrl+b q detaches, `shepherd` reattaches
-shepherd-native                 # in a second terminal: the desktop app, on the same running server
+shepherd            # the desktop app, and the server if it was not running (the terminal UI on a machine without a screen or without the app)
+shepherd --gui      # the desktop app, always: it says why when it cannot open
+shepherd --tui      # the terminal UI: ctrl+b a opens the Shepherd section, ctrl+b q detaches, `shepherd --tui` reattaches
+shepherd agents     # anything else is a command: the CLI
 ```
 
-`shepherd-native` finds the running server by itself (it asks `shepherd status server`) and keeps trying if you open it before the server is up. `Ctrl+Shift+S` switches between the terminal and the Shepherd panel inside the app.
+`shepherd` and `shepherd --gui` start the server first, so the window opens on a running one. `SHEPHERD_NO_GUI=1 shepherd` opens the terminal UI even where the app is installed (for scripts, SSH sessions, or if you simply live in a terminal). `shepherd-native` on its own still works: it finds the running server by itself (it asks `shepherd status server`) and keeps trying if you open it before the server is up. `Ctrl+Shift+S` switches between the terminal and the Shepherd panel inside the app.
 
 ## One server, three ways in
 
@@ -79,8 +83,8 @@ shepherd-native                 # in a second terminal: the desktop app, on the 
     <th width="33%">CLI</th>
   </tr>
   <tr>
-    <td valign="top">A Shepherd section inside the multiplexer, driven by keyboard or mouse. Runs in whatever terminal you already use.<br /><br /><code>shepherd</code> then <code>ctrl+b a</code></td>
-    <td valign="top">A native window (Rust and iced, no Electron) with graphs, the event feed and editors, over the same server.<br /><br /><code>shepherd-native</code></td>
+    <td valign="top">A Shepherd section inside the multiplexer, driven by keyboard or mouse. Runs in whatever terminal you already use.<br /><br /><code>shepherd --tui</code> then <code>ctrl+b a</code></td>
+    <td valign="top">A native window (Rust and iced, no Electron) with graphs, the event feed and editors, over the same server.<br /><br /><code>shepherd</code> or <code>shepherd --gui</code></td>
     <td valign="top">Every action is a command, and most commands accept <code>--json</code> for scripts.<br /><br /><code>shepherd agents</code></td>
   </tr>
 </table>
@@ -316,7 +320,7 @@ shepherd vendors list      # which agent clis were found on your PATH
 shepherd pattern list      # the four built-in team templates
 ```
 
-**6 · Start Shepherd and run one agent.** In one terminal run `shepherd`, then press `ctrl+b a` to open the Shepherd section (`ctrl+b q` detaches, `shepherd` reattaches). In a second terminal, in the same folder:
+**6 · Start Shepherd and run one agent.** In one terminal run `shepherd --tui`, then press `ctrl+b a` to open the Shepherd section (`ctrl+b q` detaches, `shepherd --tui` reattaches). In a second terminal, in the same folder:
 
 ```bash
 shepherd spawn coder "Create hello.txt containing 'hi' and commit it." --vendor claude --model haiku
@@ -338,7 +342,7 @@ shepherd topic tail results
 
 **8 · Make it yours.** Add a role to `.shepherd/config.yaml`, point a pattern at it, and validate (see [roles](#roles-who-does-what) and [patterns](#patterns-your-agent-teams) above).
 
-**9 · Open the desktop app.** If you installed with the one-liner you already have it: run `shepherd-native` while `shepherd` is running. To build it from source instead:
+**9 · Open the desktop app.** If you installed with the one-liner you already have it: run `shepherd` (or `shepherd --gui`), which also starts the server. To build it from source instead:
 
 ```bash
 (cd native && cargo build --release -p shepherd-native)

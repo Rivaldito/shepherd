@@ -16,7 +16,7 @@ If Zig is not on your `PATH`, point the build at it: `export ZIG=/path/to/zig`.
 
 ## 2. Install
 
-On Linux and macOS (x86_64 and arm64) the quickest way is the installer, which downloads the binaries of the latest release, checks their SHA-256 and puts them in `~/.local/bin`: `shepherd` (the server, the CLI and the terminal UI) and `shepherd-native` (the desktop app):
+On Linux and macOS (x86_64 and arm64) the quickest way is the installer, which downloads the binaries of the latest release, checks their SHA-256 and puts them in `~/.local/bin`: `shepherd` (the server, the CLI and the terminal UI) and `shepherd-native` (the desktop app, which `shepherd` opens):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh | sh
@@ -56,10 +56,12 @@ Go to a git repository with at least one commit and start Shepherd there. The pr
 
 ```bash
 cd ~/my-project
-shepherd                 # starts the server and attaches the terminal UI
+shepherd --tui           # starts the server and attaches the terminal UI
 ```
 
-Inside the UI, `Ctrl+b a` opens the Shepherd section. `Ctrl+b q` detaches and leaves everything running; run `shepherd` again to reattach.
+Inside the UI, `Ctrl+b a` opens the Shepherd section. `Ctrl+b q` detaches and leaves everything running; run `shepherd --tui` again to reattach.
+
+`shepherd` on its own opens the desktop app instead (and starts the server first) when `shepherd-native` is installed and there is a screen; on a machine without either it opens the terminal UI. `shepherd --gui` and `shepherd --tui` choose explicitly, and any other word after `shepherd` is a CLI command. See [the native app](native-app.md).
 
 Everything below can also be done from another terminal with the CLI, which talks to the same server.
 

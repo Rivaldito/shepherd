@@ -46,7 +46,7 @@ impl std::fmt::Display for ClientError {
                             write!(
                                 f,
                                 "\nRun `{}` to reattach",
-                                crate::session::local_attach_command()
+                                crate::session::local_tui_attach_command()
                             )?;
                         }
                     }

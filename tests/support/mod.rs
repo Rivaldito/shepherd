@@ -29,6 +29,8 @@ const CLIENT_MESSAGE_ENDPOINT_CONTROL: u32 = 20;
 pub fn isolate_shepherd_test_process(command: &mut CommandBuilder) {
     command.env_remove("SHEPHERD_STARTUP_CWD");
     command.env_remove("SHEPHERD_SESSION");
+    // plain `shepherd` opens the desktop app where one is installed; these tests drive the terminal UI
+    command.env("SHEPHERD_NO_GUI", "1");
 }
 
 pub fn register_spawned_shepherd_pid(pid: Option<u32>) {

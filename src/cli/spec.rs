@@ -6,47 +6,52 @@ mod completion;
 mod machine;
 
 pub(super) fn command() -> Command {
-    let command = Command::new("shepherd")
-        .about("terminal workspace manager for AI coding agents")
-        .disable_help_flag(true)
-        .disable_version_flag(true)
-        .arg(help_flag())
-        .arg(option("session", "NAME").help("Use or create a named persistent session"))
-        .arg(option("machine", "LABEL-OR-ID").help("Run an API command on a saved SSH machine"))
-        .arg(option("remote", "TARGET").help("Attach through SSH to a remote Shepherd server"))
-        .arg(
-            option("remote-keybindings", "MODE")
-                .value_parser(["local", "server"])
-                .help("Choose local or server keybindings for remote attach"),
-        )
-        .arg(flag("handoff").help("Opt into live handoff for update or remote attach"))
-        .arg(flag("default-config").help("Print default configuration and exit"))
-        .arg(flag("skill").help("Print the agent skill file and exit"))
-        .arg(
-            Arg::new("version")
-                .short('V')
-                .long("version")
-                .action(ArgAction::SetTrue)
-                .help("Print version and exit"),
-        )
-        .subcommand(completion::command())
-        .subcommand(update_command())
-        .subcommand(status_command())
-        .subcommand(config_command())
-        .subcommand(channel_command())
-        .subcommand(machine::command())
-        .subcommand(server_command())
-        .subcommand(api_command())
-        .subcommand(workspace_command())
-        .subcommand(worktree_command())
-        .subcommand(tab_command())
-        .subcommand(notification_command())
-        .subcommand(agent_command())
-        .subcommand(pane_command())
-        .subcommand(terminal_command())
-        .subcommand(session_command())
-        .subcommand(integration_command())
-        .subcommand(plugin_command());
+    let command =
+        Command::new("shepherd")
+            .about("terminal workspace manager for AI coding agents")
+            .disable_help_flag(true)
+            .disable_version_flag(true)
+            .arg(help_flag())
+            .arg(option("session", "NAME").help("Use or create a named persistent session"))
+            .arg(option("machine", "LABEL-OR-ID").help("Run an API command on a saved SSH machine"))
+            .arg(option("remote", "TARGET").help("Attach through SSH to a remote Shepherd server"))
+            .arg(
+                option("remote-keybindings", "MODE")
+                    .value_parser(["local", "server"])
+                    .help("Choose local or server keybindings for remote attach"),
+            )
+            .arg(flag("gui").help(
+                "Open the desktop app (the default when it is installed and there is a screen)",
+            ))
+            .arg(flag("tui").help("Open the terminal UI"))
+            .arg(flag("handoff").help("Opt into live handoff for update or remote attach"))
+            .arg(flag("default-config").help("Print default configuration and exit"))
+            .arg(flag("skill").help("Print the agent skill file and exit"))
+            .arg(
+                Arg::new("version")
+                    .short('V')
+                    .long("version")
+                    .action(ArgAction::SetTrue)
+                    .help("Print version and exit"),
+            )
+            .subcommand(completion::command())
+            .subcommand(update_command())
+            .subcommand(status_command())
+            .subcommand(config_command())
+            .subcommand(channel_command())
+            .subcommand(machine::command())
+            .subcommand(server_command())
+            .subcommand(api_command())
+            .subcommand(workspace_command())
+            .subcommand(worktree_command())
+            .subcommand(tab_command())
+            .subcommand(notification_command())
+            .subcommand(agent_command())
+            .subcommand(pane_command())
+            .subcommand(terminal_command())
+            .subcommand(session_command())
+            .subcommand(integration_command())
+            .subcommand(plugin_command());
     configure_help(command, 0)
 }
 
