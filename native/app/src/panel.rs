@@ -4937,10 +4937,17 @@ impl Panel {
                 .style(card_style)
                 .into()
             }
-            Some(edit) => column![edit
-                .view(self.armed == Some(Armed::DeletePattern(edit.editor.pattern.name.clone()))),]
-            .spacing(10)
-            .into(),
+            Some(edit) => {
+                let choices = crate::pattern_editor::Choices::from_models(&ctx.data.models, |v| {
+                    self.cfg.models_of(v)
+                });
+                column![edit.view(
+                    self.armed == Some(Armed::DeletePattern(edit.editor.pattern.name.clone())),
+                    &choices
+                ),]
+                .spacing(10)
+                .into()
+            }
         };
         row![
             list_box_sized(240.0, Some(top), items, vec![]),

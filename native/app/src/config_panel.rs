@@ -3281,7 +3281,7 @@ pub fn dropdown_over<'a>(
 
 /// A dropdown over `options` showing `current` (listed even when it is not among them, so a value set by hand is not
 /// lost). `empty_label`, when given, is the entry for the empty value.
-fn dropdown<'a>(
+pub(crate) fn dropdown<'a>(
     options: Vec<String>,
     current: &str,
     empty_label: Option<&'static str>,

@@ -13,6 +13,59 @@ use shepherd_app_core::shepherd_core::config::{self, Config};
 use shepherd_app_core::shepherd_core::patterns::{self, Severity};
 use std::path::Path;
 
+/// What the dropdowns of an agent offer, from the configuration.
+#[derive(Default)]
+pub struct Choices {
+    pub roles: Vec<String>,
+    pub vendors: Vec<String>,
+    /// The vendor each role runs, to list the models of the vendor an agent ends up with.
+    pub role_vendor: std::collections::HashMap<String, String>,
+    /// The models each vendor offers.
+    pub models: std::collections::HashMap<String, Vec<String>>,
+}
+
+impl Choices {
+    pub fn from_models(
+        models: &shepherd_app_core::data::Models,
+        models_of: impl Fn(&str) -> Vec<String>,
+    ) -> Self {
+        Self {
+            roles: models.roles.keys().cloned().collect(),
+            vendors: models.vendors.keys().cloned().collect(),
+            role_vendor: models
+                .roles
+                .iter()
+                .map(|(name, role)| (name.clone(), role.vendor.clone()))
+                .collect(),
+            models: models
+                .vendors
+                .keys()
+                .map(|name| (name.clone(), models_of(name)))
+                .collect(),
+        }
+    }
+
+    /// The models to offer an agent: those of the vendor it picked, else of the vendor of its role.
+    fn model_options(&self, vendor: &str, role: &str) -> Vec<String> {
+        let vendor = if vendor.is_empty() {
+            self.role_vendor.get(role).map_or("", String::as_str)
+        } else {
+            vendor
+        };
+        self.models.get(vendor).cloned().unwrap_or_default()
+    }
+}
+
+/// A count of instances is 1 to 32.
+fn count_options() -> Vec<String> {
+    (1..=32).map(|n| n.to_string()).collect()
+}
+
+/// Levels of a hierarchy are contiguous from 0, so with `agents` nodes the deepest is `agents - 1`.
+fn level_options(agents: usize) -> Vec<String> {
+    (0..agents.max(1)).map(|n| n.to_string()).collect()
+}
+
 #[derive(Debug, Clone)]
 pub enum EditMsg {
     Press(String),
@@ -27,6 +80,8 @@ pub enum EditMsg {
     ZoomOut,
     ResetZoom,
     Field(Field, String),
+    /// The vendor was picked from its list: the model belongs to a vendor, so a new vendor clears it.
+    PickVendor(String),
     Start(bool),
 }
 
@@ -293,6 +348,21 @@ impl PatternEditor {
                     self.changed(root);
                 }
             }
+            EditMsg::PickVendor(vendor) => {
+                if self.field(Field::Agent(AgentField::Vendor)) == vendor {
+                    return None;
+                }
+                if let Some(error) = self.update(
+                    EditMsg::Field(Field::Agent(AgentField::Vendor), vendor),
+                    root,
+                ) {
+                    return Some(error);
+                }
+                return self.update(
+                    EditMsg::Field(Field::Agent(AgentField::Model), String::new()),
+                    root,
+                );
+            }
             EditMsg::Field(field, value) => {
                 if let Some(slot) = self.fields.iter_mut().find(|(f, _)| *f == field) {
                     slot.1 = value.clone();
@@ -334,6 +404,32 @@ impl PatternEditor {
         None
     }
 
+    /// A field of the agent chosen from a list (`empty` is the entry that leaves it unset).
+    fn picker<'a>(
+        &'a self,
+        label: &'static str,
+        field: AgentField,
+        options: Vec<String>,
+        empty: Option<&'static str>,
+    ) -> Element<'a, Message> {
+        let on_pick = move |value: String| {
+            Message::Panel(crate::panel::PanelMsg::EditPattern(
+                if field == AgentField::Vendor {
+                    EditMsg::PickVendor(value)
+                } else {
+                    EditMsg::Field(Field::Agent(field), value)
+                },
+            ))
+        };
+        row![
+            container(text(label).size(12).color(DIM)).width(90),
+            crate::config_panel::dropdown(options, self.field(Field::Agent(field)), empty, on_pick),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center)
+        .into()
+    }
+
     fn labelled<'a>(&'a self, label: &'static str, field: Field) -> Element<'a, Message> {
         row![
             container(text(label).size(12).color(DIM)).width(90),
@@ -364,7 +460,7 @@ impl PatternEditor {
         self.editor.dirty = true;
     }
 
-    pub fn view<'a>(&'a self, delete_armed: bool) -> Element<'a, Message> {
+    pub fn view<'a>(&'a self, delete_armed: bool, choices: &Choices) -> Element<'a, Message> {
         let edit = |m: EditMsg| Message::Panel(crate::panel::PanelMsg::EditPattern(m));
         let tool = |label: &'static str, msg: EditMsg, on: bool| {
             button(container(text(label).size(12.5)).center_y(Length::Fill))
@@ -601,18 +697,29 @@ impl PatternEditor {
                 };
                 inspector = inspector
                     .push(self.labelled("node", Field::Agent(AgentField::Id)))
-                    .push(self.labelled("role", Field::Agent(AgentField::Role)))
-                    .push(self.labelled("replicas", Field::Agent(AgentField::Count)))
+                    .push(self.picker("role", AgentField::Role, choices.roles.clone(), None))
+                    .push(self.picker("replicas", AgentField::Count, count_options(), None))
                     .push(readonly("reads from", topics(true)))
                     .push(readonly("publishes to", topics(false)));
-                for (label, f) in [
-                    ("vendor", AgentField::Vendor),
-                    ("model", AgentField::Model),
-                    ("level", AgentField::Level),
-                    ("group", AgentField::Group),
-                ] {
-                    inspector = inspector.push(self.labelled(label, Field::Agent(f)));
-                }
+                let models = choices.model_options(
+                    self.field(Field::Agent(AgentField::Vendor)),
+                    self.field(Field::Agent(AgentField::Role)),
+                );
+                inspector = inspector
+                    .push(self.picker(
+                        "vendor",
+                        AgentField::Vendor,
+                        choices.vendors.clone(),
+                        Some("(from role)"),
+                    ))
+                    .push(self.picker("model", AgentField::Model, models, Some("(default)")))
+                    .push(self.picker(
+                        "level",
+                        AgentField::Level,
+                        level_options(self.editor.pattern.agents.len()),
+                        Some("(none)"),
+                    ))
+                    .push(self.labelled("group", Field::Agent(AgentField::Group)));
                 let start = self
                     .editor
                     .pattern
@@ -759,6 +866,63 @@ mod tests {
         let view = shepherd_app_core::pattern_graph::load(Path::new("/nowhere"), "blackboard")
             .expect("the built-in patterns ship with the app");
         PatternEditor::from_view(view)
+    }
+
+    #[test]
+    fn the_models_offered_are_those_of_the_picked_vendor_else_of_the_role() {
+        let mut choices = Choices::default();
+        choices.role_vendor.insert("coder".into(), "codex".into());
+        choices.models.insert("codex".into(), vec!["gpt".into()]);
+        choices
+            .models
+            .insert("claude".into(), vec!["opus".into(), "haiku".into()]);
+        assert_eq!(choices.model_options("claude", "coder"), ["opus", "haiku"]);
+        assert_eq!(choices.model_options("", "coder"), ["gpt"]);
+        assert!(choices.model_options("", "unknown").is_empty());
+    }
+
+    #[test]
+    fn counts_go_to_32_and_levels_to_one_less_than_the_agents() {
+        assert_eq!(count_options().len(), 32);
+        assert_eq!(count_options()[0], "1");
+        assert_eq!(level_options(3), ["0", "1", "2"]);
+        assert_eq!(
+            level_options(0),
+            ["0"],
+            "an empty pattern still offers the root"
+        );
+    }
+
+    #[test]
+    fn a_new_vendor_clears_the_model_and_the_same_one_keeps_it() {
+        let root = Path::new("/nowhere");
+        let mut e = builtin();
+        e.copy_as("mine");
+        let id = e.editor.pattern.agents[0].id.clone();
+        e.selected = Some(Sel::Agent(id.clone()));
+        e.refresh_fields();
+        let agent = |e: &PatternEditor| e.editor.pattern.agents[0].clone();
+        let _ = e.update(
+            EditMsg::Field(Field::Agent(AgentField::Vendor), "claude".into()),
+            root,
+        );
+        let _ = e.update(
+            EditMsg::Field(Field::Agent(AgentField::Model), "opus".into()),
+            root,
+        );
+        let _ = e.update(EditMsg::PickVendor("claude".into()), root);
+        assert_eq!(
+            agent(&e).model.as_deref(),
+            Some("opus"),
+            "the same vendor keeps the model"
+        );
+        let _ = e.update(EditMsg::PickVendor("codex".into()), root);
+        assert_eq!(agent(&e).vendor.as_deref(), Some("codex"));
+        assert_eq!(
+            agent(&e).model,
+            None,
+            "another vendor does not offer that model"
+        );
     }
 
     #[test]
