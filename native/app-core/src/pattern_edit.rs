@@ -38,6 +38,8 @@ pub enum AgentField {
     Count,
     Level,
     Group,
+    /// The persona: what the agent reads, does and publishes (empty leaves it undefined).
+    Prompt,
 }
 
 #[derive(Debug, Clone)]
@@ -232,6 +234,7 @@ impl Editor {
             AgentField::Vendor => agent.vendor = optional(value),
             AgentField::Model => agent.model = optional(value),
             AgentField::Group => agent.group = optional(value),
+            AgentField::Prompt => agent.prompt = optional(value),
             AgentField::Count => {
                 agent.count = value
                     .parse::<u32>()
@@ -288,6 +291,11 @@ impl Editor {
         }
     }
 
+    /// The YAML this pattern would be saved as, with the changes not saved yet.
+    pub fn yaml(&self) -> Result<String, String> {
+        patterns::pattern_to_yaml(&self.pattern).map_err(|e| e.to_string())
+    }
+
     /// Writes the pattern. A new one never overwrites another; a built-in one is never written.
     pub fn save(&mut self, project_root: &Path) -> Result<PathBuf, String> {
         if self.read_only() {
@@ -323,6 +331,32 @@ impl Editor {
 mod tests {
     use super::*;
     use shepherd_core::patterns::get_builtin_pattern;
+
+    #[test]
+    fn the_yaml_is_the_pattern_as_it_is_saved_and_a_persona_can_be_set_and_cleared() {
+        let mut e = Editor::open(
+            get_builtin_pattern("blackboard").unwrap(),
+            PatternSource::Builtin,
+        )
+        .duplicate("mine");
+        let id = e.pattern.agents[0].id.clone();
+        e.set_agent_field(&id, AgentField::Prompt, "  Read the topic, then answer.  ")
+            .unwrap();
+        assert_eq!(
+            e.pattern.agents[0].prompt.as_deref(),
+            Some("Read the topic, then answer."),
+            "a persona is trimmed like every field"
+        );
+        let yaml = e.yaml().unwrap();
+        assert!(yaml.contains("Read the topic, then answer."));
+        let back: shepherd_core::patterns::Pattern = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(
+            back, e.pattern,
+            "what is shown reads back as the same pattern"
+        );
+        e.set_agent_field(&id, AgentField::Prompt, "").unwrap();
+        assert_eq!(e.pattern.agents[0].prompt, None);
+    }
 
     fn editor() -> Editor {
         Editor::open(
