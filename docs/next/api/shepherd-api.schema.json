@@ -14388,6 +14388,15 @@
         },
         "Topic2": {
           "properties": {
+            "max_messages": {
+              "description": "The most messages the topic takes; the next `publish` fails. `None` (the default, and what older\n`.topics` files hold) is no limit.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "name": {
               "type": "string"
             },

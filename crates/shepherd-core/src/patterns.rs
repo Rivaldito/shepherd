@@ -148,7 +148,13 @@ pub struct Topic {
     pub filter: Option<String>,
     /// The most messages the topic takes in a run: past it, `publish` fails and the agents must stop.
     /// A hard cap for feedback loops. No limit when absent.
+    ///
+    /// Not in the JSON schema on purpose: `Pattern` is the parameter of the frozen v1 method
+    /// `shepherd.pattern.save`, whose shape must not change. A server that predates the field drops it
+    /// when a pattern is saved through that method; patterns kept as files and the built-in templates are
+    /// not affected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub max_messages: Option<u32>,
 }
 
