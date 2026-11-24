@@ -1282,6 +1282,26 @@ mod tests {
     }
 
     #[test]
+    fn test_builtin_templates_validate_without_warnings_of_their_own() {
+        // a warning about a vendor that is not installed depends on the machine; any other is the template's fault
+        let config = Config::default();
+        for tmpl in EMBEDDED_TEMPLATES {
+            let pattern: Pattern =
+                serde_yaml_ng::from_str(tmpl.yaml).expect("deserialize template");
+            let own: Vec<_> = validate(&pattern, &config)
+                .into_iter()
+                .filter(|p| !p.path.ends_with(".vendor"))
+                .collect();
+            assert!(
+                own.is_empty(),
+                "template '{}' has problems: {:?}",
+                tmpl.name,
+                own
+            );
+        }
+    }
+
+    #[test]
     fn test_builtin_templates_validate_without_errors() {
         let config = Config::default();
         for tmpl in EMBEDDED_TEMPLATES {
