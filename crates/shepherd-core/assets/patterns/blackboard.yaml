@@ -1,6 +1,11 @@
 name: blackboard
 kind: blackboard
-description: 'Shared knowledge base where specialist agents read hypotheses and post discoveries. Starts: researcher (posts the first hypothesis to `blackboard`). Analyst and synthesizer wait for entries on `blackboard`, then post validations and the final synthesis there.'
+description: |-
+  Shared knowledge base where specialist agents read hypotheses and post discoveries. Starts: researcher (posts the first hypothesis to `blackboard`). Analyst and synthesizer wait for entries on `blackboard`, then post validations and the final synthesis there.
+
+  Use it when the problem is unclear and several viewpoints must read each other's findings, with no fixed order: research, hunting a root cause, reviewing a design. Not when the work splits cleanly into parts.
+
+  Example: shepherd pattern run blackboard --task "Find out why the nightly import takes four hours"
 topics:
   - name: blackboard
     partitions: 1

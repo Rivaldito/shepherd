@@ -1,6 +1,11 @@
 name: tdd
 kind: blackboard
-description: 'Multi-agent TDD. Starts: test-writer (posts `tests:` to `board`, written from the spec alone, so it never tailors them to an implementation). The coder implements until they pass; the runner runs the real test command and posts the exact failures back. Capped at 4 rounds, then it stops for a human.'
+description: |-
+  Multi-agent TDD. Starts: test-writer (posts `tests:` to `board`, written from the spec alone, so it never tailors them to an implementation). The coder implements until they pass; the runner runs the real test command and posts the exact failures back. Capped at 4 rounds, then it stops for a human.
+
+  Use it when you have a clear spec and want tests that do not mirror the implementation: the test writer never sees the code. Not when the spec is still vague.
+
+  Example: shepherd pattern run tdd --task "Implement slugify(title) as described in docs/slugify.md: lowercase, hyphens, no accents"
 topics:
   - name: board
     partitions: 1

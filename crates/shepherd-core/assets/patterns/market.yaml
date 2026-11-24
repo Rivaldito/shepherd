@@ -1,6 +1,11 @@
 name: market
 kind: market
-description: 'Competitive market where solvers bid on asks coordinated by a market-maker. Starts: requesters (publish `ask` from the objective). Solvers wait for `ask` and publish `bid`; the market-maker waits for `ask`/`bid` and publishes the `transaction`; requesters and solvers then react to it.'
+description: |-
+  Competitive market where solvers bid on asks coordinated by a market-maker. Starts: requesters (publish `ask` from the objective). Solvers wait for `ask` and publish `bid`; the market-maker waits for `ask`/`bid` and publishes the `transaction`; requesters and solvers then react to it.
+
+  Use it when there are several ways to solve it and you want rival proposals: solvers bid, the market-maker picks the winner and that solver does the work. Costs more than one agent, so use it when the choice matters.
+
+  Example: shepherd pattern run market --task "Choose and implement the fastest way to deduplicate 10 million rows"
 topics:
   - name: bid
     partitions: 2

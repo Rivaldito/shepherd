@@ -1,6 +1,11 @@
 name: reflection-loop
 kind: blackboard
-description: 'Generator and critic: one agent writes code or tests, the other reviews them on a different vendor and sends comments back until it approves. Starts: generator (posts `draft:` to `board`). The critic answers `critique:` (REQUEST_CHANGES with file:line comments, or APPROVE). Capped at 3 rounds; after that both stop and the run shows as stalled for a human.'
+description: |-
+  Generator and critic: one agent writes code or tests, the other reviews them on a different vendor and sends comments back until it approves. Starts: generator (posts `draft:` to `board`). The critic answers `critique:` (REQUEST_CHANGES with file:line comments, or APPROVE). Capped at 3 rounds; after that both stop and the run shows as stalled for a human.
+
+  Use it when one agent's output needs a second pair of eyes before you accept it, new code or new tests, and the standard is clear enough for a critic to judge. Not for open exploration.
+
+  Example: shepherd pattern run reflection-loop --task "Write unit tests for src/billing/invoice.rs; the critic must approve before I read them"
 topics:
   - name: board
     partitions: 1

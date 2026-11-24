@@ -2,6 +2,10 @@ Pattern: orchestrator-worker (orchestrator-worker)
 Source:  builtin ((built-in template))
 Purpose: Central orchestrator dispatches partitioned tasks to a worker pool and aggregates results. Starts: orchestrator (receives the objective, publishes task orders to `orders`). Workers wait for `orders` and publish results to `results`; the orchestrator aggregates them.
 
+Use it when a job splits into independent pieces of similar size (one module, one handler or one file per worker) and one agent can plan them. Not when the pieces depend on each other (use hierarchical) or when you want rival answers (use market).
+
+Example: shepherd pattern run orchestrator-worker --task "Add input validation to the 12 API handlers, one handler per worker"
+
 Topics (2):
   • orders               (partitions: 4, key: task_id)
   • results              (partitions: 1)

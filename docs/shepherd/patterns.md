@@ -29,6 +29,23 @@ tdd                      blackboard           builtin  no        3       1
 
 `SHADOWED` tells you when a project or user pattern hides another one with the same name.
 
+## 1b. Which built-in to pick
+
+Every built-in explains itself in the apps and in `shepherd pattern show <name>`: what it is, when to use it and an example. In short:
+
+| Template | Use it when | Example |
+|---|---|---|
+| `orchestrator-worker` | A job splits into independent pieces of similar size (one module, one handler or one file per worker) and one agent can plan them. Not when the pieces depend on each other (use hierarchical) or when you want rival answers (use market). | `shepherd pattern run orchestrator-worker --task "Add input validation to the 12 API handlers, one handler per worker"` |
+| `hierarchical` | The job is big enough to need levels: a director, a manager per area and specialists under each (frontend, backend, tests). Not for small jobs, where the extra layers only cost tokens. | `shepherd pattern run hierarchical --task "Move the billing service to the new payments API: backend, API client and tests teams"` |
+| `blackboard` | The problem is unclear and several viewpoints must read each other's findings, with no fixed order: research, hunting a root cause, reviewing a design. Not when the work splits cleanly into parts. | `shepherd pattern run blackboard --task "Find out why the nightly import takes four hours"` |
+| `market` | There are several ways to solve it and you want rival proposals: solvers bid, the market-maker picks the winner and that solver does the work. Costs more than one agent, so use it when the choice matters. | `shepherd pattern run market --task "Choose and implement the fastest way to deduplicate 10 million rows"` |
+| `reflection-loop` | One agent's output needs a second pair of eyes before you accept it, new code or new tests, and the standard is clear enough for a critic to judge. Not for open exploration. | `shepherd pattern run reflection-loop --task "Write unit tests for src/billing/invoice.rs; the critic must approve before I read them"` |
+| `tdd` | You have a clear spec and want tests that do not mirror the implementation: the test writer never sees the code. Not when the spec is still vague. | `shepherd pattern run tdd --task "Implement slugify(title) as described in docs/slugify.md: lowercase, hyphens, no accents"` |
+| `agentcoder` | You want an independent test suite that includes edge and large cases, and a real test run whose errors go straight back to the programmer. Needs a project whose tests run from the command line. | `shepherd pattern run agentcoder --task "Implement an LRU cache with a capacity and a time to live"` |
+| `mutation-testing` | Tests already exist and you doubt they would catch a real bug: the mutator plants bugs and the score shows how many the tests notice. It judges the tests, it does not write the feature. | `shepherd pattern run mutation-testing --task "Measure how well the tests in src/parser catch bugs"` |
+| `planner-workers-reviewer` | You need unit tests for many modules at once: the planner gives one module to each worker and a reviewer checks coverage and quality before anything is reported. Not for a single module. | `shepherd pattern run planner-workers-reviewer --task "Add unit tests for every module under src/services, one worker per module"` |
+| `self-debug` | A bug or a failing test survives the first fix and you want attempts that learn from each other: after each failure the solver writes a reflection and the debugger reproduces it independently. | `shepherd pattern run self-debug --task "Fix test_checkout_total: it only fails when a discount code is used"` |
+
 ## 2. The workflow
 
 ```bash

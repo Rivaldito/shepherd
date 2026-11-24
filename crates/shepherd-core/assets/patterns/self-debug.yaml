@@ -1,6 +1,11 @@
 name: self-debug
 kind: blackboard
-description: 'Reflexion and self-debug. Starts: solver (posts `attempt:` to `board`). When the real tests fail, the solver reads the traceback and posts a `reflection:` (what failed, why, what to try); the debugger reproduces the failure independently and posts a `diagnosis:`. Every next attempt starts by reading all earlier reflections on the board, which is the memory. Capped at 4 attempts.'
+description: |-
+  Reflexion and self-debug. Starts: solver (posts `attempt:` to `board`). When the real tests fail, the solver reads the traceback and posts a `reflection:` (what failed, why, what to try); the debugger reproduces the failure independently and posts a `diagnosis:`. Every next attempt starts by reading all earlier reflections on the board, which is the memory. Capped at 4 attempts.
+
+  Use it when a bug or a failing test survives the first fix and you want attempts that learn from each other: after each failure the solver writes a reflection and the debugger reproduces it independently.
+
+  Example: shepherd pattern run self-debug --task "Fix test_checkout_total: it only fails when a discount code is used"
 topics:
   - name: board
     partitions: 1

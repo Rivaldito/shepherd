@@ -1,6 +1,11 @@
 name: agentcoder
 kind: blackboard
-description: 'Programmer, test designer and executor, after the AgentCoder paper. Starts: programmer (posts `code:` to `board`). The test designer posts independent tests (basic, edge and large cases) written from the spec only; the executor runs them and sends the real errors to the programmer. Capped at 4 rounds.'
+description: |-
+  Programmer, test designer and executor, after the AgentCoder paper. Starts: programmer (posts `code:` to `board`). The test designer posts independent tests (basic, edge and large cases) written from the spec only; the executor runs them and sends the real errors to the programmer. Capped at 4 rounds.
+
+  Use it when you want an independent test suite that includes edge and large cases, and a real test run whose errors go straight back to the programmer. Needs a project whose tests run from the command line.
+
+  Example: shepherd pattern run agentcoder --task "Implement an LRU cache with a capacity and a time to live"
 topics:
   - name: board
     partitions: 1

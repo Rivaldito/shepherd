@@ -278,9 +278,14 @@ pub fn render_patterns_section(
             let mut blocks = Vec::new();
 
             blocks.push(DetailContentBlock::Heading("DESCRIPTION".into()));
+            // the first paragraph says what the pattern is; the next ones say when to use it and give an example
             blocks.push(DetailContentBlock::Paragraph(
-                detail.pattern.description.clone(),
+                shepherd_core::patterns::description_summary(&detail.pattern.description),
             ));
+            for paragraph in shepherd_core::patterns::description_guide(&detail.pattern.description)
+            {
+                blocks.push(DetailContentBlock::Paragraph(paragraph));
+            }
 
             blocks.push(DetailContentBlock::Heading(
                 "TOPOLOGY DIAGRAM (ASCII)".into(),
