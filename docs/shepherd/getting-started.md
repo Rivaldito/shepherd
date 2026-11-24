@@ -207,6 +207,7 @@ If a pattern run would exceed `max_concurrent`, `shepherd pattern run` asks for 
 
 ## Next steps
 
+- [shortcuts.md](shortcuts.md): every key, how to split the terminal, and the CLI behind each action.
 - [the-pieces.md](the-pieces.md): what each piece (role, skill, pattern, topic, run...) is for.
 - [recipe-own-team.md](recipe-own-team.md): build your own role, skill and pattern, step by step.
 - [agents-roles-skills.md](agents-roles-skills.md): tune roles, add skills.
