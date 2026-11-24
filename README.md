@@ -53,6 +53,14 @@ It downloads the prebuilt binaries of the latest [release](https://github.com/Ri
 
 The installer also adds a launcher for the desktop app: a menu entry with its icon on Linux, and `Shepherd.app` in `~/Applications` on macOS.
 
+**Windows (x86_64, terminal UI only)**, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.ps1 | iex
+```
+
+It installs `shepherd.exe` and its ConPTY runtime in `%LOCALAPPDATA%\Shepherd\bin` and adds that folder to your user PATH. The desktop app is not built for Windows yet, so `shepherd` opens the terminal UI.
+
 <details>
 <summary><b>Headless servers, desktop requirements, building from source</b></summary>
 <br />
