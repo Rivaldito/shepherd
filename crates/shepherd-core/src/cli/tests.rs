@@ -871,7 +871,7 @@ fn test_pattern_cli_lifecycle_and_json() {
     let out_list = run_with_buf(&root, &["pattern", "list", "--json"], None, None).unwrap();
     let list_json: Value = serde_json::from_str(&out_list).expect("valid json list");
     let list_arr = list_json.as_array().expect("array of patterns");
-    assert_eq!(list_arr.len(), 4);
+    assert_eq!(list_arr.len(), crate::patterns::EMBEDDED_TEMPLATES.len());
 
     // Human list format check
     let out_human_list = run_with_buf(&root, &["pattern", "list"], None, None).unwrap();

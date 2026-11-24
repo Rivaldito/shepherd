@@ -251,13 +251,11 @@ mod tests {
     }
 
     #[test]
-    fn the_four_builtin_topologies_all_lay_out() {
-        for name in [
-            "orchestrator-worker",
-            "hierarchical",
-            "blackboard",
-            "market",
-        ] {
+    fn every_builtin_pattern_lays_out() {
+        for name in shepherd_core::patterns::EMBEDDED_TEMPLATES
+            .iter()
+            .map(|t| t.name)
+        {
             let pattern = get_builtin_pattern(name).unwrap_or_else(|| panic!("{name} missing"));
             let graph = layout(&pattern);
             assert!(graph.width > 0.0 && graph.height > 0.0, "{name}");

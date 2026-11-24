@@ -1426,7 +1426,10 @@ fn test_handle_call_pattern_operations() {
         .handle_call("patterns", serde_json::json!({ "root": root_str }))
         .unwrap();
     let list = list_val.as_array().expect("array of patterns");
-    assert_eq!(list.len(), 4);
+    // a user-wide pattern on the machine running the test may add to the list: count the built-in ones
+    let before = list.len();
+    let builtin = list.iter().filter(|p| p["source"] == "builtin").count();
+    assert_eq!(builtin, crate::patterns::EMBEDDED_TEMPLATES.len());
 
     // 2. Pattern get
     let get_val = service
@@ -1461,11 +1464,11 @@ fn test_handle_call_pattern_operations() {
     assert_eq!(save_val["name"], "custom-test-orch");
     assert_eq!(save_val["source"], "project");
 
-    // Now list should have 5 patterns
+    // Now list should have one more
     let list_val2 = service
         .handle_call("patterns", serde_json::json!({ "root": root_str }))
         .unwrap();
-    assert_eq!(list_val2.as_array().unwrap().len(), 5);
+    assert_eq!(list_val2.as_array().unwrap().len(), before + 1);
 
     // 5. Pattern delete
     let del_val = service

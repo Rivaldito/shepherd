@@ -1,0 +1,32 @@
+name: agentcoder
+kind: blackboard
+description: 'Programmer, test designer and executor, after the AgentCoder paper. Starts: programmer (posts `code:` to `board`). The test designer posts independent tests (basic, edge and large cases) written from the spec only; the executor runs them and sends the real errors to the programmer. Capped at 4 rounds.'
+topics:
+  - name: board
+    partitions: 1
+agents:
+  - id: programmer
+    role: coder
+    count: 1
+    start: true
+    prompt: "You are the programmer. Implement the run objective in your worktree and post 'code: round 1/4' with your branch. When 'errors:' arrives, fix the code using those real errors and post the next round. Do not write or edit the tests: they belong to the test designer. After round 4 with errors left, post 'blocked: ' with what is unresolved and stop."
+    publishes:
+      - board
+    consumes:
+      - board
+  - id: test-designer
+    role: tester
+    count: 1
+    prompt: "You are the test designer. Work from the run objective only, never from the programmer's code. Write one independent suite covering basic cases, edge cases (empty, boundaries, invalid input, ordering) and large cases (volume or performance sanity), commit it in your worktree and post 'tests: <branch and the command that runs them>'. Fix a test only if the spec shows it is wrong."
+    publishes:
+      - board
+    consumes:
+      - board
+  - id: executor
+    role: tester
+    count: 1
+    prompt: "You are the executor. When both 'code:' and 'tests:' are on the board, run the tests against the programmer's branch with the project's real test command. Post 'errors: round N/4' with the command, the pass and fail counts and, for every failure, the test name and the first lines of the real output, copied as is. If all pass, post 'passed: round N/4'. Do not edit any file."
+    publishes:
+      - board
+    consumes:
+      - board

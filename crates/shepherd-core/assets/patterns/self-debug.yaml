@@ -1,0 +1,24 @@
+name: self-debug
+kind: blackboard
+description: 'Reflexion and self-debug. Starts: solver (posts `attempt:` to `board`). When the real tests fail, the solver reads the traceback and posts a `reflection:` (what failed, why, what to try); the debugger reproduces the failure independently and posts a `diagnosis:`. Every next attempt starts by reading all earlier reflections on the board, which is the memory. Capped at 4 attempts.'
+topics:
+  - name: board
+    partitions: 1
+agents:
+  - id: solver
+    role: coder
+    count: 1
+    start: true
+    prompt: "You are the solver. Implement the run objective, run the project's real tests and post 'attempt: N/4' with the result. If they fail, read the traceback and post 'reflection: N/4' with three short parts: what failed, why, what you will change. Before each new attempt, read every earlier 'reflection:' and 'diagnosis:' on the board and do not repeat a change that already failed. After attempt 4 still failing, post 'blocked: ' with the reflections summarised and stop."
+    publishes:
+      - board
+    consumes:
+      - board
+  - id: debugger
+    role: tester
+    count: 1
+    prompt: "You are the debugger. When an 'attempt:' reports failing tests, check out the solver's branch, reproduce the failure yourself and post 'diagnosis: N/4' with the root cause (file:line) and the smallest fix you would try. Do not edit files and do not repeat a diagnosis the solver already refuted."
+    publishes:
+      - board
+    consumes:
+      - board

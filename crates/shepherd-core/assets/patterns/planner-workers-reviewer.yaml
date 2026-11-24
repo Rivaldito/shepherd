@@ -1,0 +1,40 @@
+name: planner-workers-reviewer
+kind: orchestrator-worker
+description: 'Planner, workers and a reviewer, for tests across modules. Starts: planner (splits the objective into modules and publishes one order per module to `orders`). Each worker writes the unit tests of its module and publishes the result to `results`; the reviewer checks coverage and quality of every result and publishes `reviews`; the planner aggregates only what the reviewer approved. Nothing is merged by the run.'
+topics:
+  - name: orders
+    partitions: 4
+    key: task_id
+  - name: results
+    partitions: 1
+  - name: reviews
+    partitions: 1
+agents:
+  - id: planner
+    role: brain
+    count: 1
+    start: true
+    prompt: "You are the planner. Split the run objective into independent modules and publish one order per module to orders (module, files, what to cover). When reviews arrive, wait for the reviewer's verdict on each result (the results topic shows what was done, reviews says what is approved) and collect the approved ones into the final report: modules covered, tests added, anything the reviewer rejected. If a module is rejected twice, report it as not done instead of ordering a third time. Do not merge anything."
+    publishes:
+      - orders
+    consumes:
+      - results
+      - reviews
+  - id: worker
+    role: coder
+    count: 3
+    group: worker-pool
+    prompt: "You are a test worker. When an order arrives, write the unit tests for that module in your worktree (basic, edge and error cases), run them with the project's real test command, commit, and publish to results the branch, the command and the exact pass and fail counts. If the reviewer sends it back, fix and publish again; at most one retry."
+    consumes:
+      - orders
+    publishes:
+      - results
+  - id: reviewer
+    role: reviewer
+    count: 1
+    group: review-pool
+    prompt: "You are the reviewer. For every result, read the diff and check coverage (every branch and error path of the module) and quality (readable, independent, no test that cannot fail). Publish to reviews APPROVE or REQUEST_CHANGES with file:line comments. Do not edit files."
+    consumes:
+      - results
+    publishes:
+      - reviews

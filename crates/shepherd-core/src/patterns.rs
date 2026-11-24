@@ -17,6 +17,13 @@ const TEMPLATE_ORCHESTRATOR_WORKER: &str =
 const TEMPLATE_HIERARCHICAL: &str = include_str!("../assets/patterns/hierarchical.yaml");
 const TEMPLATE_BLACKBOARD: &str = include_str!("../assets/patterns/blackboard.yaml");
 const TEMPLATE_MARKET: &str = include_str!("../assets/patterns/market.yaml");
+const TEMPLATE_REFLECTION_LOOP: &str = include_str!("../assets/patterns/reflection-loop.yaml");
+const TEMPLATE_TDD: &str = include_str!("../assets/patterns/tdd.yaml");
+const TEMPLATE_AGENTCODER: &str = include_str!("../assets/patterns/agentcoder.yaml");
+const TEMPLATE_MUTATION_TESTING: &str = include_str!("../assets/patterns/mutation-testing.yaml");
+const TEMPLATE_PLANNER_WORKERS_REVIEWER: &str =
+    include_str!("../assets/patterns/planner-workers-reviewer.yaml");
+const TEMPLATE_SELF_DEBUG: &str = include_str!("../assets/patterns/self-debug.yaml");
 
 pub struct EmbeddedTemplate {
     pub name: &'static str,
@@ -39,6 +46,30 @@ pub const EMBEDDED_TEMPLATES: &[EmbeddedTemplate] = &[
     EmbeddedTemplate {
         name: "market",
         yaml: TEMPLATE_MARKET,
+    },
+    EmbeddedTemplate {
+        name: "reflection-loop",
+        yaml: TEMPLATE_REFLECTION_LOOP,
+    },
+    EmbeddedTemplate {
+        name: "tdd",
+        yaml: TEMPLATE_TDD,
+    },
+    EmbeddedTemplate {
+        name: "agentcoder",
+        yaml: TEMPLATE_AGENTCODER,
+    },
+    EmbeddedTemplate {
+        name: "mutation-testing",
+        yaml: TEMPLATE_MUTATION_TESTING,
+    },
+    EmbeddedTemplate {
+        name: "planner-workers-reviewer",
+        yaml: TEMPLATE_PLANNER_WORKERS_REVIEWER,
+    },
+    EmbeddedTemplate {
+        name: "self-debug",
+        yaml: TEMPLATE_SELF_DEBUG,
     },
 ];
 
@@ -1365,7 +1396,7 @@ mod tests {
 
         // 1. Initial listing: only builtins
         let list1 = list_patterns(&proj_root, Some(&glob_dir)).unwrap();
-        assert_eq!(list1.len(), 4);
+        assert_eq!(list1.len(), EMBEDDED_TEMPLATES.len());
         assert!(list1
             .iter()
             .all(|s| s.source == PatternSource::Builtin && !s.shadowed));
@@ -1472,15 +1503,10 @@ mod tests {
     }
 
     #[test]
-    fn test_get_builtin_pattern_loads_all_four_types() {
-        for name in &[
-            "orchestrator-worker",
-            "hierarchical",
-            "blackboard",
-            "market",
-        ] {
+    fn test_get_builtin_pattern_loads_every_template() {
+        for name in EMBEDDED_TEMPLATES.iter().map(|t| t.name) {
             let pat = get_builtin_pattern(name).expect("builtin pattern must deserialize");
-            assert_eq!(&pat.name, name);
+            assert_eq!(pat.name, name);
             assert!(!pat.agents.is_empty());
             assert!(!pat.topics.is_empty());
         }
