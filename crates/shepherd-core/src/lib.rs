@@ -4,6 +4,7 @@
 //! integrations. Those are adapters around the same workflow rules.
 
 pub mod bus;
+pub mod checks;
 pub mod cli;
 pub mod config;
 pub mod git;

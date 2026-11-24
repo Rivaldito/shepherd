@@ -4,6 +4,7 @@ description: 'Multi-agent TDD. Starts: test-writer (posts `tests:` to `board`, w
 topics:
   - name: board
     partitions: 1
+    max_messages: 16
 agents:
   - id: test-writer
     role: tester
@@ -25,7 +26,7 @@ agents:
   - id: runner
     role: tester
     count: 1
-    prompt: "You are the runner. When 'code:' arrives, run the project's real test command on the coder's branch with the tests. Post 'failures: round N/4' with the exact result: the command, how many passed and failed, and for each failure the test name and the first lines of the real output, copied as is, never paraphrased. If everything passes, post 'passed: round N/4' and the full summary line. Do not edit any file."
+    prompt: "You are the runner. When 'code:' arrives, check out the coder's branch with the tests and call the run_checks tool with the coder's agent id: it runs the project's real checks and returns PASSED or FAILED, the exit code and the real output of each command. Post 'failures: round N/4' with that report copied as is, never paraphrased or summarised (add only the round). If it says PASSED, post 'passed: round N/4' and the summary line. If run_checks reports that there are no checks to run, say so and stop: do not invent a command. Do not edit any file."
     publishes:
       - board
     consumes:

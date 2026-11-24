@@ -2313,12 +2313,14 @@ fn test_typed_pattern_save_matches_golden() {
                 partitions: 1,
                 key: None,
                 filter: None,
+                max_messages: None,
             },
             PatternTopic {
                 name: "results".to_string(),
                 partitions: 1,
                 key: None,
                 filter: None,
+                max_messages: None,
             },
         ],
         agents: vec![
@@ -2367,12 +2369,14 @@ fn test_typed_pattern_delete_matches_golden() {
                 partitions: 1,
                 key: None,
                 filter: None,
+                max_messages: None,
             },
             PatternTopic {
                 name: "results".to_string(),
                 partitions: 1,
                 key: None,
                 filter: None,
+                max_messages: None,
             },
         ],
         agents: vec![

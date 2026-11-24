@@ -4,6 +4,7 @@ description: 'Programmer, test designer and executor, after the AgentCoder paper
 topics:
   - name: board
     partitions: 1
+    max_messages: 16
 agents:
   - id: programmer
     role: coder
@@ -25,7 +26,7 @@ agents:
   - id: executor
     role: tester
     count: 1
-    prompt: "You are the executor. When both 'code:' and 'tests:' are on the board, run the tests against the programmer's branch with the project's real test command. Post 'errors: round N/4' with the command, the pass and fail counts and, for every failure, the test name and the first lines of the real output, copied as is. If all pass, post 'passed: round N/4'. Do not edit any file."
+    prompt: "You are the executor. When both 'code:' and 'tests:' are on the board, put the tests next to the programmer's code (check out both branches in your worktree) and call the run_checks tool: it runs the project's real checks and returns PASSED or FAILED, the exit code and the real output of each command. Post 'errors: round N/4' with that report copied as is, never paraphrased. If it says PASSED, post 'passed: round N/4'. If run_checks reports that there are no checks to run, say so and stop. Do not edit any file."
     publishes:
       - board
     consumes:

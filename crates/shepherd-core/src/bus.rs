@@ -96,6 +96,10 @@ impl Serialize for Message {
 pub struct Topic {
     pub name: String,
     pub partitions: u32,
+    /// The most messages the topic takes; the next `publish` fails. `None` (the default, and what older
+    /// `.topics` files hold) is no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_messages: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -244,6 +248,7 @@ impl MessageBus {
                                     .or_insert_with(|| Topic {
                                         name: message.topic.clone(),
                                         partitions: 1,
+                                        max_messages: None,
                                     });
                             entry.partitions = entry.partitions.max(message.partition + 1);
                         }
@@ -388,11 +393,22 @@ impl MessageBus {
         name: &str,
         partitions: u32,
     ) -> Result<Topic, Box<dyn std::error::Error + Send + Sync>> {
+        self.topic_create_limited(name, partitions, None)
+    }
+
+    /// Like [`Self::topic_create`], with the most messages the topic takes (`None`: no limit).
+    pub fn topic_create_limited(
+        &self,
+        name: &str,
+        partitions: u32,
+        max_messages: Option<u32>,
+    ) -> Result<Topic, Box<dyn std::error::Error + Send + Sync>> {
         let mut state = self.state.lock().map_err(|_| "message bus lock poisoned")?;
         let partitions = partitions.max(1);
         let topic = Topic {
             name: name.to_owned(),
             partitions,
+            max_messages,
         };
         state.topics.insert(name.to_owned(), topic.clone());
         save_json_sidecar(&self.path, ".topics", &state.topics)?;
@@ -429,12 +445,27 @@ impl MessageBus {
         from: &str,
     ) -> Result<Message, Box<dyn std::error::Error + Send + Sync>> {
         let mut state = self.state.lock().map_err(|_| "message bus lock poisoned")?;
+        if let Some(max) = state.topics.get(topic).and_then(|t| t.max_messages) {
+            let published: u64 = state
+                .topic_partition_next_offset
+                .iter()
+                .filter(|((t, _), _)| t == topic)
+                .map(|(_, n)| *n)
+                .sum();
+            if published >= u64::from(max) {
+                return Err(format!(
+                    "topic '{topic}' reached its limit of {max} messages: stop publishing and tell the human what is unresolved"
+                )
+                .into());
+            }
+        }
         let partitions = match state.topics.get(topic) {
             Some(t) => t.partitions,
             None => {
                 let new_topic = Topic {
                     name: topic.to_owned(),
                     partitions: 1,
+                    max_messages: None,
                 };
                 state.topics.insert(topic.to_owned(), new_topic);
                 save_json_sidecar(&self.path, ".topics", &state.topics)?;
@@ -510,6 +541,7 @@ impl MessageBus {
                 Topic {
                     name: topic.to_owned(),
                     partitions: 1,
+                    max_messages: None,
                 },
             );
             save_json_sidecar(&self.path, ".topics", &state.topics)?;
@@ -988,6 +1020,47 @@ mod tests {
         assert_eq!(mail[0].offset, 0);
 
         clean_bus_files(&path);
+    }
+
+    #[test]
+    fn a_topic_with_a_limit_refuses_the_message_after_it_and_keeps_the_limit_when_reopened() {
+        let path =
+            std::env::temp_dir().join(format!("shepherd-topic-limit-{}.jsonl", std::process::id()));
+        clean_bus_files(&path);
+        let bus = MessageBus::open(&path).unwrap();
+        bus.topic_create_limited("board", 1, Some(2)).unwrap();
+        bus.publish("board", "one", None, None, "a").unwrap();
+        bus.publish("board", "two", None, None, "b").unwrap();
+        let refused = bus.publish("board", "three", None, None, "a").unwrap_err();
+        assert!(
+            refused.to_string().contains("reached its limit of 2"),
+            "{refused}"
+        );
+        // another topic, and a topic with no limit, are not affected
+        bus.publish("other", "x", None, None, "a").unwrap();
+        // a fresh handle (each MCP call opens one) still counts and still refuses
+        let again = MessageBus::open(&path).unwrap();
+        assert!(again.publish("board", "four", None, None, "a").is_err());
+        assert_eq!(
+            again
+                .list_topics()
+                .unwrap()
+                .iter()
+                .find(|t| t.name == "board")
+                .unwrap()
+                .messages_count,
+            2
+        );
+        clean_bus_files(&path);
+    }
+
+    #[test]
+    fn an_old_topics_file_without_a_limit_still_loads_and_has_none() {
+        let topic: Topic = serde_json::from_str(r#"{"name":"orders","partitions":4}"#).unwrap();
+        assert_eq!(topic.max_messages, None);
+        assert!(!serde_json::to_string(&topic)
+            .unwrap()
+            .contains("max_messages"));
     }
 
     #[test]

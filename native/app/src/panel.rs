@@ -1065,6 +1065,7 @@ impl Panel {
                         partitions: 1,
                         key: None,
                         filter: None,
+                        max_messages: None,
                     }],
                     agents: vec![PatternAgent {
                         id: "a1".into(),

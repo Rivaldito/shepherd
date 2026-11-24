@@ -4,6 +4,7 @@ description: 'Measures whether the tests are worth anything. Starts: mutator (po
 topics:
   - name: board
     partitions: 1
+    max_messages: 16
 agents:
   - id: mutator
     role: coder

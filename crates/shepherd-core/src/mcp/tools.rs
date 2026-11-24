@@ -99,6 +99,17 @@ pub(crate) fn tool_list() -> Value {
             }
         },
         {
+            "name": "run_checks",
+            "description": "Run the project's checks (workflow.checks, or cargo test, pytest, npm test, go test) in an agent's worktree and get the real result: PASSED or FAILED, the exit code and the end of the output of each command. The result is the exit code, not an opinion. Defaults to your own worktree.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {"type": "string", "description": "Whose worktree to check; defaults to yours (use the coder's id to check the coder's branch)"},
+                    "timeout_secs": {"type": "integer", "description": "Per command, default 600, at most 3600"}
+                }
+            }
+        },
+        {
             "name": "read_output",
             "description": "Read the last N lines of an agent's terminal pane.",
             "inputSchema": {
@@ -622,6 +633,31 @@ pub(crate) fn call_tool(
                 text.push_str("\n... (diff truncated)");
             }
             text
+        }
+        "run_checks" => {
+            let id = args
+                .get("agent_id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(agent.id.as_str());
+            let registry =
+                load_agent_registry(&state.registry).map_err(|error| error.to_string())?;
+            let target = registry
+                .result(id)
+                .ok_or_else(|| format!("unknown agent {id:?}"))?;
+            if target.worktree.is_empty() {
+                return Err(format!("agent {id:?} has no worktree"));
+            }
+            let config = config::load_config(&target.root).map_err(|error| error.to_string())?;
+            let worktree = Path::new(&target.worktree);
+            let commands = crate::checks::commands_for(&config, worktree);
+            let timeout = args
+                .get("timeout_secs")
+                .and_then(Value::as_u64)
+                .map_or(crate::checks::DEFAULT_TIMEOUT, Duration::from_secs)
+                .min(crate::checks::MAX_TIMEOUT);
+            let report = crate::checks::run(worktree, &commands, timeout);
+            crate::checks::format(&report)
         }
         "update_task_context" => {
             if !matches!(agent.role.as_str(), "brain" | "docs") {

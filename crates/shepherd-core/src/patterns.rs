@@ -146,6 +146,16 @@ pub struct Topic {
     pub key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<String>,
+    /// The most messages the topic takes in a run: past it, `publish` fails and the agents must stop.
+    /// A hard cap for feedback loops. No limit when absent.
+    ///
+    /// Not in the JSON schema on purpose: `Pattern` is the parameter of the frozen v1 method
+    /// `shepherd.pattern.save`, whose shape must not change. A server that predates the field drops it
+    /// when a pattern is saved through that method; patterns kept as files and the built-in templates are
+    /// not affected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub max_messages: Option<u32>,
 }
 
 fn default_count() -> u32 {
@@ -462,6 +472,13 @@ pub fn validate(pattern: &Pattern, config: &Config) -> Vec<Problem> {
             problems.push(Problem::error(
                 format!("{path}.name"),
                 format!("duplicate topic name '{}'", topic.name),
+            ));
+        }
+
+        if topic.max_messages == Some(0) {
+            problems.push(Problem::error(
+                format!("{path}.max_messages"),
+                "topic max_messages must be at least 1 (leave it out for no limit)",
             ));
         }
 
@@ -1225,6 +1242,33 @@ mod tests {
     }
 
     #[test]
+    fn a_topic_limit_of_zero_is_an_error_and_the_feedback_templates_have_a_hard_cap() {
+        let mut pattern = get_builtin_pattern("tdd").unwrap();
+        assert!(validate(&pattern, &Config::default())
+            .iter()
+            .all(|p| !p.is_error()));
+        pattern.topics[0].max_messages = Some(0);
+        let problems = validate(&pattern, &Config::default());
+        assert!(problems
+            .iter()
+            .any(|p| p.is_error() && p.path.ends_with("max_messages")));
+        // the loops that argue until someone approves must not be able to run away
+        for name in [
+            "reflection-loop",
+            "tdd",
+            "agentcoder",
+            "mutation-testing",
+            "self-debug",
+        ] {
+            let pattern = get_builtin_pattern(name).unwrap();
+            assert!(
+                pattern.topics.iter().all(|t| t.max_messages.is_some()),
+                "{name} needs max_messages on its topics"
+            );
+        }
+    }
+
+    #[test]
     fn test_builtin_templates_serde_roundtrip() {
         for tmpl in EMBEDDED_TEMPLATES {
             let pattern: Pattern =
@@ -1278,6 +1322,7 @@ mod tests {
             partitions: 1,
             key: None,
             filter: None,
+            max_messages: None,
         });
 
         let problems = validate(&pattern, &config);

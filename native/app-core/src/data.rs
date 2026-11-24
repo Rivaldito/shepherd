@@ -219,78 +219,85 @@ impl Data {
         let ask = |method: &str, params: Value| {
             crate::api::call(api, method, params).unwrap_or(Value::Null)
         };
-        let (agents, runs, tasks, snapshots, gates, (patterns, layer_off), cfg, server_version) = std::thread::scope(|s| {
-            let agents = s.spawn(|| {
-                let mut agents = parse_agents(&ask("shepherd.agent.list", json!({})));
-                agents.sort_by_key(|a| a.seq);
-                agents
-            });
-            let runs = s.spawn(|| {
-                let list = ask("shepherd.pattern.run.list", json!({ "root": root_text }));
-                // the detail of every run, also at the same time
-                let ids: Vec<String> = list["runs"]
-                    .as_array()
-                    .map(|r| {
-                        r.iter()
-                            .filter_map(|r| r["id"].as_str().map(str::to_owned))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let shown: std::collections::HashMap<String, Value> = std::thread::scope(|s2| {
-                    let handles: Vec<_> = ids
-                        .iter()
-                        .map(|id| {
-                            let (ask, root_text) = (&ask, &root_text);
-                            s2.spawn(move || {
-                                let show = ask(
-                                    "shepherd.pattern.run.show",
-                                    json!({ "id": id, "root": root_text }),
-                                );
-                                (id.clone(), show)
-                            })
-                        })
-                        .collect();
-                    handles.into_iter().filter_map(|h| h.join().ok()).collect()
+        let (agents, runs, tasks, snapshots, gates, (patterns, layer_off), cfg, server_version) =
+            std::thread::scope(|s| {
+                let agents = s.spawn(|| {
+                    let mut agents = parse_agents(&ask("shepherd.agent.list", json!({})));
+                    agents.sort_by_key(|a| a.seq);
+                    agents
                 });
-                parse_runs(&list, |id| shown.get(id).cloned().unwrap_or(Value::Null))
+                let runs = s.spawn(|| {
+                    let list = ask("shepherd.pattern.run.list", json!({ "root": root_text }));
+                    // the detail of every run, also at the same time
+                    let ids: Vec<String> = list["runs"]
+                        .as_array()
+                        .map(|r| {
+                            r.iter()
+                                .filter_map(|r| r["id"].as_str().map(str::to_owned))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let shown: std::collections::HashMap<String, Value> =
+                        std::thread::scope(|s2| {
+                            let handles: Vec<_> = ids
+                                .iter()
+                                .map(|id| {
+                                    let (ask, root_text) = (&ask, &root_text);
+                                    s2.spawn(move || {
+                                        let show = ask(
+                                            "shepherd.pattern.run.show",
+                                            json!({ "id": id, "root": root_text }),
+                                        );
+                                        (id.clone(), show)
+                                    })
+                                })
+                                .collect();
+                            handles.into_iter().filter_map(|h| h.join().ok()).collect()
+                        });
+                    parse_runs(&list, |id| shown.get(id).cloned().unwrap_or(Value::Null))
+                });
+                let tasks = s.spawn(|| {
+                    parse_tasks(&ask("shepherd.task.list", json!({ "root": root_text })))
+                });
+                let snapshots = s.spawn(|| {
+                    parse_snapshots(&ask(
+                        "shepherd.snapshot.list",
+                        json!({ "root": root_text, "all": true }),
+                    ))
+                });
+                let gates = s.spawn(|| {
+                    parse_gates(&ask(
+                        "shepherd.call",
+                        json!({ "op": "runs", "args": { "root": root_text } }),
+                    ))
+                });
+                let patterns = s.spawn(|| {
+                    match crate::api::call(
+                        api,
+                        "shepherd.pattern.list",
+                        json!({ "root": root_text }),
+                    ) {
+                        Ok(reply) => (parse_list(&reply, "patterns"), false),
+                        Err(why) => (Vec::new(), why.contains("not running")),
+                    }
+                });
+                let version = s.spawn(|| {
+                    crate::api::call(api, "ping", json!({}))
+                        .ok()
+                        .and_then(|pong| pong["version"].as_str().map(str::to_owned))
+                });
+                let cfg = config::load_config(&root).unwrap_or_default();
+                (
+                    joined(agents),
+                    joined(runs),
+                    joined(tasks),
+                    joined(snapshots),
+                    joined(gates),
+                    joined(patterns),
+                    cfg,
+                    version.join().ok().flatten(),
+                )
             });
-            let tasks =
-                s.spawn(|| parse_tasks(&ask("shepherd.task.list", json!({ "root": root_text }))));
-            let snapshots = s.spawn(|| {
-                parse_snapshots(&ask(
-                    "shepherd.snapshot.list",
-                    json!({ "root": root_text, "all": true }),
-                ))
-            });
-            let gates = s.spawn(|| {
-                parse_gates(&ask(
-                    "shepherd.call",
-                    json!({ "op": "runs", "args": { "root": root_text } }),
-                ))
-            });
-            let patterns = s.spawn(|| {
-                match crate::api::call(api, "shepherd.pattern.list", json!({ "root": root_text })) {
-                    Ok(reply) => (parse_list(&reply, "patterns"), false),
-                    Err(why) => (Vec::new(), why.contains("not running")),
-                }
-            });
-            let version = s.spawn(|| {
-                crate::api::call(api, "ping", json!({}))
-                    .ok()
-                    .and_then(|pong| pong["version"].as_str().map(str::to_owned))
-            });
-            let cfg = config::load_config(&root).unwrap_or_default();
-            (
-                joined(agents),
-                joined(runs),
-                joined(tasks),
-                joined(snapshots),
-                joined(gates),
-                joined(patterns),
-                cfg,
-                version.join().ok().flatten(),
-            )
-        });
         let since = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |t| t.as_secs())
@@ -752,7 +759,11 @@ mod tests {
     #[test]
     fn the_server_notice_says_what_is_wrong_and_stays_silent_when_all_is_well() {
         let mut data = Data::default();
-        assert_eq!(server_notice(&data, "0.3.1-beta"), None, "no version known, nothing to say");
+        assert_eq!(
+            server_notice(&data, "0.3.1-beta"),
+            None,
+            "no version known, nothing to say"
+        );
         data.server_version = Some("0.3.1-beta".into());
         assert_eq!(server_notice(&data, "0.3.1-beta"), None);
         data.server_version = Some("0.2.3-beta".into());
@@ -762,14 +773,26 @@ mod tests {
         let off_old = server_notice(&data, "0.3.1-beta").unwrap();
         assert!(off_old.contains("orchestration is off") && off_old.contains("0.2.3-beta"));
         data.server_version = Some("0.3.1-beta".into());
-        assert!(server_notice(&data, "0.3.1-beta").unwrap().contains("shepherd.enabled = false"));
+        assert!(server_notice(&data, "0.3.1-beta")
+            .unwrap()
+            .contains("shepherd.enabled = false"));
     }
 
     #[test]
     fn the_build_channel_is_not_a_version_mismatch() {
-        let data = Data { server_version: Some("0.3.6-beta".into()), ..Data::default() };
-        assert_eq!(server_notice(&data, "0.3.6"), None, "same release, only the channel differs");
-        assert!(server_notice(&data, "0.3.7").is_some(), "a different release still asks for a restart");
+        let data = Data {
+            server_version: Some("0.3.6-beta".into()),
+            ..Data::default()
+        };
+        assert_eq!(
+            server_notice(&data, "0.3.6"),
+            None,
+            "same release, only the channel differs"
+        );
+        assert!(
+            server_notice(&data, "0.3.7").is_some(),
+            "a different release still asks for a restart"
+        );
     }
 
     #[test]

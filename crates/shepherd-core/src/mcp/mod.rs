@@ -188,7 +188,7 @@ mod tests {
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect();
-        assert_eq!(tool_names.len(), 19);
+        assert_eq!(tool_names.len(), 20);
         for expected in [
             "spawn_agent",
             "send_message",
@@ -198,6 +198,7 @@ mod tests {
             "get_result",
             "list_agents",
             "get_diff",
+            "run_checks",
             "read_output",
             "ask_docs",
             "get_task_context",
@@ -358,7 +359,86 @@ mod tests {
     }
 
     #[test]
+    fn run_checks_reports_the_real_result_in_the_callers_or_a_named_worktree() {
+        // other tests point SHEPHERD_CONFIG_PATH at their own files; wait for them so this one reads its own config
+        let _env = crate::TEST_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "shepherd-mcp-checks-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join(".shepherd")).unwrap();
+        std::fs::write(
+            root.join(".shepherd/config.yaml"),
+            "workflow:\n  checks:\n    - echo all good\n    - echo broken >&2; exit 1\n",
+        )
+        .unwrap();
+        let mut registry = AgentRegistryFile::default();
+        let coder = registry.create(
+            Agent {
+                role: "coder".into(),
+                root: root.display().to_string(),
+                worktree: root.display().to_string(),
+                ..Agent::default()
+            },
+            "coder-token".into(),
+            "now",
+        );
+        let reviewer = registry.create(
+            Agent {
+                role: "reviewer".into(),
+                root: root.display().to_string(),
+                ..Agent::default()
+            },
+            "reviewer-token".into(),
+            "now",
+        );
+        let registry_path = root.join("agents.json");
+        save_agent_registry(&registry_path, &registry).unwrap();
+        let state = State::new(registry_path);
+        // the coder checks its own worktree
+        let own = call_tool(&state, &coder, &json!({"name":"run_checks","arguments":{}})).unwrap();
+        let text = own["structuredContent"]["text"].as_str().unwrap();
+        assert!(text.starts_with("FAILED"), "{text}");
+        assert!(
+            text.contains("echo all good -> passed") && text.contains("exit 1"),
+            "{text}"
+        );
+        assert!(
+            text.contains("broken"),
+            "the real output is in the report: {text}"
+        );
+        // the reviewer names the coder; a reviewer without a worktree of its own cannot check itself
+        let named = call_tool(
+            &state,
+            &reviewer,
+            &json!({"name":"run_checks","arguments":{"agent_id": coder.id}}),
+        )
+        .unwrap();
+        assert!(named["structuredContent"]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("FAILED"));
+        let none = call_tool(
+            &state,
+            &reviewer,
+            &json!({"name":"run_checks","arguments":{}}),
+        );
+        assert!(none.unwrap_err().contains("no worktree"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn get_diff_reads_committed_coder_changes_against_configured_base() {
+        // other tests point SHEPHERD_CONFIG_PATH at their own files; wait for them so this one reads its own config
+        let _env = crate::TEST_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

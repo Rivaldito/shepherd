@@ -95,6 +95,7 @@ impl Editor {
             partitions: 1,
             key: None,
             filter: None,
+            max_messages: None,
         });
         self.touch();
         Sel::Topic(name)

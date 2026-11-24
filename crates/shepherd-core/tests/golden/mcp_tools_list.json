@@ -148,6 +148,23 @@
         "name": "get_diff"
       },
       {
+        "description": "Run the project's checks (workflow.checks, or cargo test, pytest, npm test, go test) in an agent's worktree and get the real result: PASSED or FAILED, the exit code and the end of the output of each command. The result is the exit code, not an opinion. Defaults to your own worktree.",
+        "inputSchema": {
+          "properties": {
+            "agent_id": {
+              "description": "Whose worktree to check; defaults to yours (use the coder's id to check the coder's branch)",
+              "type": "string"
+            },
+            "timeout_secs": {
+              "description": "Per command, default 600, at most 3600",
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "name": "run_checks"
+      },
+      {
         "description": "Read the last N lines of an agent's terminal pane.",
         "inputSchema": {
           "properties": {

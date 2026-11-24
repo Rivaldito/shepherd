@@ -4,6 +4,7 @@ description: 'Reflexion and self-debug. Starts: solver (posts `attempt:` to `boa
 topics:
   - name: board
     partitions: 1
+    max_messages: 16
 agents:
   - id: solver
     role: coder

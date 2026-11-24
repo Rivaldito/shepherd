@@ -111,6 +111,7 @@ impl PatternEditorState {
                 partitions: 1,
                 key: None,
                 filter: None,
+                max_messages: None,
             }],
             agents: vec![PatternAgent {
                 id: "agent-1".into(),
@@ -527,6 +528,7 @@ impl PatternEditorState {
             partitions: 1,
             key: None,
             filter: None,
+            max_messages: None,
         });
         self.selected_topic = self.topics.len() - 1;
         self.revalidate();
