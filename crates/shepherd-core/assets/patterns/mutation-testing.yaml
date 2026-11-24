@@ -1,6 +1,11 @@
 name: mutation-testing
 kind: blackboard
-description: 'Measures whether the tests are worth anything. Starts: mutator (posts `mutants:` to `board`: deliberate bugs in the code, each on its own branch). The test writer adds tests that must fail on every mutant and pass on the original; the judge runs them and posts the score (killed / total) and the survivors. Capped at 3 rounds.'
+description: |-
+  Measures whether the tests are worth anything. Starts: mutator (posts `mutants:` to `board`: deliberate bugs in the code, each on its own branch). The test writer adds tests that must fail on every mutant and pass on the original; the judge runs them and posts the score (killed / total) and the survivors. Capped at 3 rounds.
+
+  Use it when tests already exist and you doubt they would catch a real bug: the mutator plants bugs and the score shows how many the tests notice. It judges the tests, it does not write the feature.
+
+  Example: shepherd pattern run mutation-testing --task "Measure how well the tests in src/parser catch bugs"
 topics:
   - name: board
     partitions: 1

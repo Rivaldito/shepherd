@@ -1,6 +1,11 @@
 name: planner-workers-reviewer
 kind: orchestrator-worker
-description: 'Planner, workers and a reviewer, for tests across modules. Starts: planner (splits the objective into modules and publishes one order per module to `orders`). Each worker writes the unit tests of its module and publishes the result to `results`; the reviewer checks coverage and quality of every result and publishes `reviews`; the planner aggregates only what the reviewer approved. Nothing is merged by the run.'
+description: |-
+  Planner, workers and a reviewer, for tests across modules. Starts: planner (splits the objective into modules and publishes one order per module to `orders`). Each worker writes the unit tests of its module and publishes the result to `results`; the reviewer checks coverage and quality of every result and publishes `reviews`; the planner aggregates only what the reviewer approved. Nothing is merged by the run.
+
+  Use it when you need unit tests for many modules at once: the planner gives one module to each worker and a reviewer checks coverage and quality before anything is reported. Not for a single module.
+
+  Example: shepherd pattern run planner-workers-reviewer --task "Add unit tests for every module under src/services, one worker per module"
 topics:
   - name: orders
     partitions: 4

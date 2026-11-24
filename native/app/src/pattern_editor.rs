@@ -192,7 +192,10 @@ impl PatternEditor {
         let p = &self.editor.pattern;
         self.fields = vec![
             (Field::PatternName, p.name.clone()),
-            (Field::Description, p.description.clone()),
+            (
+                Field::Description,
+                shepherd_app_core::shepherd_core::patterns::description_summary(&p.description),
+            ),
         ];
         match &self.selected {
             Some(Sel::Agent(id)) => {
@@ -465,7 +468,11 @@ impl PatternEditor {
                         Err("Only a new pattern can be renamed: duplicate it first.".to_owned())
                     }
                     (Field::Description, _) => {
-                        self.editor.pattern.description = value;
+                        self.editor.pattern.description =
+                            shepherd_app_core::shepherd_core::patterns::description_with_summary(
+                                &self.editor.pattern.description,
+                                &value,
+                            );
                         self.editor.dirty = true;
                         Ok(())
                     }
@@ -756,6 +763,40 @@ impl PatternEditor {
                     },
                     ..iced::widget::container::Style::default()
                 }),
+            );
+        }
+        // what the pattern is for: the paragraphs after the summary (built-ins say when to use them and give an example)
+        let guide = shepherd_app_core::shepherd_core::patterns::description_guide(
+            &self.editor.pattern.description,
+        );
+        if !guide.is_empty() {
+            let mut about = column![text("ABOUT THIS PATTERN")
+                .size(10)
+                .color(crate::theme::faint())]
+            .spacing(6);
+            about = about.push(
+                text(
+                    shepherd_app_core::shepherd_core::patterns::description_summary(
+                        &self.editor.pattern.description,
+                    ),
+                )
+                .size(12.5)
+                .color(crate::theme::text2())
+                .wrapping(iced::widget::text::Wrapping::Word),
+            );
+            for paragraph in guide {
+                about = about.push(
+                    text(paragraph)
+                        .size(12.5)
+                        .color(crate::theme::text2())
+                        .wrapping(iced::widget::text::Wrapping::Word),
+                );
+            }
+            col = col.push(
+                container(about)
+                    .padding([10, 14])
+                    .width(Length::Fill)
+                    .style(crate::theme::surface_style),
             );
         }
         if let Some(path) = &self.path {

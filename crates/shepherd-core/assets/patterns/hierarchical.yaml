@@ -1,6 +1,11 @@
 name: hierarchical
 kind: hierarchical
-description: 'Multi-tier command hierarchy where managers supervise specialized worker teams. Starts: director (level 0; publishes directives to `root-orders`). Managers wait for `root-orders`, publish assignments to `team-orders` and report to `root-results`; specialists wait for `team-orders` and publish to `team-results`.'
+description: |-
+  Multi-tier command hierarchy where managers supervise specialized worker teams. Starts: director (level 0; publishes directives to `root-orders`). Managers wait for `root-orders`, publish assignments to `team-orders` and report to `root-results`; specialists wait for `team-orders` and publish to `team-results`.
+
+  Use it when the job is big enough to need levels: a director, a manager per area and specialists under each (frontend, backend, tests). Not for small jobs, where the extra layers only cost tokens.
+
+  Example: shepherd pattern run hierarchical --task "Move the billing service to the new payments API: backend, API client and tests teams"
 topics:
   - name: root-orders
     partitions: 2

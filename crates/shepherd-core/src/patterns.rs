@@ -263,6 +263,36 @@ impl Pattern {
     }
 }
 
+// --- Description: a summary and a guide ---
+
+/// What a list shows of a description: its first paragraph, on one line. The rest of a built-in
+/// pattern's description says when to use it and gives an example (see [`description_guide`]).
+pub fn description_summary(description: &str) -> String {
+    let first = description.trim().split("\n\n").next().unwrap_or("");
+    first.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The paragraphs after the first: when to use the pattern, an example. Empty for a one-paragraph description.
+pub fn description_guide(description: &str) -> Vec<String> {
+    description
+        .trim()
+        .split("\n\n")
+        .skip(1)
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `description` with its first paragraph replaced by `summary`; the guide is kept.
+pub fn description_with_summary(description: &str, summary: &str) -> String {
+    let guide = description_guide(description);
+    if guide.is_empty() {
+        return summary.to_owned();
+    }
+    format!("{}\n\n{}", summary.trim(), guide.join("\n\n"))
+}
+
 // --- Storage Metadata & Enums ---
 
 #[derive(
@@ -1039,7 +1069,7 @@ pub fn list_patterns(
                             summaries.push(PatternSummary {
                                 name: pattern.name,
                                 kind: pattern.kind,
-                                description: pattern.description,
+                                description: description_summary(&pattern.description),
                                 source: PatternSource::Project,
                                 shadowed: false,
                                 agents_count: pattern.agents.iter().map(|a| a.count as usize).sum(),
@@ -1067,7 +1097,7 @@ pub fn list_patterns(
                             summaries.push(PatternSummary {
                                 name: pattern.name,
                                 kind: pattern.kind,
-                                description: pattern.description,
+                                description: description_summary(&pattern.description),
                                 source: PatternSource::Global,
                                 shadowed,
                                 agents_count: pattern.agents.iter().map(|a| a.count as usize).sum(),
@@ -1088,7 +1118,7 @@ pub fn list_patterns(
             summaries.push(PatternSummary {
                 name: pattern.name,
                 kind: pattern.kind,
-                description: pattern.description,
+                description: description_summary(&pattern.description),
                 source: PatternSource::Builtin,
                 shadowed,
                 agents_count: pattern.agents.iter().map(|a| a.count as usize).sum(),
@@ -1265,6 +1295,51 @@ mod tests {
                 pattern.topics.iter().all(|t| t.max_messages.is_some()),
                 "{name} needs max_messages on its topics"
             );
+        }
+    }
+
+    #[test]
+    fn a_description_splits_into_a_summary_and_a_guide() {
+        let d = "What it\nis.\n\nUse it when X.\n\nExample: run it.";
+        assert_eq!(description_summary(d), "What it is.");
+        assert_eq!(
+            description_guide(d),
+            vec!["Use it when X.", "Example: run it."]
+        );
+        assert_eq!(description_summary("One line."), "One line.");
+        assert!(description_guide("One line.").is_empty());
+        assert_eq!(
+            description_with_summary(d, "New."),
+            "New.\n\nUse it when X.\n\nExample: run it."
+        );
+        assert_eq!(description_with_summary("Old.", "New."), "New.");
+    }
+
+    #[test]
+    fn every_builtin_template_says_what_it_is_when_to_use_it_and_gives_a_runnable_example() {
+        for tmpl in EMBEDDED_TEMPLATES {
+            let pattern: Pattern = serde_yaml_ng::from_str(tmpl.yaml).unwrap();
+            let guide = description_guide(&pattern.description);
+            assert!(
+                !description_summary(&pattern.description).is_empty(),
+                "{}",
+                tmpl.name
+            );
+            assert!(
+                guide.first().is_some_and(|p| p.starts_with("Use it when")),
+                "{} needs a 'Use it when' paragraph: {guide:?}",
+                tmpl.name
+            );
+            let example = guide.get(1).map(String::as_str).unwrap_or("");
+            assert!(
+                example.starts_with(&format!(
+                    "Example: shepherd pattern run {} --task \"",
+                    tmpl.name
+                )),
+                "{} needs a runnable example: {example}",
+                tmpl.name
+            );
+            assert_eq!(guide.len(), 2, "{}", tmpl.name);
         }
     }
 
