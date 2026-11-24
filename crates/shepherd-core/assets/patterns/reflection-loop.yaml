@@ -1,0 +1,24 @@
+name: reflection-loop
+kind: blackboard
+description: 'Generator and critic: one agent writes code or tests, the other reviews them on a different vendor and sends comments back until it approves. Starts: generator (posts `draft:` to `board`). The critic answers `critique:` (REQUEST_CHANGES with file:line comments, or APPROVE). Capped at 3 rounds; after that both stop and the run shows as stalled for a human.'
+topics:
+  - name: board
+    partitions: 1
+agents:
+  - id: generator
+    role: coder
+    count: 1
+    start: true
+    prompt: "You are the generator. Turn the run objective into code or unit tests in your worktree and post 'draft: round 1/3' on the board with a short summary and the files you changed. When a 'critique:' arrives, fix every comment and post the next draft ('draft: round N/3'). Stop when the critic approves. Never go past round 3: if the critic still asks for changes after round 3, post 'blocked: ' plus what is unresolved and stop, so a human decides."
+    publishes:
+      - board
+    consumes:
+      - board
+  - id: critic
+    role: reviewer
+    count: 1
+    prompt: "You are the critic. When a 'draft:' arrives, read the generator's diff and review it for correctness, edge cases, readable tests and missing cases. Post 'critique: round N/3' followed by APPROVE, or REQUEST_CHANGES with one comment per line as file:line [blocker|major|minor] issue -> fix. Approve only when no blocker or major comment is left. Do not edit files. Do not ask for a fourth round: after round 3, say what is unresolved and stop."
+    publishes:
+      - board
+    consumes:
+      - board

@@ -1,0 +1,32 @@
+name: tdd
+kind: blackboard
+description: 'Multi-agent TDD. Starts: test-writer (posts `tests:` to `board`, written from the spec alone, so it never tailors them to an implementation). The coder implements until they pass; the runner runs the real test command and posts the exact failures back. Capped at 4 rounds, then it stops for a human.'
+topics:
+  - name: board
+    partitions: 1
+agents:
+  - id: test-writer
+    role: tester
+    count: 1
+    start: true
+    prompt: "You are the test writer. Work only from the run objective and the specification: do not read the coder's branch or worktree, and do not look at any implementation of the feature. Write the failing unit tests first (basic cases, edge cases, error cases), commit them in your worktree and post 'tests: <branch and the command that runs them>' on the board. If a 'failures:' message shows a test that is wrong or ambiguous with respect to the spec, fix the test and post 'tests:' again; never weaken a test just to make it pass."
+    publishes:
+      - board
+    consumes:
+      - board
+  - id: coder
+    role: coder
+    count: 1
+    prompt: "You are the coder. When 'tests:' arrives, check out those tests, implement the feature until they pass and post 'code: round N/4' with your branch. When 'failures:' arrives, fix the code (not the tests) and post the next round. Never edit the test files. After round 4 with tests still failing, post 'blocked: ' with what you could not solve and stop."
+    publishes:
+      - board
+    consumes:
+      - board
+  - id: runner
+    role: tester
+    count: 1
+    prompt: "You are the runner. When 'code:' arrives, run the project's real test command on the coder's branch with the tests. Post 'failures: round N/4' with the exact result: the command, how many passed and failed, and for each failure the test name and the first lines of the real output, copied as is, never paraphrased. If everything passes, post 'passed: round N/4' and the full summary line. Do not edit any file."
+    publishes:
+      - board
+    consumes:
+      - board

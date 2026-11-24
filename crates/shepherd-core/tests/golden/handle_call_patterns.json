@@ -1,6 +1,15 @@
 [
   {
     "agents_count": 3,
+    "description": "Programmer, test designer and executor, after the AgentCoder paper. Starts: programmer (posts `code:` to `board`). The test designer posts independent tests (basic, edge and large cases) written from the spec only; the executor runs them and sends the real errors to the programmer. Capped at 4 rounds.",
+    "kind": "blackboard",
+    "name": "agentcoder",
+    "shadowed": false,
+    "source": "builtin",
+    "topics_count": 1
+  },
+  {
+    "agents_count": 3,
     "description": "Shared knowledge base where specialist agents read hypotheses and post discoveries. Starts: researcher (posts the first hypothesis to `blackboard`). Analyst and synthesizer wait for entries on `blackboard`, then post validations and the final synthesis there.",
     "kind": "blackboard",
     "name": "blackboard",
@@ -27,6 +36,15 @@
     "topics_count": 3
   },
   {
+    "agents_count": 3,
+    "description": "Measures whether the tests are worth anything. Starts: mutator (posts `mutants:` to `board`: deliberate bugs in the code, each on its own branch). The test writer adds tests that must fail on every mutant and pass on the original; the judge runs them and posts the score (killed / total) and the survivors. Capped at 3 rounds.",
+    "kind": "blackboard",
+    "name": "mutation-testing",
+    "shadowed": false,
+    "source": "builtin",
+    "topics_count": 1
+  },
+  {
     "agents_count": 4,
     "description": "Central orchestrator dispatches partitioned tasks to a worker pool and aggregates results. Starts: orchestrator (receives the objective, publishes task orders to `orders`). Workers wait for `orders` and publish results to `results`; the orchestrator aggregates them.",
     "kind": "orchestrator-worker",
@@ -34,5 +52,41 @@
     "shadowed": false,
     "source": "builtin",
     "topics_count": 2
+  },
+  {
+    "agents_count": 5,
+    "description": "Planner, workers and a reviewer, for tests across modules. Starts: planner (splits the objective into modules and publishes one order per module to `orders`). Each worker writes the unit tests of its module and publishes the result to `results`; the reviewer checks coverage and quality of every result and publishes `reviews`; the planner aggregates only what the reviewer approved. Nothing is merged by the run.",
+    "kind": "orchestrator-worker",
+    "name": "planner-workers-reviewer",
+    "shadowed": false,
+    "source": "builtin",
+    "topics_count": 3
+  },
+  {
+    "agents_count": 2,
+    "description": "Generator and critic: one agent writes code or tests, the other reviews them on a different vendor and sends comments back until it approves. Starts: generator (posts `draft:` to `board`). The critic answers `critique:` (REQUEST_CHANGES with file:line comments, or APPROVE). Capped at 3 rounds; after that both stop and the run shows as stalled for a human.",
+    "kind": "blackboard",
+    "name": "reflection-loop",
+    "shadowed": false,
+    "source": "builtin",
+    "topics_count": 1
+  },
+  {
+    "agents_count": 2,
+    "description": "Reflexion and self-debug. Starts: solver (posts `attempt:` to `board`). When the real tests fail, the solver reads the traceback and posts a `reflection:` (what failed, why, what to try); the debugger reproduces the failure independently and posts a `diagnosis:`. Every next attempt starts by reading all earlier reflections on the board, which is the memory. Capped at 4 attempts.",
+    "kind": "blackboard",
+    "name": "self-debug",
+    "shadowed": false,
+    "source": "builtin",
+    "topics_count": 1
+  },
+  {
+    "agents_count": 3,
+    "description": "Multi-agent TDD. Starts: test-writer (posts `tests:` to `board`, written from the spec alone, so it never tailors them to an implementation). The coder implements until they pass; the runner runs the real test command and posts the exact failures back. Capped at 4 rounds, then it stops for a human.",
+    "kind": "blackboard",
+    "name": "tdd",
+    "shadowed": false,
+    "source": "builtin",
+    "topics_count": 1
   }
 ]

@@ -1,0 +1,32 @@
+name: mutation-testing
+kind: blackboard
+description: 'Measures whether the tests are worth anything. Starts: mutator (posts `mutants:` to `board`: deliberate bugs in the code, each on its own branch). The test writer adds tests that must fail on every mutant and pass on the original; the judge runs them and posts the score (killed / total) and the survivors. Capped at 3 rounds.'
+topics:
+  - name: board
+    partitions: 1
+agents:
+  - id: mutator
+    role: coder
+    count: 1
+    start: true
+    prompt: "You are the mutator. Read the code named in the run objective and create up to 8 mutants, each a small deliberate bug (flip a condition, change a boundary, drop a check, swap an operator) on its own branch named mutant-N, committed in your worktree. Post 'mutants:' with one line per mutant: branch, file:line and what you changed. Never touch the original branch and never merge. Each mutant must still compile."
+    publishes:
+      - board
+    consumes:
+      - board
+  - id: test-writer
+    role: tester
+    count: 1
+    prompt: "You are the test writer. You get the original code and the test files, not the mutants' diffs. Write or improve unit tests so that they fail on a surviving mutant and pass on the original. When 'survivors:' arrives, add tests aimed at each survivor (round N/3), commit them and post 'tests: <branch and command>'. Never write a test that fails on the original."
+    publishes:
+      - board
+    consumes:
+      - board
+  - id: judge
+    role: reviewer
+    count: 1
+    prompt: "You are the judge. Run the tests on the original branch first (they must pass), then on every mutant branch with the project's real test command. Post 'score: round N/3' with killed / total and the exact output summary, and 'survivors:' listing the mutants that no test caught. Post 'passed:' when every mutant is killed, or after round 3 post what is left and stop. Do not edit files."
+    publishes:
+      - board
+    consumes:
+      - board

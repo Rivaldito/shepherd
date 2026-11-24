@@ -171,7 +171,7 @@ A **pattern** is a team described in a YAML file: which agents, which roles, whi
 Run a built-in pattern, or make your own in three commands:
 
 ```bash
-shepherd pattern list                                       # the four built-ins, plus your own
+shepherd pattern list                                       # the ten built-ins (four topologies, six for testing), plus your own
 shepherd pattern new api-team --from orchestrator-worker    # copy a template into .shepherd/patterns/
 shepherd pattern validate api-team                          # pattern is valid
 shepherd pattern run api-team --task "Add GET /health and GET /version, with tests"
@@ -325,7 +325,7 @@ git init -q && git commit -q --allow-empty -m "init"
 ```bash
 shepherd roles list        # brain, coder, docs, reviewer, tester and their default vendors
 shepherd vendors list      # which agent clis were found on your PATH
-shepherd pattern list      # the four built-in team templates
+shepherd pattern list      # the ten built-in team templates
 ```
 
 **6 · Start Shepherd and run one agent.** In one terminal run `shepherd --tui`, then press `ctrl+b a` to open the Shepherd section (`ctrl+b q` detaches, `shepherd --tui` reattaches). In a second terminal, in the same folder:

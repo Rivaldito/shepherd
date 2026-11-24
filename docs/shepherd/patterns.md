@@ -10,15 +10,21 @@ The first match by name wins:
 
 1. `<repo>/.shepherd/patterns/<name>.yaml`: project, versioned with your code.
 2. `~/.config/shepherd/patterns/<name>.yaml`: user-wide (`pattern new --global`).
-3. Built-in templates: `orchestrator-worker`, `hierarchical`, `blackboard`, `market`. They are read-only starting points.
+3. Built-in templates: the four topologies (`orchestrator-worker`, `hierarchical`, `blackboard`, `market`) and six for testing (see [Patterns for testing](#4b-patterns-for-testing)). They are read-only starting points.
 
 ```
 $ shepherd pattern list
-NAME                 KIND                 SOURCE   SHADOWED  AGENTS  TOPICS
-blackboard           blackboard           builtin  no        3       1
-hierarchical         hierarchical         builtin  no        7       4
-market               market               builtin  no        6       3
-orchestrator-worker  orchestrator-worker  builtin  no        4       2
+NAME                     KIND                 SOURCE   SHADOWED  AGENTS  TOPICS
+agentcoder               blackboard           builtin  no        3       1
+blackboard               blackboard           builtin  no        3       1
+hierarchical             hierarchical         builtin  no        7       4
+market                   market               builtin  no        6       3
+mutation-testing         blackboard           builtin  no        3       1
+orchestrator-worker      orchestrator-worker  builtin  no        4       2
+planner-workers-reviewer orchestrator-worker  builtin  no        5       3
+reflection-loop          blackboard           builtin  no        2       1
+self-debug               blackboard           builtin  no        2       1
+tdd                      blackboard           builtin  no        3       1
 ```
 
 `SHADOWED` tells you when a project or user pattern hides another one with the same name.
@@ -159,6 +165,21 @@ Requesters post asks, solvers bid, and a market-maker decides.
 Rules: topics `ask`, `bid` and `transaction` must exist; exactly **one** market-maker that reads `ask` and `bid` and publishes `transaction`; **at least two** solvers that publish to `bid`.
 
 Use it to compete several approaches to the same problem and keep the best.
+
+## 4b. Patterns for testing
+
+Six built-in templates are teams that write and check unit tests, each a known way of making agents give each other feedback. They use the same four topologies, so they validate, run and edit like any other pattern.
+
+| Template | Who | What happens |
+|---|---|---|
+| `reflection-loop` | generator, critic | The generator writes code or tests; the critic (another vendor) reviews and sends comments back until it approves |
+| `tdd` | test-writer, coder, runner | Tests come first, written from the spec alone (the test-writer never reads the implementation); the coder implements; the runner runs the real test command and posts the exact failures |
+| `agentcoder` | programmer, test-designer, executor | An independent suite (basic, edge and large cases) is run against the code and the real errors go back to the programmer |
+| `mutation-testing` | mutator, test-writer, judge | The mutator plants bugs on branches, the test-writer adds tests that must catch them, the judge posts the score and the survivors |
+| `planner-workers-reviewer` | planner, 3 workers, reviewer | One module per worker, each with its tests; the reviewer checks coverage and quality before the planner reports |
+| `self-debug` | solver, debugger | After each failing run the solver writes a reflection; the board keeps them as memory so no attempt repeats a failed change |
+
+Every loop is **capped by its prompt** (3 or 4 rounds, numbered in each message): after the last round the agents say what is unresolved and stop, so the run shows as `stalled` and a person decides. The cap is a rule the agents follow, not one the server enforces. Test results are only as reliable as the agent that runs the tests, so read the exact output it posts.
 
 ## 5. Validation
 
