@@ -36,7 +36,7 @@ fn cmd(
 
 /// Every row, in the order of the groups of the spec: Go to, Needs you, Agents, Tasks, Run a pattern, Commands.
 pub fn build(snapshot: &Snapshot, data: &Data) -> Vec<Command> {
-    let neutral = theme::LINE2;
+    let neutral = theme::line2();
     let go = |tab: Tab| {
         vec![
             Message::SetMode(Mode::Shepherd),
@@ -102,7 +102,7 @@ pub fn build(snapshot: &Snapshot, data: &Data) -> Vec<Command> {
                 Gate::Plan => format!("Approve the plan of task #{}", g.task_id),
             },
             "awaiting-approval",
-            theme::WARN,
+            theme::warn(),
             run_msgs,
         ));
     }
@@ -132,7 +132,7 @@ pub fn build(snapshot: &Snapshot, data: &Data) -> Vec<Command> {
             "Run a pattern",
             format!("Run {}", p.name),
             "pattern",
-            theme::VIOLET,
+            theme::violet(),
             vec![
                 Message::SetMode(Mode::Shepherd),
                 Message::Panel(PanelMsg::PickAndLaunch(p.name.clone())),

@@ -70,7 +70,7 @@ Closing and deleting always take two clicks, because the app has no pop-up dialo
 
 ### The server: restart and stop
 
-The gear at the bottom of the sidebar, next to "Hide sidebar", opens a small **Server** menu with *Restart server* and *Stop server*. Both close every terminal and agent of that server, so each takes two clicks. After a restart the app reconnects on its own; after a stop, use *Restart server* again (it also starts a stopped server) or run `shepherd`.
+The gear at the bottom of the sidebar, next to "Hide sidebar", opens a small menu. **Theme** picks *Dark* (the default), *Light* (the terminal stays dark, since the agents print colours made for a dark background) or *Minimal* (the dark colours with no animation: a flat top strip, a still logo and a timer that ticks once a second). **Size** zooms the interface and the terminal. **Server** has *Restart server* and *Stop server*. Both close every terminal and agent of that server, so each takes two clicks. After a restart the app reconnects on its own; after a stop, use *Restart server* again (it also starts a stopped server) or run `shepherd`.
 
 The same from a terminal: `shepherd server restart` (stops the server if it is running, starts a new one detached from the command, and waits until it answers) and `shepherd server stop`. After installing a new version, restart the server so it runs the new binary.
 

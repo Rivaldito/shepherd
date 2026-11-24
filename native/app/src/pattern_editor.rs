@@ -1,7 +1,7 @@
 //! The pattern editor: the graph with a toolbar and an inspector. The rules (what connects to what, renaming,
 //! saving) live in `shepherd_app_core::pattern_edit`; this file only holds the selection and draws.
 
-use crate::theme::{primary_button_style, surface_style, DIM};
+use crate::theme::{dim, primary_button_style, surface_style};
 use crate::Message;
 use iced::widget::{
     button, canvas::Canvas, checkbox, column, container, row, scrollable, text, text_editor,
@@ -500,13 +500,13 @@ impl PatternEditor {
             text(format!("{used} / {PERSONA_MAX}"))
                 .size(11)
                 .color(if used > PERSONA_MAX {
-                    crate::theme::BAD
+                    crate::theme::bad()
                 } else {
-                    DIM
+                    dim()
                 });
         column![
             row![
-                text("persona").size(12).color(DIM).width(Length::Fill),
+                text("persona").size(12).color(dim()).width(Length::Fill),
                 counter
             ],
             text_editor(&self.persona)
@@ -524,7 +524,7 @@ impl PatternEditor {
                 "What this agent reads, does and publishes. It replaces the role's script in a run."
             })
             .size(11)
-            .color(DIM),
+            .color(dim()),
         ]
         .spacing(4)
         .into()
@@ -548,7 +548,7 @@ impl PatternEditor {
             ))
         };
         row![
-            container(text(label).size(12).color(DIM)).width(90),
+            container(text(label).size(12).color(dim())).width(90),
             crate::config_panel::dropdown(options, self.field(Field::Agent(field)), empty, on_pick),
         ]
         .spacing(8)
@@ -558,7 +558,7 @@ impl PatternEditor {
 
     fn labelled<'a>(&'a self, label: &'static str, field: Field) -> Element<'a, Message> {
         row![
-            container(text(label).size(12).color(DIM)).width(90),
+            container(text(label).size(12).color(dim())).width(90),
             text_input("", self.field(field))
                 .style(crate::theme::input_style)
                 .on_input(move |v| Message::Panel(crate::panel::PanelMsg::EditPattern(
@@ -619,7 +619,7 @@ impl PatternEditor {
         toolbar = toolbar
             .push(container(text("")).width(1).height(20).style(|_| {
                 iced::widget::container::Style {
-                    background: Some(iced::Background::Color(crate::theme::LINE2)),
+                    background: Some(iced::Background::Color(crate::theme::line2())),
                     ..iced::widget::container::Style::default()
                 }
             }))
@@ -627,7 +627,7 @@ impl PatternEditor {
             .push(
                 text(format!("{:.0}%", self.zoom * 100.0))
                     .size(12)
-                    .color(DIM),
+                    .color(dim()),
             )
             .push(tool("+", EditMsg::ZoomIn, false))
             .push(tool("Fit", EditMsg::ResetZoom, false));
@@ -698,9 +698,9 @@ impl PatternEditor {
             ));
         }
         let valid_badge: Element<'a, Message> = if self.problems.iter().any(|(e, _, _)| *e) {
-            crate::panel::badge("invalid", crate::theme::BAD)
+            crate::panel::badge("invalid", crate::theme::bad())
         } else {
-            crate::panel::badge("valid", crate::theme::OK)
+            crate::panel::badge("valid", crate::theme::ok())
         };
         let mut col = column![row![
             column![
@@ -708,14 +708,14 @@ impl PatternEditor {
                     text(name.clone())
                         .font(crate::theme::MONO_BOLD)
                         .size(20)
-                        .color(crate::theme::HI),
+                        .color(crate::theme::hi()),
                     valid_badge,
                 ]
                 .spacing(10)
                 .align_y(iced::Alignment::Center),
                 text(format!("{:?}, {state}", self.editor.pattern.kind))
                     .size(12)
-                    .color(DIM),
+                    .color(dim()),
             ]
             .spacing(4)
             .width(Length::Fill),
@@ -744,12 +744,12 @@ impl PatternEditor {
                 .style(|_| iced::widget::container::Style {
                     background: Some(iced::Background::Color(Color {
                         a: 0.08,
-                        ..crate::theme::VIOLET
+                        ..crate::theme::violet()
                     })),
                     border: iced::Border {
                         color: Color {
                             a: 0.38,
-                            ..crate::theme::VIOLET
+                            ..crate::theme::violet()
                         },
                         width: 1.0,
                         radius: 8.0.into(),
@@ -759,18 +759,18 @@ impl PatternEditor {
             );
         }
         if let Some(path) = &self.path {
-            col = col.push(text(path.clone()).size(11).color(DIM));
+            col = col.push(text(path.clone()).size(11).color(dim()));
         }
         let mut checks = row![].spacing(14).align_y(iced::Alignment::Center);
         if self.problems.is_empty() {
             checks = checks
-                .push(text("Valid").size(12).color(crate::theme::OK))
+                .push(text("Valid").size(12).color(crate::theme::ok()))
                 .push(
                     text("■ every topic has a publisher and a reader")
                         .size(11)
-                        .color(DIM),
+                        .color(dim()),
                 )
-                .push(text("■ every agent is connected").size(11).color(DIM));
+                .push(text("■ every agent is connected").size(11).color(dim()));
         }
         for (is_error, place, message) in &self.problems {
             checks = checks.push(
@@ -780,9 +780,9 @@ impl PatternEditor {
                 ))
                 .size(12)
                 .color(if *is_error {
-                    crate::theme::BAD
+                    crate::theme::bad()
                 } else {
-                    crate::theme::WARN
+                    crate::theme::warn()
                 }),
             );
         }
@@ -812,12 +812,12 @@ impl PatternEditor {
                         text(format!("Agent {id}"))
                             .font(crate::theme::MONO_BOLD)
                             .size(14)
-                            .color(crate::theme::HI),
+                            .color(crate::theme::hi()),
                     )
                     .push(
                         text("Changes are kept until you save the pattern.")
                             .size(11)
-                            .color(DIM),
+                            .color(dim()),
                     );
                 // what the node reads and writes, from its arrows (edit them with Connect)
                 let key = format!("agent:{id}");
@@ -881,12 +881,12 @@ impl PatternEditor {
                         text(format!("Topic #{name}"))
                             .font(crate::theme::MONO_BOLD)
                             .size(14)
-                            .color(crate::theme::HI),
+                            .color(crate::theme::hi()),
                     )
                     .push(
                         text("Changes are kept until you save the pattern.")
                             .size(11)
-                            .color(DIM),
+                            .color(dim()),
                     );
                 inspector = inspector
                     .push(self.labelled("name", Field::TopicName))
@@ -900,7 +900,7 @@ impl PatternEditor {
             .push(
                 text("Click a node to edit it. Drag nodes to arrange them.")
                     .size(11)
-                    .color(DIM),
+                    .color(dim()),
             );
         let canvas = container(
             crate::theme::scroll(column![
@@ -953,10 +953,10 @@ impl PatternEditor {
         )
         .padding([4, 4])
         .width(Length::Fill)
-        .style(crate::theme::toast_style(crate::theme::LINE2))]
+        .style(crate::theme::toast_style(crate::theme::line2()))]
         .spacing(6);
         if !hint.is_empty() {
-            floating = floating.push(text(hint).size(11.5).color(crate::theme::ACCENT));
+            floating = floating.push(text(hint).size(11.5).color(crate::theme::accent()));
         }
         let viewport = iced::widget::stack![
             canvas,
@@ -976,7 +976,7 @@ impl PatternEditor {
             } else {
                 "Read-only. This is the YAML the pattern is saved as. Edit the pattern in the graph."
             };
-            col = col.push(text(note).size(11.5).color(DIM));
+            col = col.push(text(note).size(11.5).color(dim()));
             col = col.push(
                 container(crate::editor::view(&self.yaml, |a| {
                     Message::Panel(crate::panel::PanelMsg::EditPattern(EditMsg::Yaml(a)))
@@ -996,7 +996,7 @@ impl PatternEditor {
 /// A label with a read-only value shown like an input.
 fn readonly<'a>(label: &'static str, value: String) -> Element<'a, Message> {
     row![
-        container(text(label).size(12).color(DIM)).width(90),
+        container(text(label).size(12).color(dim())).width(90),
         container(
             text(if value.is_empty() {
                 "—".to_owned()

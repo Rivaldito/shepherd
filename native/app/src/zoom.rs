@@ -1,4 +1,4 @@
-//! The two sizes the person sets from the gear menu: the interface (the whole window, text included) and the
+//! The two sizes (and, with them, the look) the person sets from the gear menu: the interface (the whole window, text included) and the
 //! terminal (its text and cells, on top of the interface size). Percentages, kept in the state dir between runs.
 
 use shepherd_app_core::shepherd_core::config::state_dir;
@@ -101,14 +101,14 @@ pub fn load() {
                 );
             }
         }
+        crate::appearance::load(None);
         return;
     }
-    let Ok(text) = std::fs::read_to_string(file()) else {
-        return;
-    };
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return;
-    };
+    let json = std::fs::read_to_string(file())
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .unwrap_or_default();
+    crate::appearance::load(json["theme"].as_str());
     for (target, key) in [
         (Target::Interface, "interface"),
         (Target::Terminal, "terminal"),
@@ -124,10 +124,11 @@ pub fn load() {
     }
 }
 
-fn save() {
+pub(crate) fn save() {
     let json = serde_json::json!({
         "interface": percent(Target::Interface),
         "terminal": percent(Target::Terminal),
+        "theme": crate::appearance::mode().key(),
     });
     // a size that cannot be kept is only forgotten at the next run
     if let Some(dir) = file().parent() {

@@ -1,6 +1,7 @@
 //! The native Shepherd app (milestone 1): sidebar with spaces and agents, tab bar, and the live terminal
 //! surface from the server. Everything that is not drawing lives in `shepherd-app-core`.
 
+mod appearance;
 mod commands;
 mod config_panel;
 mod editor;
@@ -34,8 +35,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use theme::{
-    item_style, mini_button_style, pad, primary_button_style, status_color, status_name, BG, DIM,
-    LINE, PANEL,
+    bg, dim, item_style, line, mini_button_style, pad, panel, primary_button_style, status_color,
+    status_name,
 };
 
 const SIDEBAR_W: f32 = 232.0;
@@ -211,6 +212,8 @@ enum Message {
     ToggleServerMenu,
     /// A size control of the gear menu: the interface or the terminal, smaller, bigger or back to 100 %.
     Zoom(zoom::Target, zoom::Change),
+    /// A look of the gear menu: dark, light or minimal.
+    Look(appearance::Mode),
     ServerOp(sessions::ServerOp),
     ServerDone(sessions::ServerOp, Result<(), String>),
     /// The `+` of the session row: open the name box.
@@ -799,9 +802,11 @@ impl App {
                 }
             }
             Message::Tick => {
-                self.clock = self.clock.wrapping_add(1);
+                // the minimal look ticks once a second (12 steps at a time): the timers below still run
+                let before = self.clock;
+                self.clock = before.wrapping_add(if appearance::is_minimal() { 12 } else { 1 });
                 self.panel.expire_armed();
-                if !self.still {
+                if !self.still && !appearance::is_minimal() {
                     self.frame = self.frame.wrapping_add(1);
                 }
                 if let Some(task) = self.film_tick() {
@@ -815,7 +820,7 @@ impl App {
                     }
                 }
                 // sessions start and stop outside the app: look again every ~8 s while the window is open
-                if self.clock.is_multiple_of(100) {
+                if before / 100 != self.clock / 100 {
                     return refresh_sessions();
                 }
             }
@@ -894,7 +899,7 @@ impl App {
                     self.new_session = Some((name, Some(why)));
                     return Task::none();
                 }
-                self.session_note = Some((format!("starting session `{name}`…"), DIM));
+                self.session_note = Some((format!("starting session `{name}`…"), dim()));
                 return Task::perform(
                     async move { sessions::start(&name, Duration::from_secs(15)) },
                     Message::SessionStarted,
@@ -908,7 +913,7 @@ impl App {
             }
             Message::SessionStarted(Err(why)) => {
                 self.session_note =
-                    Some((format!("could not start the session: {why}"), theme::BAD));
+                    Some((format!("could not start the session: {why}"), theme::bad()));
                 return refresh_sessions();
             }
             Message::CloseSession(name) => {
@@ -918,13 +923,13 @@ impl App {
                 if self.closing.as_ref().map(|(n, _)| n) != Some(&name) {
                     let current = session.client_socket() == client_socket();
                     self.session_note =
-                        Some((sessions::close_hint(&session, current), theme::WARN));
+                        Some((sessions::close_hint(&session, current), theme::warn()));
                     self.closing = Some((name, self.clock));
                     return Task::none();
                 }
                 self.closing = None;
                 let running = session.running;
-                self.session_note = Some((format!("closing `{name}`…"), DIM));
+                self.session_note = Some((format!("closing `{name}`…"), dim()));
                 return Task::perform(
                     async move {
                         if running {
@@ -938,8 +943,8 @@ impl App {
             }
             Message::SessionClosed(result) => {
                 self.session_note = Some(match result {
-                    Ok(done) => (done, theme::OK),
-                    Err(why) => (format!("could not close the session: {why}"), theme::BAD),
+                    Ok(done) => (done, theme::ok()),
+                    Err(why) => (format!("could not close the session: {why}"), theme::bad()),
                 });
                 return refresh_sessions();
             }
@@ -1281,6 +1286,7 @@ impl App {
                 self.sent = None;
                 self.sync_size();
             }
+            Message::Look(mode) => appearance::set(mode),
             Message::ToggleServerMenu => {
                 self.server_menu = !self.server_menu;
                 self.server_armed = None;
@@ -1502,13 +1508,13 @@ impl App {
                 match shepherd_app_core::data::server_notice(&self.data, env!("CARGO_PKG_VERSION"))
                 {
                     Some(notice) => column![
-                        container(text(notice).size(12.5).color(theme::WARN))
+                        container(text(notice).size(12.5).color(theme::warn()))
                             .padding([10, 16])
                             .width(Length::Fill)
                             .style(|_| container::Style {
                                 background: Some(Color::from_rgba8(0xFF, 0x8A, 0x1F, 0.10).into()),
                                 border: iced::Border {
-                                    color: theme::WARN,
+                                    color: theme::warn(),
                                     width: 1.0,
                                     radius: 0.0.into(),
                                 },
@@ -1523,14 +1529,14 @@ impl App {
             Mode::Terminal => self.terminal_pane(),
         };
         let status_color_val = if self.status.starts_with("connected") {
-            theme::OK
+            theme::ok()
         } else if self.status.contains("disconnected")
             || self.status.starts_with("could not")
             || self.status.contains("error")
         {
-            theme::BAD
+            theme::bad()
         } else {
-            DIM
+            dim()
         };
         let base = self.app_window(body, status_color_val);
         let base: Element<'_, Message> = if self.history_open {
@@ -1568,7 +1574,7 @@ impl App {
             text("Notices")
                 .font(theme::MONO_BOLD)
                 .size(13)
-                .color(theme::HI),
+                .color(theme::hi()),
             container(text("")).width(Length::Fill),
             button(text("Clear").size(11.5))
                 .padding([2, 8])
@@ -1585,19 +1591,19 @@ impl App {
             list = list.push(
                 text("Nothing yet. Every notice of this session is kept here.")
                     .size(12)
-                    .color(DIM),
+                    .color(dim()),
             );
         }
         for (time, n) in notices.iter().rev() {
             let bad = ui::is_error(n);
-            let color = if bad { theme::BAD } else { theme::OK };
+            let color = if bad { theme::bad() } else { theme::ok() };
             list = list.push(
                 row![
-                    text(time.clone()).size(11).color(theme::FAINT).width(62),
+                    text(time.clone()).size(11).color(theme::faint()).width(62),
                     text("■").size(8).color(color),
                     text(n.clone())
                         .size(12)
-                        .color(if bad { theme::BAD } else { theme::FG }),
+                        .color(if bad { theme::bad() } else { theme::fg() }),
                 ]
                 .spacing(8)
                 .align_y(iced::Alignment::Center),
@@ -1608,7 +1614,7 @@ impl App {
                 .padding(14)
                 .width(480)
                 .max_height(280)
-                .style(theme::toast_style(theme::LINE2)),
+                .style(theme::toast_style(theme::line2())),
         )
         .padding(pad(0.0, 0.0, 34.0, 12.0))
         .width(Length::Fill)
@@ -1622,16 +1628,16 @@ impl App {
         button(
             container(
                 row![
-                    text("⌕").size(14).color(DIM),
+                    text("⌕").size(14).color(dim()),
                     text("Jump to a view, agent or task")
                         .size(11.5)
-                        .color(DIM)
+                        .color(dim())
                         .wrapping(iced::widget::text::Wrapping::None),
                     container(text("")).width(Length::Fill),
                     container(
                         text("Ctrl+Shift+P")
                             .size(10)
-                            .color(DIM)
+                            .color(dim())
                             .wrapping(iced::widget::text::Wrapping::None)
                     )
                     .padding([1, 6])
@@ -1665,8 +1671,8 @@ impl App {
             return button(
                 container(
                     row![
-                        text("■").size(8).color(theme::OK),
-                        text("all clear").size(11.5).color(DIM)
+                        text("■").size(8).color(theme::ok()),
+                        text("all clear").size(11.5).color(dim())
                     ]
                     .spacing(7)
                     .align_y(iced::Alignment::Center),
@@ -1686,11 +1692,11 @@ impl App {
                     text(n.to_string())
                         .size(10.5)
                         .font(theme::MONO_BOLD)
-                        .color(theme::BG)
+                        .color(theme::bg())
                 )
                 .padding([0, 6])
-                .style(theme::badge_style(theme::WARN)),
-                text("needs you").size(12).color(theme::WARN),
+                .style(theme::badge_style(theme::warn())),
+                text("needs you").size(12).color(theme::warn()),
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center),
@@ -1701,11 +1707,11 @@ impl App {
             button::Style {
                 background: Some(Background::Color(Color {
                     a: if hot { 0.2 } else { 0.1 },
-                    ..theme::WARN
+                    ..theme::warn()
                 })),
-                text_color: theme::WARN,
+                text_color: theme::warn(),
                 border: Border {
-                    color: theme::WARN,
+                    color: theme::warn(),
                     width: 1.0,
                     radius: 14.0.into(),
                 },
@@ -1726,7 +1732,7 @@ impl App {
             let label = row![
                 text("●")
                     .size(8)
-                    .color(if session.running { theme::OK } else { DIM }),
+                    .color(if session.running { theme::ok() } else { dim() }),
                 text(session.name.clone()).size(13),
             ]
             .spacing(8)
@@ -1792,7 +1798,7 @@ impl App {
                         .width(160),
                 );
                 if let Some(problem) = problem {
-                    buttons = buttons.push(text(problem.clone()).size(11).color(theme::BAD));
+                    buttons = buttons.push(text(problem.clone()).size(11).color(theme::bad()));
                 }
                 buttons = buttons.push(
                     button(container(text("✕").size(11)).center(Length::Fill))
@@ -1822,7 +1828,7 @@ impl App {
                     .height(Length::Fill)
                     .into()
             }
-            None => container(text("waiting for the server…").color(DIM))
+            None => container(text("waiting for the server…").color(dim()))
                 .center(Length::Fill)
                 .into(),
         };
@@ -1834,9 +1840,9 @@ impl App {
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .style(|_| container::Style {
-                        background: Some(Background::Color(BG)),
+                        background: Some(Background::Color(bg())),
                         border: Border {
-                            color: theme::LINE,
+                            color: theme::line(),
                             width: 1.0,
                             radius: 6.0.into(),
                         },
@@ -1867,7 +1873,7 @@ impl App {
             }
             let status = agent.map(|a| a.status());
             let blocked = status == Some(shepherd_app_core::snapshot::Status::Blocked);
-            let color = status.map_or(DIM, status_color);
+            let color = status.map_or(dim(), status_color);
             let name = agent.map_or_else(|| "shell".to_owned(), |a| a.display_name());
             let word = match status {
                 Some(_) if blocked => "needs you",
@@ -1886,10 +1892,10 @@ impl App {
             let outline = if blocked {
                 Some(Color {
                     a: 0.45,
-                    ..theme::WARN
+                    ..theme::warn()
                 })
             } else if several && pane.focused {
-                Some(theme::ACCENT)
+                Some(theme::accent())
             } else {
                 None
             };
@@ -1924,12 +1930,12 @@ impl App {
                 text(name.clone())
                     .font(theme::MONO_BOLD)
                     .size(11)
-                    .color(theme::HI),
+                    .color(theme::hi()),
                 text(agent.and_then(|a| a.agent.clone()).unwrap_or_default())
                     .size(10.5)
-                    .color(DIM),
+                    .color(dim()),
                 text(word).size(10.5).color(color),
-                text(pane.pane_id.clone()).size(10.5).color(theme::FAINT),
+                text(pane.pane_id.clone()).size(10.5).color(theme::faint()),
                 container(text("")).width(Length::Fill),
             ]
             .spacing(8)
@@ -1988,7 +1994,7 @@ impl App {
                     .style(|_| container::Style {
                         background: Some(Background::Color(Color {
                             a: 0.4,
-                            ..theme::BG
+                            ..theme::bg()
                         })),
                         ..container::Style::default()
                     })
@@ -1998,12 +2004,25 @@ impl App {
             body
         };
         // the strip and the logo animate in both modes: they belong to the shared window
-        let strip = Canvas::new(prism::Prism {
-            preset: prism::Preset::STRIP,
-            frame: self.frame,
-        })
-        .width(Length::Fill)
-        .height(STRIP_H);
+        let strip: Element<'_, Message> = if appearance::is_minimal() {
+            // the same 4 px, flat: no prism
+            container(text(""))
+                .width(Length::Fill)
+                .height(STRIP_H)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(theme::line())),
+                    ..container::Style::default()
+                })
+                .into()
+        } else {
+            Canvas::new(prism::Prism {
+                preset: prism::Preset::STRIP,
+                frame: self.frame,
+            })
+            .width(Length::Fill)
+            .height(STRIP_H)
+            .into()
+        };
         let connected = self.status.starts_with("connected");
         let top_bar = container(
             row![
@@ -2013,7 +2032,7 @@ impl App {
                         text("SHEPHERD")
                             .font(theme::PIXEL_BOLD)
                             .size(13)
-                            .color(theme::HI),
+                            .color(theme::hi()),
                     ]
                     .spacing(10)
                     .align_y(iced::Alignment::Center)
@@ -2043,9 +2062,9 @@ impl App {
                         || !(self.status.contains("disconnected")
                             || self.status.starts_with("could not"))
                     {
-                        DIM
+                        dim()
                     } else {
-                        theme::BAD
+                        theme::bad()
                     }
                 ),
             ]
@@ -2067,8 +2086,10 @@ impl App {
             Mode::Terminal => {
                 let g = self.geometry();
                 row![
-                    text(self.terminal_place()).size(11.5).color(theme::FG),
-                    text(format!("{}×{}", g.cols, g.rows)).size(11.5).color(DIM),
+                    text(self.terminal_place()).size(11.5).color(theme::fg()),
+                    text(format!("{}×{}", g.cols, g.rows))
+                        .size(11.5)
+                        .color(dim()),
                 ]
                 .spacing(14)
                 .into()
@@ -2084,7 +2105,11 @@ impl App {
                         .unwrap_or_default()
                 )
                 .size(11.5)
-                .color(self.session_note.as_ref().map_or(DIM, |(_, color)| *color)),
+                .color(
+                    self.session_note
+                        .as_ref()
+                        .map_or(dim(), |(_, color)| *color)
+                ),
                 container(text("")).width(Length::Fill),
                 button(
                     text(if self.still {
@@ -2093,7 +2118,7 @@ impl App {
                         "Motion: on"
                     })
                     .size(11.5)
-                    .color(DIM)
+                    .color(dim())
                 )
                 .padding(0)
                 .style(theme::link_button_style())
@@ -2107,10 +2132,10 @@ impl App {
                 .color(status_color_val),
                 text(self.panel.config_path().unwrap_or_default())
                     .size(11.5)
-                    .color(DIM),
+                    .color(dim()),
                 text(concat!("v", env!("CARGO_PKG_VERSION")))
                     .size(11.5)
-                    .color(DIM),
+                    .color(dim()),
             ]
             .spacing(16)
             .align_y(iced::Alignment::Center),
@@ -2131,7 +2156,7 @@ impl App {
             status_bar,
         ])
         .style(|_| container::Style {
-            background: Some(Background::Color(PANEL)),
+            background: Some(Background::Color(panel())),
             ..container::Style::default()
         })
         .into()
@@ -2145,7 +2170,7 @@ impl App {
                      on: fn(String) -> Message,
                      bad: bool| {
             column![
-                text(label).size(11).color(DIM),
+                text(label).size(11).color(dim()),
                 text_input(hint, value)
                     .on_input(on)
                     .on_submit(Message::NewSpaceSubmit)
@@ -2159,10 +2184,10 @@ impl App {
             text("New workspace")
                 .size(13)
                 .font(theme::MONO_BOLD)
-                .color(theme::HI),
+                .color(theme::hi()),
             text("Opens a workspace in a folder. Terminals and agents started in it work there.")
                 .size(11.5)
-                .color(DIM),
+                .color(dim()),
             field(
                 "Folder",
                 "~/projects/…",
@@ -2173,7 +2198,7 @@ impl App {
         ]
         .spacing(10);
         if let Some(error) = &space.error {
-            form = form.push(text(error.clone()).size(11).color(theme::BAD));
+            form = form.push(text(error.clone()).size(11).color(theme::bad()));
         }
         form = form
             .push(field(
@@ -2201,7 +2226,7 @@ impl App {
         let panel = container(form)
             .padding(14)
             .width(280)
-            .style(theme::toast_style(theme::LINE2));
+            .style(theme::toast_style(theme::line2()));
         let overlay = mouse_area(container(text("")).width(Length::Fill).height(Length::Fill))
             .on_press(Message::NewSpaceCancel);
         // anchored under the "+" of the sidebar header
@@ -2328,9 +2353,9 @@ impl App {
             );
         }
         let menu_content = container(list).padding(4).style(|_| container::Style {
-            background: Some(Background::Color(PANEL)),
+            background: Some(Background::Color(panel())),
             border: Border {
-                color: Color { a: 0.5, ..LINE },
+                color: Color { a: 0.5, ..line() },
                 width: 0.5,
                 radius: 0.0.into(),
             },
@@ -2369,7 +2394,8 @@ impl App {
             if hit.group != group {
                 group = hit.group;
                 list = list.push(
-                    container(text(group).size(11).color(DIM)).padding(pad(10.0, 14.0, 4.0, 14.0)),
+                    container(text(group).size(11).color(dim()))
+                        .padding(pad(10.0, 14.0, 4.0, 14.0)),
                 );
             }
             let dot = hit.dot;
@@ -2378,7 +2404,7 @@ impl App {
                     row![
                         text("■").size(8).color(dot),
                         text(hit.label.clone()).size(13).width(Length::Fill),
-                        text(hit.hint.clone()).size(11).color(theme::FAINT),
+                        text(hit.hint.clone()).size(11).color(theme::faint()),
                     ]
                     .spacing(10)
                     .align_y(iced::Alignment::Center),
@@ -2389,25 +2415,26 @@ impl App {
                 .align_y(iced::alignment::Vertical::Center)
                 .style(move |_| container::Style {
                     background: (index == palette.selected)
-                        .then_some(Background::Color(theme::SELECTED)),
+                        .then_some(Background::Color(theme::selected())),
                     ..container::Style::default()
                 }),
             );
         }
         if hits.is_empty() {
-            list = list
-                .push(container(text("No command matches.").size(12).color(DIM)).padding([10, 14]));
+            list = list.push(
+                container(text("No command matches.").size(12).color(dim())).padding([10, 14]),
+            );
         }
         let header = container(
             row![
-                text("⌕").size(15).color(DIM),
+                text("⌕").size(15).color(dim()),
                 text_input("Type a view, agent, task or command", &palette.query)
                     .id(PALETTE_INPUT)
                     .on_input(Message::PaletteQuery)
                     .on_submit(Message::PaletteRun)
                     .padding(6)
                     .size(14),
-                text("Esc").size(10).color(theme::FAINT),
+                text("Esc").size(10).color(theme::faint()),
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center),
@@ -2419,7 +2446,7 @@ impl App {
         let footer = container(
             text("Enter to open · Up and down to move · Ctrl+Shift+P to open from anywhere")
                 .size(10.5)
-                .color(DIM),
+                .color(dim()),
         )
         .padding([8, 14])
         .width(Length::Fill)
@@ -2432,9 +2459,9 @@ impl App {
         .width(640)
         .max_height(560)
         .style(|_| container::Style {
-            background: Some(Background::Color(PANEL)),
+            background: Some(Background::Color(panel())),
             border: Border {
-                color: theme::LINE2,
+                color: theme::line2(),
                 width: 1.0,
                 radius: 10.0.into(),
             },
@@ -2477,7 +2504,7 @@ impl App {
             text(workspace_label)
                 .font(theme::MONO_BOLD)
                 .size(13)
-                .color(theme::HI)
+                .color(theme::hi())
         )
         .padding([0, 12])
         .center_y(Length::Fill)]
@@ -2538,7 +2565,7 @@ impl App {
                 format!("{panes} pane{} in tab {focused_tab}", if panes == 1 { "" } else { "s" })
             })
             .size(11)
-            .color(DIM)
+            .color(dim())
             .wrapping(iced::widget::text::Wrapping::None),
         ]
         .align_y(iced::Alignment::Center)
@@ -2573,9 +2600,9 @@ impl App {
                 .any(|a| a.id == agent.display_name() && !a.notice.is_empty())
         };
         let header = row![
-            container(text("Workspaces").font(theme::PIXEL).size(10).color(DIM))
+            container(text("Workspaces").font(theme::PIXEL).size(10).color(dim()))
                 .width(Length::Fill),
-            button(container(text("+").size(14).color(DIM)).center(Length::Fill))
+            button(container(text("+").size(14).color(dim())).center(Length::Fill))
                 .padding(0)
                 .width(22)
                 .height(22)
@@ -2592,7 +2619,7 @@ impl App {
                 container(
                     text("No workspace open. Use + to open a folder.")
                         .size(11)
-                        .color(DIM),
+                        .color(dim()),
                 )
                 .padding([4, 8]),
             );
@@ -2633,7 +2660,7 @@ impl App {
                 container(vcenter(
                     text(if open { "⌄" } else { "›" })
                         .size(13)
-                        .color(theme::FAINT),
+                        .color(theme::faint()),
                 ))
                 .padding(pad(0.0, 0.0, if open { 4.0 } else { 0.0 }, 0.0))
                 .center_x(Length::Fill)
@@ -2682,9 +2709,9 @@ impl App {
                                 }
                             }),
                             vcenter(text(name).size(12.5).color(if current {
-                                theme::HI
+                                theme::hi()
                             } else {
-                                theme::TEXT2
+                                theme::text2()
                             })),
                             container(text("")).width(Length::Fill),
                             vcenter(text(roll.label.clone()).size(10.5).color(roll.label_color)),
@@ -2711,7 +2738,7 @@ impl App {
                     chevron,
                     name_btn,
                     button(
-                        container(vcenter(text("×").size(11).color(theme::FAINT)))
+                        container(vcenter(text("×").size(11).color(theme::faint())))
                             .padding(pad(2.0, 0.0, 0.0, 0.0))
                             .center_x(Length::Fill)
                             .height(Length::Fill)
@@ -2730,10 +2757,10 @@ impl App {
                 .height(sidebar::WS_ROW_H)
                 .width(Length::Fill)
                 .style(move |_| container::Style {
-                    background: current.then_some(Background::Color(theme::PANEL)),
+                    background: current.then_some(Background::Color(theme::panel())),
                     border: Border {
                         color: if current {
-                            theme::LINE2
+                            theme::line2()
                         } else {
                             Color::TRANSPARENT
                         },
@@ -2754,9 +2781,9 @@ impl App {
                     tooltip(
                         button(
                             container(vcenter(text("×").size(13).color(if armed {
-                                theme::BG
+                                theme::bg()
                             } else {
-                                DIM
+                                dim()
                             })))
                             .center_x(Length::Fill)
                             .height(Length::Fill),
@@ -2789,7 +2816,7 @@ impl App {
                         let flagged = needs_human(agent);
                         let urgent = status == Status::Blocked || flagged;
                         let color = if urgent {
-                            theme::WARN
+                            theme::warn()
                         } else {
                             status_color(status)
                         };
@@ -2804,18 +2831,19 @@ impl App {
                             status_name(status).to_owned()
                         };
                         let focused = !in_shepherd && agent.focused;
-                        let icon = container(text(glyph).size(9).font(theme::MONO_BOLD).color(BG))
-                            .width(15)
-                            .height(15)
-                            .center(15)
-                            .style(move |_| container::Style {
-                                background: Some(Background::Color(color)),
-                                border: Border {
-                                    radius: 3.0.into(),
-                                    ..Border::default()
-                                },
-                                ..container::Style::default()
-                            });
+                        let icon =
+                            container(text(glyph).size(9).font(theme::MONO_BOLD).color(bg()))
+                                .width(15)
+                                .height(15)
+                                .center(15)
+                                .style(move |_| container::Style {
+                                    background: Some(Background::Color(color)),
+                                    border: Border {
+                                        radius: 3.0.into(),
+                                        ..Border::default()
+                                    },
+                                    ..container::Style::default()
+                                });
                         let target = if in_shepherd {
                             Message::GoToPane(agent.pane_id.clone())
                         } else {
@@ -2833,7 +2861,7 @@ impl App {
                                             sidebar::agent_name_max_chars(&word)
                                         ))
                                         .size(12.5)
-                                        .color(theme::FG)
+                                        .color(theme::fg())
                                     ),
                                     container(text("")).width(Length::Fill),
                                     vcenter(text(word).size(10.5).color(color)),
@@ -2852,16 +2880,16 @@ impl App {
                                 matches!(status, button::Status::Hovered | button::Status::Pressed);
                             button::Style {
                                 background: if focused {
-                                    Some(Background::Color(theme::SURFACE))
+                                    Some(Background::Color(theme::surface()))
                                 } else {
-                                    hot.then_some(Background::Color(theme::HOVER))
+                                    hot.then_some(Background::Color(theme::hover()))
                                 },
-                                text_color: theme::FG,
+                                text_color: theme::fg(),
                                 border: Border {
                                     color: if focused {
                                         Color {
                                             a: 0.55,
-                                            ..theme::ACCENT
+                                            ..theme::accent()
                                         }
                                     } else {
                                         Color::TRANSPARENT
@@ -2920,13 +2948,13 @@ impl App {
                                     vcenter(
                                         text(sidebar::ellipsize(&name, 10))
                                             .size(12.5)
-                                            .color(theme::FG)
+                                            .color(theme::fg())
                                     ),
                                     container(text("")).width(Length::Fill),
                                     vcenter(
                                         text(sidebar::ellipsize(&where_, 6))
                                             .size(10.5)
-                                            .color(theme::FAINT)
+                                            .color(theme::faint())
                                     ),
                                 ]
                                 .spacing(8)
@@ -2943,16 +2971,16 @@ impl App {
                                 matches!(status, button::Status::Hovered | button::Status::Pressed);
                             button::Style {
                                 background: if focused {
-                                    Some(Background::Color(theme::SURFACE))
+                                    Some(Background::Color(theme::surface()))
                                 } else {
-                                    hot.then_some(Background::Color(theme::HOVER))
+                                    hot.then_some(Background::Color(theme::hover()))
                                 },
-                                text_color: theme::FG,
+                                text_color: theme::fg(),
                                 border: Border {
                                     color: if focused {
                                         Color {
                                             a: 0.55,
-                                            ..theme::ACCENT
+                                            ..theme::accent()
                                         }
                                     } else {
                                         Color::TRANSPARENT
@@ -2976,7 +3004,7 @@ impl App {
                         container(
                             text("No terminals yet. Open one to start a shell or an agent here.")
                                 .size(11)
-                                .color(DIM),
+                                .color(dim()),
                         )
                         .padding(pad(2.0, 6.0, 4.0, 6.0)),
                     );
@@ -2986,8 +3014,8 @@ impl App {
                         button(
                             container(
                                 row![
-                                    text("›_").size(11).color(DIM),
-                                    text("New terminal").size(11.5).color(DIM),
+                                    text("›_").size(11).color(dim()),
+                                    text("New terminal").size(11.5).color(dim()),
                                 ]
                                 .spacing(8)
                                 .align_y(iced::Alignment::Center),
@@ -3010,7 +3038,7 @@ impl App {
                             .width(1)
                             .height(Length::Fill)
                             .style(|_| container::Style {
-                                background: Some(Background::Color(theme::LINE)),
+                                background: Some(Background::Color(theme::line())),
                                 ..container::Style::default()
                             }),
                         Space::new().width(8),
@@ -3060,7 +3088,7 @@ impl App {
                                 .width(1)
                                 .height(Length::Fill)
                                 .style(|_| container::Style {
-                                    background: Some(Background::Color(theme::FAINT)),
+                                    background: Some(Background::Color(theme::faint())),
                                     ..container::Style::default()
                                 }),
                         ]
@@ -3070,15 +3098,15 @@ impl App {
                     .height(12)
                     .style(|_| container::Style {
                         border: Border {
-                            color: theme::FAINT,
+                            color: theme::faint(),
                             width: 1.0,
                             radius: 2.0.into(),
                         },
                         ..container::Style::default()
                     }),
-                    text("Hide sidebar").size(11.5).color(DIM),
+                    text("Hide sidebar").size(11.5).color(dim()),
                     container(text("")).width(Length::Fill),
-                    text("Ctrl+B").size(10).color(theme::FAINT),
+                    text("Ctrl+B").size(10).color(theme::faint()),
                 ]
                 .spacing(8)
                 .align_y(iced::Alignment::Center),
@@ -3166,10 +3194,25 @@ impl App {
                 column![
                     container(
                         column![
-                            text("SIZE").size(10).color(theme::FAINT),
+                            text("THEME").size(10).color(theme::faint()),
+                            row(appearance::Mode::ALL.map(|mode| {
+                                button(
+                                    container(text(mode.label()).size(11.5))
+                                        .center_x(Length::Fill)
+                                        .center_y(Length::Fill),
+                                )
+                                .padding(0)
+                                .width(Length::Fill)
+                                .height(28)
+                                .style(theme::chip_style(appearance::mode() == mode))
+                                .on_press(Message::Look(mode))
+                                .into()
+                            }))
+                            .spacing(2),
+                            text("SIZE").size(10).color(theme::faint()),
                             size_row("Interface", zoom::Target::Interface),
                             size_row("Terminal", zoom::Target::Terminal),
-                            text("SERVER").size(10).color(theme::FAINT),
+                            text("SERVER").size(10).color(theme::faint()),
                             entry(sessions::ServerOp::Restart, "Restart server"),
                             entry(sessions::ServerOp::Stop, "Stop server"),
                         ]
@@ -3179,7 +3222,7 @@ impl App {
                     .width(Length::Fill)
                     .style(|_| container::Style {
                         border: Border {
-                            color: theme::LINE,
+                            color: theme::line(),
                             width: 1.0,
                             radius: 4.0.into(),
                         },
@@ -3206,14 +3249,14 @@ impl App {
                 .width(sidebar::WIDTH - 1.0)
                 .height(Length::Fill)
                 .style(|_| container::Style {
-                    background: Some(Background::Color(BG)),
+                    background: Some(Background::Color(bg())),
                     ..container::Style::default()
                 }),
             container(text(""))
                 .width(1)
                 .height(Length::Fill)
                 .style(|_| container::Style {
-                    background: Some(Background::Color(theme::LINE)),
+                    background: Some(Background::Color(theme::line())),
                     ..container::Style::default()
                 }),
         ]
@@ -3262,9 +3305,9 @@ impl App {
         .width(320)
         .padding(0)
         .style(|_| container::Style {
-            background: Some(Background::Color(PANEL)),
+            background: Some(Background::Color(panel())),
             border: Border {
-                color: Color { a: 0.5, ..LINE },
+                color: Color { a: 0.5, ..line() },
                 width: 0.5,
                 radius: 0.0.into(),
             },
@@ -3366,7 +3409,7 @@ impl App {
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
             // ~12 fps for the prism strip and logo, which both modes show in the shared top bar
-            Subscription::run(ticks),
+            Subscription::run_with(appearance::is_minimal(), ticks),
             Subscription::run(connection),
             Subscription::run_with(self.folder(), watch_files),
             keyboard::listen().map(Message::Key),
@@ -3382,15 +3425,16 @@ impl App {
 }
 
 /// Tells the app when a file the panels read changes (agents, runs, tasks, bus), so they never poll.
-/// One `Tick` every 83 ms (iced's own timer needs an async runtime feature this app does not enable).
-fn ticks() -> impl iced::futures::Stream<Item = Message> {
+/// One `Tick` every 83 ms, or every second in the minimal look (iced's own timer needs an async runtime feature this app does not enable).
+fn ticks(minimal: &bool) -> impl iced::futures::Stream<Item = Message> {
+    let every = Duration::from_millis(if *minimal { 1000 } else { 83 });
     iced::stream::channel(1, async move |mut output| {
         use iced::futures::{channel::mpsc, SinkExt, StreamExt};
         let (tx, mut rx) = mpsc::unbounded::<()>();
         std::thread::spawn(move || {
             // ends by itself once the subscription is dropped and nobody receives
             while tx.unbounded_send(()).is_ok() {
-                std::thread::sleep(Duration::from_millis(83));
+                std::thread::sleep(every);
             }
         });
         while rx.next().await.is_some() {

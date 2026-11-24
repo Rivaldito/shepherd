@@ -2,7 +2,7 @@
 //! top right), the list filter with its chips, and the toasts.
 
 use crate::panel::PanelMsg;
-use crate::theme::{self, BAD, DIM, HI, LINE, OK};
+use crate::theme::{self, bad, dim, hi, line, ok};
 use crate::Message;
 use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Background, Color, Element, Length};
@@ -54,8 +54,8 @@ pub fn page_header<'a>(
     container(
         row![
             column![
-                text(title).font(theme::MONO_BOLD).size(22).color(HI),
-                text(subtitle).size(12).color(DIM),
+                text(title).font(theme::MONO_BOLD).size(22).color(hi()),
+                text(subtitle).size(12).color(dim()),
             ]
             .spacing(6),
             container(text("")).width(Length::Fill),
@@ -170,34 +170,34 @@ pub fn toasts_view<'a>(toasts: Vec<(usize, &'a Toast)>) -> Element<'a, Message> 
     let mut stack = column![].spacing(8).width(400);
     for (index, toast) in toasts {
         let color = if toast.error {
-            BAD
+            bad()
         } else if toast.info {
-            theme::ACCENT
+            theme::accent()
         } else {
-            OK
+            ok()
         };
         let mut body = column![].spacing(6).width(Length::Fill);
         if toast.error {
             // the summary is the first line; what follows is the server's answer, as sent
             let (summary, answer) = toast.text.split_once('\n').unwrap_or(("", &toast.text));
             if !summary.is_empty() {
-                body = body.push(text(summary.to_owned()).size(12).color(theme::HI));
+                body = body.push(text(summary.to_owned()).size(12).color(theme::hi()));
             }
             if !answer.is_empty() {
                 body = body
                     .push(
                         text("The server refused this. Its answer, as sent:")
                             .size(11)
-                            .color(BAD),
+                            .color(bad()),
                     )
                     .push(
-                        container(text(answer.to_owned()).size(11).color(theme::TEXT2))
+                        container(text(answer.to_owned()).size(11).color(theme::text2()))
                             .padding([6, 8])
                             .width(Length::Fill)
                             .style(|_| container::Style {
-                                background: Some(Background::Color(theme::INPUT)),
+                                background: Some(Background::Color(theme::input())),
                                 border: iced::Border {
-                                    color: LINE,
+                                    color: line(),
                                     width: 1.0,
                                     radius: 4.0.into(),
                                 },
@@ -206,7 +206,7 @@ pub fn toasts_view<'a>(toasts: Vec<(usize, &'a Toast)>) -> Element<'a, Message> 
                     );
             }
         } else {
-            body = body.push(text(toast.text.clone()).size(12).color(theme::FG));
+            body = body.push(text(toast.text.clone()).size(12).color(theme::fg()));
         }
         let close = button(container(text("×").size(14)).center_y(Length::Fill))
             .padding([0, 6])

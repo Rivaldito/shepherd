@@ -7,18 +7,18 @@ use shepherd_app_core::shepherd_core::snapshot::{format_utc, SnapshotInfo, Snaps
 
 fn reason_color(reason: SnapshotReason) -> Color {
     match reason {
-        SnapshotReason::Manual => ACCENT,
-        SnapshotReason::Done => OK,
-        SnapshotReason::PreRestore | SnapshotReason::PreClean | SnapshotReason::PreKill => WARN,
-        SnapshotReason::Idle | SnapshotReason::Periodic => DIM,
+        SnapshotReason::Manual => accent(),
+        SnapshotReason::Done => ok(),
+        SnapshotReason::PreRestore | SnapshotReason::PreClean | SnapshotReason::PreKill => warn(),
+        SnapshotReason::Idle | SnapshotReason::Periodic => dim(),
     }
 }
 
 fn change_color(status: &str) -> Color {
     match status {
-        "added" => OK,
-        "deleted" => BAD,
-        _ => WARN,
+        "added" => ok(),
+        "deleted" => bad(),
+        _ => warn(),
     }
 }
 
@@ -160,7 +160,7 @@ impl Panel {
                     .width(1)
                     .height(20)
                     .style(|_| container::Style {
-                        background: Some(Background::Color(theme::LINE2)),
+                        background: Some(Background::Color(theme::line2())),
                         ..container::Style::default()
                     }),
                 reason_chips.wrap(),
@@ -205,10 +205,10 @@ impl Panel {
                     text(agent.clone())
                         .font(theme::MONO_BOLD)
                         .size(12.5)
-                        .color(theme::HI),
+                        .color(theme::hi()),
                     text(format!("{} snapshots", mine.len()))
                         .size(11)
-                        .color(DIM)
+                        .color(dim())
                         .width(Length::Fill),
                     self.arm_button(
                         Armed::PruneSnapshots(agent.clone()),
@@ -230,7 +230,7 @@ impl Panel {
                         .width(1)
                         .height(Length::Fill)
                         .style(|_| container::Style {
-                            background: Some(iced::Background::Color(theme::LINE2)),
+                            background: Some(iced::Background::Color(theme::line2())),
                             ..container::Style::default()
                         }),
                     container(text(""))
@@ -238,7 +238,7 @@ impl Panel {
                         .height(11)
                         .style(move |_| container::Style {
                             border: iced::Border {
-                                color: if sel { theme::HI } else { rc },
+                                color: if sel { theme::hi() } else { rc },
                                 width: 2.0,
                                 radius: 6.0.into(),
                             },
@@ -249,7 +249,7 @@ impl Panel {
                             text(s.id.clone())
                                 .font(theme::MONO_BOLD)
                                 .size(12.5)
-                                .color(theme::HI),
+                                .color(theme::hi()),
                             container(text(s.reason.as_str()).size(10).color(rc))
                                 .padding([0, 6])
                                 .style(move |_| container::Style {
@@ -269,14 +269,14 @@ impl Panel {
                                     .collect::<String>()
                             )
                             .size(11)
-                            .color(DIM),
+                            .color(dim()),
                         ]
                         .spacing(8)
                         .align_y(iced::Alignment::Center),
                         row![
-                            text(format!("{} files", s.files)).size(11).color(DIM),
-                            text(format!("+{}", s.added)).size(11).color(OK),
-                            text(format!("-{}", s.removed)).size(11).color(BAD),
+                            text(format!("{} files", s.files)).size(11).color(dim()),
+                            text(format!("+{}", s.added)).size(11).color(ok()),
+                            text(format!("-{}", s.removed)).size(11).color(bad()),
                         ]
                         .spacing(8),
                     ]
@@ -300,7 +300,7 @@ impl Panel {
             }
         }
         if items.is_empty() && !snaps.is_empty() {
-            items.push(text("No snapshot matches.").size(12).color(DIM).into());
+            items.push(text("No snapshot matches.").size(12).color(dim()).into());
         }
 
         // the detail is the flexible region: at least 600 px, scrolling when narrower
@@ -314,12 +314,12 @@ impl Panel {
                 {
                     Some(snap) => this.snapshot_detail(snap),
                     None => column![
-                        text("No snapshots match").size(16).color(theme::HI),
+                        text("No snapshots match").size(16).color(theme::hi()),
                         text(
                             "The server takes one when an agent goes idle or finishes, and before every restore."
                         )
                         .size(12)
-                        .color(DIM),
+                        .color(dim()),
                         btn_primary("Capture now", PanelMsg::SnapCapture(
                             ctx.data.agents.first().map(|a| a.id.clone()).unwrap_or_default()
                         )),
@@ -343,7 +343,7 @@ impl Panel {
     fn snapshot_detail<'a>(&'a self, snap: &'a SnapshotInfo) -> Element<'a, Message> {
         let mut page = column![
             row![
-                text(snap.id.clone()).font(theme::MONO_BOLD).size(20).color(theme::HI),
+                text(snap.id.clone()).font(theme::MONO_BOLD).size(20).color(theme::hi()),
                 badge(snap.reason.as_str(), reason_color(snap.reason)),
             ]
             .spacing(10)
@@ -355,7 +355,7 @@ impl Panel {
                 snap.prev.clone().unwrap_or_else(|| "none".into())
             ))
             .size(11.5)
-            .color(DIM),
+            .color(dim()),
             row![
                 btn_primary("Compare with the worktree now", PanelMsg::SnapCompare(snap.id.clone())),
                 self.arm_button(
@@ -375,7 +375,7 @@ impl Panel {
                  there now is taken first, and files this snapshot does not have are kept.",
             )
             .size(11.5)
-            .color(DIM),
+            .color(dim()),
         ]
         .spacing(10);
 
@@ -391,14 +391,17 @@ impl Panel {
                                 .color(change_color(&f.status))
                         )
                         .width(90),
-                        text(f.path.clone()).size(12).color(FG).width(Length::Fill),
+                        text(f.path.clone())
+                            .size(12)
+                            .color(fg())
+                            .width(Length::Fill),
                         text(if f.binary {
                             "binary".to_owned()
                         } else {
                             format!("+{} −{}", f.added, f.removed)
                         })
                         .size(11)
-                        .color(DIM),
+                        .color(dim()),
                     ]
                     .spacing(8),
                 );
@@ -412,13 +415,13 @@ impl Panel {
         };
         let mut body = column![].spacing(8);
         match self.snap_detail.as_ref().filter(|(id, _)| *id == snap.id) {
-            None => body = body.push(text("Loading the changed files…").size(12).color(DIM)),
+            None => body = body.push(text("Loading the changed files…").size(12).color(dim())),
             Some((_, Err(e))) => {
                 body = body.push(alert(
                     text(format!("Could not read the snapshot: {e}"))
                         .size(12)
                         .into(),
-                    BAD,
+                    bad(),
                 ))
             }
             Some((_, Ok(shown))) => {
@@ -426,7 +429,7 @@ impl Panel {
                     body = body.push(
                         text("No file changed since the previous snapshot.")
                             .size(12)
-                            .color(DIM),
+                            .color(dim()),
                     );
                 }
                 body = body.push(files(&shown.diff.files));
@@ -444,7 +447,7 @@ impl Panel {
                         .join(", ")
                 ))
                 .size(11)
-                .color(WARN),
+                .color(warn()),
             );
         }
         page = page.push(card(
@@ -455,7 +458,7 @@ impl Panel {
                     snap.files, snap.added, snap.removed
                 ))
                 .size(11)
-                .color(DIM)
+                .color(dim())
                 .into(),
             ),
             body.into(),
@@ -466,7 +469,7 @@ impl Panel {
             Some((_, Err(e))) => {
                 page = page.push(alert(
                     text(format!("Could not compare: {e}")).size(12).into(),
-                    BAD,
+                    bad(),
                 ))
             }
             Some((_, Ok(diff))) => {
@@ -475,7 +478,7 @@ impl Panel {
                     body = body.push(
                         text("The worktree is the same as this snapshot.")
                             .size(12)
-                            .color(DIM),
+                            .color(dim()),
                     );
                 }
                 body = body.push(files(&diff.files));
@@ -486,7 +489,7 @@ impl Panel {
                     "WORKTREE NOW COMPARED WITH THIS SNAPSHOT",
                     Some(
                         row![
-                            text(snap.id.clone()).size(11).color(DIM),
+                            text(snap.id.clone()).size(11).color(dim()),
                             button(text("Hide").size(11.5))
                                 .padding([3, 10])
                                 .style(theme::outline_button_style(false))
@@ -514,13 +517,13 @@ fn diff_excerpt<'a>(patch: &str) -> Element<'a, Message> {
         .collect();
     for l in all.iter().take(SHOWN) {
         let color = if l.starts_with("@@") || l.starts_with("---") || l.starts_with("+++") {
-            DIM
+            dim()
         } else if l.starts_with('-') {
-            BAD
+            bad()
         } else if l.starts_with('+') {
-            OK
+            ok()
         } else {
-            theme::TEXT2
+            theme::text2()
         };
         lines = lines.push(text((*l).to_owned()).size(11).color(color));
     }
@@ -528,16 +531,16 @@ fn diff_excerpt<'a>(patch: &str) -> Element<'a, Message> {
         lines = lines.push(
             text(format!("… {} more lines", all.len() - SHOWN))
                 .size(11)
-                .color(DIM),
+                .color(dim()),
         );
     }
     container(lines)
         .padding([8, 10])
         .width(Length::Fill)
         .style(|_| container::Style {
-            background: Some(iced::Background::Color(theme::INPUT)),
+            background: Some(iced::Background::Color(theme::input())),
             border: iced::Border {
-                color: theme::LINE,
+                color: theme::line(),
                 width: 1.0,
                 radius: 4.0.into(),
             },

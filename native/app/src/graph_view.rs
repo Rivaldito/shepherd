@@ -1,6 +1,6 @@
 //! Draws a pattern graph (positions come from `pattern_graph::layout`).
 
-use crate::theme::{ACCENT, BAD, DIM, HI, LINE2, LINE3, OK};
+use crate::theme::{accent, bad, dim, hi, line2, line3, ok};
 use iced::widget::canvas::{self, Path, Stroke, Text};
 use iced::{mouse, Color, Point, Rectangle, Size, Theme, Vector};
 use shepherd_app_core::pattern_graph::{Graph, Node, NodeKind, NODE_H, NODE_W};
@@ -113,7 +113,10 @@ impl canvas::Program<crate::Message> for TopologyView<'_> {
                 frame.stroke(
                     &line,
                     Stroke {
-                        style: canvas::Style::Solid(Color { a: 0.55, ..ACCENT }),
+                        style: canvas::Style::Solid(Color {
+                            a: 0.55,
+                            ..accent()
+                        }),
                         width: 1.5,
                         line_dash: canvas::LineDash {
                             segments: &[4.0, 6.0],
@@ -127,7 +130,7 @@ impl canvas::Program<crate::Message> for TopologyView<'_> {
                 frame.stroke(
                     &line,
                     Stroke::default()
-                        .with_color(crate::theme::LINE3)
+                        .with_color(crate::theme::line3())
                         .with_width(1.5),
                 );
             }
@@ -135,20 +138,23 @@ impl canvas::Program<crate::Message> for TopologyView<'_> {
         for node in &self.graph.nodes {
             let is_agent = matches!(node.kind, NodeKind::Agent);
             let state = is_agent.then(|| state_of(node)).flatten();
-            let edge_color = state.map_or(LINE2, |(_, _, c, _)| *c);
+            let edge_color = state.map_or(line2(), |(_, _, c, _)| *c);
             let rect = Path::rounded_rectangle(
                 Point::new(node.x, node.y),
                 Size::new(NODE_W, NODE_H),
                 6.0.into(),
             );
-            frame.fill(&rect, Color::from_rgb8(0x10, 0x10, 0x18));
+            frame.fill(
+                &rect,
+                crate::theme::pick(Color::from_rgb8(0x10, 0x10, 0x18), Color::WHITE),
+            );
             let mut stroke = Stroke::default().with_color(edge_color).with_width(1.0);
             if !is_agent {
                 stroke.line_dash = canvas::LineDash {
                     segments: &[4.0, 3.0],
                     offset: 0,
                 };
-                stroke.style = canvas::Style::Solid(crate::theme::VIOLET);
+                stroke.style = canvas::Style::Solid(crate::theme::violet());
             }
             frame.stroke(&rect, stroke);
             frame.fill_rectangle(
@@ -157,13 +163,13 @@ impl canvas::Program<crate::Message> for TopologyView<'_> {
                 if is_agent {
                     edge_color
                 } else {
-                    crate::theme::VIOLET
+                    crate::theme::violet()
                 },
             );
             frame.fill_text(Text {
                 content: node.label.clone(),
                 position: Point::new(node.x + 26.0, node.y + 10.0),
-                color: HI,
+                color: hi(),
                 size: 13.0.into(),
                 ..Text::default()
             });
@@ -174,7 +180,7 @@ impl canvas::Program<crate::Message> for TopologyView<'_> {
             frame.fill_text(Text {
                 content: detail.chars().take(26).collect(),
                 position: Point::new(node.x + 12.0, node.y + 34.0),
-                color: DIM,
+                color: dim(),
                 size: 10.5.into(),
                 ..Text::default()
             });
@@ -251,7 +257,10 @@ impl canvas::Program<crate::Message> for GraphView<'_> {
         frame.fill_rectangle(
             Point::ORIGIN,
             bounds.size(),
-            Color::from_rgb8(0x08, 0x08, 0x0C),
+            crate::theme::pick(
+                Color::from_rgb8(0x08, 0x08, 0x0C),
+                Color::from_rgb8(0xF3, 0xF3, 0xF7),
+            ),
         );
         if self.mini {
             for node in &self.graph.nodes {
@@ -260,18 +269,27 @@ impl canvas::Program<crate::Message> for GraphView<'_> {
                     Size::new(NODE_W, NODE_H),
                     6.0.into(),
                 );
-                frame.fill(&rect, Color::from_rgb8(0x15, 0x15, 0x1C));
+                frame.fill(
+                    &rect,
+                    crate::theme::pick(
+                        Color::from_rgb8(0x15, 0x15, 0x1C),
+                        Color::from_rgb8(0xE4, 0xE4, 0xEC),
+                    ),
+                );
                 let marked = self.selected.as_deref() == Some(node.key.as_str());
                 frame.stroke(
                     &rect,
                     Stroke::default()
-                        .with_color(if marked { ACCENT } else { LINE2 })
+                        .with_color(if marked { accent() } else { line2() })
                         .with_width(if marked { 3.0 } else { 2.0 }),
                 );
             }
             return vec![frame.into_geometry()];
         }
-        let dot = Color::from_rgba8(160, 160, 190, 0.16);
+        let dot = crate::theme::pick(
+            Color::from_rgba8(160, 160, 190, 0.16),
+            Color::from_rgba8(90, 90, 120, 0.2),
+        );
         for x in (0..bounds.width as u32).step_by(18) {
             for y in (0..bounds.height as u32).step_by(18) {
                 frame.fill_rectangle(Point::new(x as f32, y as f32), Size::new(1.0, 1.0), dot);
@@ -282,7 +300,7 @@ impl canvas::Program<crate::Message> for GraphView<'_> {
             let (s, d) = straight_edge(&self.graph.nodes[edge.from], &self.graph.nodes[edge.to]);
             frame.stroke(
                 &Path::line(s, d),
-                Stroke::default().with_color(LINE3).with_width(1.5),
+                Stroke::default().with_color(line3()).with_width(1.5),
             );
             let (dx, dy) = (d.x - s.x, d.y - s.y);
             let len = (dx * dx + dy * dy).sqrt().max(1.0);
@@ -302,7 +320,7 @@ impl canvas::Program<crate::Message> for GraphView<'_> {
                 ));
                 p.close();
             });
-            frame.fill(&head, LINE3);
+            frame.fill(&head, line3());
         }
         for node in &self.graph.nodes {
             let marked = self.selected.as_deref() == Some(node.key.as_str());
@@ -317,21 +335,27 @@ impl canvas::Program<crate::Message> for GraphView<'_> {
                     Size::new(NODE_W + 6.0, NODE_H + 6.0),
                     11.0.into(),
                 );
-                frame.fill(&ring, Color { a: 0.18, ..ACCENT });
+                frame.fill(
+                    &ring,
+                    Color {
+                        a: 0.18,
+                        ..accent()
+                    },
+                );
             }
-            frame.fill(&rect, crate::theme::SURFACE);
+            frame.fill(&rect, crate::theme::surface());
             let is_agent = matches!(node.kind, NodeKind::Agent);
             let mut stroke = Stroke::default()
                 .with_color(if linking {
-                    BAD
+                    bad()
                 } else if marked {
-                    ACCENT
+                    accent()
                 } else if is_agent {
-                    Color { a: 0.4, ..ACCENT }
+                    Color { a: 0.4, ..accent() }
                 } else {
                     Color {
                         a: 0.6,
-                        ..crate::theme::VIOLET
+                        ..crate::theme::violet()
                     }
                 })
                 .with_width(1.0);
@@ -347,22 +371,22 @@ impl canvas::Program<crate::Message> for GraphView<'_> {
                 Point::new(node.x + 10.0, node.y + 14.0),
                 Size::new(7.0, 7.0),
                 if is_agent {
-                    ACCENT
+                    accent()
                 } else {
-                    crate::theme::VIOLET
+                    crate::theme::violet()
                 },
             );
             frame.fill_text(Text {
                 content: node.label.clone(),
                 position: Point::new(node.x + 24.0, node.y + 10.0),
-                color: HI,
+                color: hi(),
                 size: 12.5.into(),
                 ..Text::default()
             });
             frame.fill_text(Text {
                 content: node.detail.clone(),
                 position: Point::new(node.x + 10.0, node.y + 31.0),
-                color: DIM,
+                color: dim(),
                 size: 11.0.into(),
                 ..Text::default()
             });
@@ -370,7 +394,7 @@ impl canvas::Program<crate::Message> for GraphView<'_> {
                 frame.fill_text(Text {
                     content: "▶".into(),
                     position: Point::new(node.x + NODE_W - 20.0, node.y + 11.0),
-                    color: OK,
+                    color: ok(),
                     size: 11.0.into(),
                     ..Text::default()
                 });
