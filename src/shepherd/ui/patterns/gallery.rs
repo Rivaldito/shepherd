@@ -282,7 +282,8 @@ pub fn render_patterns_section(
             blocks.push(DetailContentBlock::Paragraph(
                 shepherd_core::patterns::description_summary(&detail.pattern.description),
             ));
-            for paragraph in shepherd_core::patterns::description_guide(&detail.pattern.description) {
+            for paragraph in shepherd_core::patterns::description_guide(&detail.pattern.description)
+            {
                 blocks.push(DetailContentBlock::Paragraph(paragraph));
             }
 
