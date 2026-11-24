@@ -207,6 +207,8 @@ If a pattern run would exceed `max_concurrent`, `shepherd pattern run` asks for 
 
 ## Next steps
 
+- [the-pieces.md](the-pieces.md): what each piece (role, skill, pattern, topic, run...) is for.
+- [recipe-own-team.md](recipe-own-team.md): build your own role, skill and pattern, step by step.
 - [agents-roles-skills.md](agents-roles-skills.md): tune roles, add skills.
 - [patterns.md](patterns.md): design your own team.
 - [topics-and-events.md](topics-and-events.md): understand and watch the bus.

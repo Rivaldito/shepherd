@@ -213,6 +213,8 @@ agents:
 
 Every field and the rules of each topology: [docs/shepherd/patterns.md](docs/shepherd/patterns.md).
 
+What each piece (role, skill, pattern, topic, run) is for: [the pieces of Shepherd](docs/shepherd/the-pieces.md). When to use each of the ten built-in patterns, with an example: [patterns](docs/shepherd/patterns.md#4b-the-built-in-patterns-one-by-one). A worked example with your own role, skill and pattern: [build a Go server](docs/shepherd/recipe-own-team.md).
+
 ## Roles: who does what
 
 A **role** is a job description: which vendor and model do it by default, whether it gets its own worktree, whether it may start other agents, and which skills it receives.
