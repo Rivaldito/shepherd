@@ -242,6 +242,7 @@ mod tests {
             partitions: 1,
             key: None,
             filter: None,
+            max_messages: None,
         });
         let after = relayout_keep(&graph, &pattern);
         let node = after.nodes.iter().find(|n| n.key == moved).unwrap();

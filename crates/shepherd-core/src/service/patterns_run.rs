@@ -423,7 +423,7 @@ impl OrchestrationService {
         // Create pattern topics in bus
         let bus = self.bus()?;
         for topic in &pattern.topics {
-            let _ = bus.topic_create(&topic.name, topic.partitions);
+            let _ = bus.topic_create_limited(&topic.name, topic.partitions, topic.max_messages);
         }
 
         let run_id = format!("run-{}-{}", pattern.name, self.clock.now_ms());

@@ -210,6 +210,7 @@ Agents with MCP support see these as tools of the `shepherd` server (a local HTT
 | `submit_result`, `get_result` | Deliver the final result; read another agent's without blocking |
 | `list_agents` | Agents in the session with role, vendor, state and worktree |
 | `get_diff` | Full diff of a coder's worktree against the base branch |
+| `run_checks` | Runs the project's checks (`workflow.checks`, or `cargo test`, `pytest`, `npm test`, `go test ./...` when it has none) in an agent's worktree, yours by default, and returns PASSED or FAILED with each command's exit code and the end of its real output. Pass or fail is the exit code, not an agent's reading of the output. Each command has a time limit (`timeout_secs`, default 600, at most 3600) and is killed with everything it started when it runs out |
 | `read_output` | Last N lines of an agent's pane |
 | `ask_docs` | Ask the `docs` agent (started if needed) and wait |
 | `get_task_context`, `update_task_context` | Read the task (issue, spec, criteria, plan) or, for `brain` and `docs` only, update it. In pattern runs it returns the objective and the topology |

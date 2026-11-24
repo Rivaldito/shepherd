@@ -4,6 +4,7 @@ description: 'Generator and critic: one agent writes code or tests, the other re
 topics:
   - name: board
     partitions: 1
+    max_messages: 10
 agents:
   - id: generator
     role: coder

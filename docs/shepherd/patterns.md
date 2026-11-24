@@ -71,6 +71,7 @@ topics:
   partitions: 4                   # 1 to 256 (default 1)
   key: task_id                    # informational hint about the partition key
   filter: hypothesis              # optional: prefix expected in messages
+  max_messages: 12                # optional: a hard cap; the next publish fails (default: no limit)
 agents:
 - id: orchestrator                # required and unique
   role: brain                     # a role from your configuration (brings permissions and skills)
@@ -179,7 +180,7 @@ Six built-in templates are teams that write and check unit tests, each a known w
 | `planner-workers-reviewer` | planner, 3 workers, reviewer | One module per worker, each with its tests; the reviewer checks coverage and quality before the planner reports |
 | `self-debug` | solver, debugger | After each failing run the solver writes a reflection; the board keeps them as memory so no attempt repeats a failed change |
 
-Every loop is **capped by its prompt** (3 or 4 rounds, numbered in each message): after the last round the agents say what is unresolved and stop, so the run shows as `stalled` and a person decides. The cap is a rule the agents follow, not one the server enforces. Test results are only as reliable as the agent that runs the tests, so read the exact output it posts.
+Every loop has two caps. The prompts number the rounds (3 or 4): after the last one the agents say what is unresolved and stop. And the shared topic has a `max_messages` limit that the server enforces: the next `publish` fails with a message saying so, the agents stop, and the run shows as `stalled` for a person to decide. The test runs themselves (`tdd`, `agentcoder`) go through the `run_checks` tool, so pass or fail is the exit code of the project's real test command, and the report an agent posts is that tool's output.
 
 ## 5. Validation
 
