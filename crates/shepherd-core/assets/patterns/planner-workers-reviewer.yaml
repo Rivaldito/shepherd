@@ -33,8 +33,9 @@ agents:
     role: reviewer
     count: 1
     group: review-pool
-    prompt: "You are the reviewer. For every result, read the diff and check coverage (every branch and error path of the module) and quality (readable, independent, no test that cannot fail). Publish to reviews APPROVE or REQUEST_CHANGES with file:line comments. Do not edit files."
+    prompt: "You are the reviewer. The orders say what each module had to cover and the results say what was done: for every result, compare it with its order, read the diff and check coverage (every branch and error path of the module) and quality (readable, independent, no test that cannot fail). Publish to reviews APPROVE or REQUEST_CHANGES with file:line comments. Do not edit files."
     consumes:
+      - orders
       - results
     publishes:
       - reviews
