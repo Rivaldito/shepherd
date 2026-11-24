@@ -7,7 +7,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-19D3FF?style=flat-square&labelColor=07070A" alt="Apache 2.0 license" /></a>
   <a href="https://github.com/herdrdev/herdr"><img src="https://img.shields.io/badge/fork%20of-herdr%200.9.5-FF8A1F?style=flat-square&labelColor=07070A" alt="fork of herdr 0.9.5" /></a>
-  <a href="https://github.com/Rivaldito/shepherd/releases"><img src="https://img.shields.io/badge/release-0.5.2--beta-7CF29A?style=flat-square&labelColor=07070A" alt="release 0.5.2-beta" /></a>
+  <a href="https://github.com/Rivaldito/shepherd/releases"><img src="https://img.shields.io/badge/release-0.5.3--beta-7CF29A?style=flat-square&labelColor=07070A" alt="release 0.5.3-beta" /></a>
   <img src="https://img.shields.io/badge/status-beta-B98CFF?style=flat-square&labelColor=07070A" alt="beta" />
   <a href="https://buymeacoffee.com/fqhst2qucv"><img src="https://img.shields.io/badge/buy%20me%20a%20coffee-FFDD00?style=flat-square&logo=buymeacoffee&logoColor=black&labelColor=07070A" alt="Buy me a coffee" /></a>
 </p>
@@ -296,7 +296,7 @@ From an empty machine to a team of agents, in about ten minutes plus the first b
 curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh | sh
 ```
 
-Set `SHEPHERD_INSTALL_DIR` to change where it goes, or `SHEPHERD_VERSION=v0.5.2-beta` to pick a release. You can also download a binary from the [releases](https://github.com/Rivaldito/shepherd/releases) page, or build from source:
+Set `SHEPHERD_INSTALL_DIR` to change where it goes, or `SHEPHERD_VERSION=v0.5.3-beta` to pick a release. You can also download a binary from the [releases](https://github.com/Rivaldito/shepherd/releases) page, or build from source:
 
 If a server is already running at another version, the installer stops it and starts the new one (its terminals and agents close, so save your work first). Set `SHEPHERD_NO_RESTART=1` to leave it running and restart it yourself with `shepherd server restart`.
 
