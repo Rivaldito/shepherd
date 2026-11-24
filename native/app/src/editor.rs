@@ -2,7 +2,7 @@
 //! uses the same line height: for the two to stay aligned the editor does not wrap lines and does not scroll by
 //! itself (it is as tall as its text); the whole thing scrolls, both ways, inside one `scrollable`.
 
-use crate::theme::{self, DIM, FG};
+use crate::theme::{self, dim, fg};
 use crate::Message;
 use iced::widget::text::{LineHeight, Wrapping};
 use iced::widget::{column, container, row, scrollable, text, text_editor};
@@ -31,7 +31,7 @@ fn gutter<'a>(lines: usize, current: usize) -> Element<'a, Message> {
             container(
                 text((n + 1).to_string())
                     .size(12)
-                    .color(if n == current { FG } else { DIM })
+                    .color(if n == current { fg() } else { dim() })
                     .width(Length::Fill)
                     .align_x(iced::alignment::Horizontal::Right),
             )

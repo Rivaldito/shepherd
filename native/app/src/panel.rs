@@ -5,8 +5,8 @@ use crate::pattern_editor::{EditMsg, PatternEditor};
 use crate::prism::{Preset, Prism};
 use crate::theme::{self, kpi_cell_style, kpi_strip_style};
 use crate::theme::{
-    card_style, danger_button_style, item_style, pad, primary_button_style, status_color,
-    status_glyph, ACCENT, BAD, DIM, FG, LINE, OK, WARN,
+    accent, bad, card_style, danger_button_style, dim, fg, item_style, line, ok, pad,
+    primary_button_style, status_color, status_glyph, warn,
 };
 use crate::{Action, Message};
 use iced::widget::canvas::Canvas;
@@ -425,18 +425,18 @@ impl Default for Panel {
 
 fn state_badge(state: PatternRunState) -> (&'static str, Color) {
     match state {
-        PatternRunState::Running => ("running", OK),
+        PatternRunState::Running => ("running", ok()),
         PatternRunState::Paused | PatternRunState::Stalled | PatternRunState::Degraded => (
             match state {
                 PatternRunState::Paused => "paused",
                 PatternRunState::Stalled => "stalled",
                 _ => "degraded",
             },
-            WARN,
+            warn(),
         ),
-        PatternRunState::Failed => ("failed", BAD),
-        PatternRunState::Done => ("done", DIM),
-        PatternRunState::Stopped => ("stopped", DIM),
+        PatternRunState::Failed => ("failed", bad()),
+        PatternRunState::Done => ("done", dim()),
+        PatternRunState::Stopped => ("stopped", dim()),
     }
 }
 
@@ -521,7 +521,7 @@ fn agent_skill_buttons<'a>(
         rows.push(
             text("Changes apply the next time the agent starts.")
                 .size(11)
-                .color(DIM)
+                .color(dim())
                 .into(),
         );
     }
@@ -561,10 +561,10 @@ fn has_run(state: &str) -> bool {
 
 pub(crate) fn task_state_color(state: &str) -> Color {
     match state {
-        "done" | "completed" | "archived" => OK,
-        "blocked" | "waiting" => WARN,
-        "working" | "in_progress" | "running" => ACCENT,
-        _ => DIM,
+        "done" | "completed" | "archived" => ok(),
+        "blocked" | "waiting" => warn(),
+        "working" | "in_progress" | "running" => accent(),
+        _ => dim(),
     }
 }
 
@@ -591,7 +591,7 @@ fn kpi_inner<'a>(
     ]
     .spacing(4);
     if let Some(sub) = sub {
-        body = body.push(text(sub).size(11).color(DIM));
+        body = body.push(text(sub).size(11).color(dim()));
     }
     let content: Element<'a, Message> = match spark {
         Some(frame) => row![
@@ -622,7 +622,7 @@ pub(crate) fn agent_square<'a>(status: Status) -> Element<'a, Message> {
         text(status_glyph(status))
             .font(theme::MONO_BOLD)
             .size(10)
-            .color(theme::BG),
+            .color(theme::bg()),
     )
     .center(18)
     .style(move |_| iced::widget::container::Style {
@@ -642,7 +642,7 @@ pub(crate) fn badge<'a>(label: impl ToString, color: Color) -> Element<'a, Messa
         text(label.to_string())
             .font(theme::MONO_BOLD)
             .size(10.5)
-            .color(theme::BG),
+            .color(theme::bg()),
     )
     .padding([2, 7])
     .style(theme::badge_style(color))
@@ -720,7 +720,7 @@ pub(crate) fn card<'a>(
             .width(Length::Fill)
             .height(1)
             .style(|_| iced::widget::container::Style {
-                background: Some(Background::Color(LINE)),
+                background: Some(Background::Color(line())),
                 ..iced::widget::container::Style::default()
             }),
         container(body).padding([12, 14]).width(Length::Fill),
@@ -774,20 +774,20 @@ pub(crate) fn message_row<'a>(m: &BusMessage, with_position: bool) -> Element<'a
         who = who.push(text(m.kind.clone()).size(11).color(tag_color));
     }
     if !m.to.is_empty() {
-        who = who.push(text(format!("→ {}", m.to)).size(12).color(DIM));
+        who = who.push(text(format!("→ {}", m.to)).size(12).color(dim()));
     }
     if with_position {
         who = who.push(
             text(format!("p{} · #{}", m.partition, m.offset))
                 .size(11)
-                .color(DIM),
+                .color(dim()),
         );
     }
     column![
         container(
             row![
-                text(time).size(13).color(DIM).width(80),
-                column![who, text(body).size(13).color(theme::FG)].spacing(2),
+                text(time).size(13).color(dim()).width(80),
+                column![who, text(body).size(13).color(theme::fg())].spacing(2),
             ]
             .spacing(12),
         )
@@ -796,7 +796,7 @@ pub(crate) fn message_row<'a>(m: &BusMessage, with_position: bool) -> Element<'a
             .width(Length::Fill)
             .height(1)
             .style(|_| iced::widget::container::Style {
-                background: Some(Background::Color(LINE)),
+                background: Some(Background::Color(line())),
                 ..iced::widget::container::Style::default()
             }),
     ]
@@ -1927,7 +1927,7 @@ impl Panel {
                     .width(Length::FillPortion(portion.max(1)))
                     .height(3)
                     .style(|_| container::Style {
-                        background: Some(Background::Color(theme::BG)),
+                        background: Some(Background::Color(theme::bg())),
                         ..container::Style::default()
                     }),
                 container(text(""))
@@ -2004,9 +2004,9 @@ impl Panel {
                     .height(6)
                     .style(move |_| container::Style {
                         background: Some(Background::Color(if selected {
-                            ACCENT
+                            accent()
                         } else {
-                            theme::LINE2
+                            theme::line2()
                         })),
                         border: iced::Border {
                             radius: 1.0.into(),
@@ -2016,7 +2016,7 @@ impl Panel {
                     }),
                 text(name)
                     .size(12.5)
-                    .color(if selected { theme::HI } else { FG }),
+                    .color(if selected { theme::hi() } else { fg() }),
                 container(text("")).width(Length::Fill),
             ]
             .spacing(10)
@@ -2024,18 +2024,18 @@ impl Panel {
             if let Some(count) = count {
                 r = r.push(
                     container(text(count.to_string()).size(10.5).color(if warn {
-                        theme::BG
+                        theme::bg()
                     } else {
-                        DIM
+                        dim()
                     }))
                     .padding([0, 5])
                     .height(18)
                     .center_y(18)
                     .style(move |_| container::Style {
                         background: Some(Background::Color(if warn {
-                            WARN
+                            theme::warn()
                         } else {
-                            theme::SURFACE
+                            theme::surface()
                         })),
                         border: iced::Border {
                             radius: 3.0.into(),
@@ -2049,7 +2049,7 @@ impl Panel {
             r = r.push(
                 text(key)
                     .size(10)
-                    .color(theme::FAINT)
+                    .color(theme::faint())
                     .width(Length::Fixed(44.0)),
             );
             button(container(r).center_y(Length::Fill))
@@ -2067,11 +2067,11 @@ impl Panel {
                     row![
                         text(if closed { "›" } else { "⌄" })
                             .size(11)
-                            .color(theme::FAINT),
+                            .color(theme::faint()),
                         text(crate::sidebar::spaced(s))
                             .font(theme::PIXEL)
                             .size(10)
-                            .color(DIM),
+                            .color(dim()),
                     ]
                     .spacing(6)
                     .align_y(iced::Alignment::Center),
@@ -2298,7 +2298,7 @@ impl Panel {
                         chip("5 min", 0),
                         chip("30 min", 1),
                         chip("2 h", 2),
-                        text("● live").size(11.5).color(ACCENT).into(),
+                        text("● live").size(11.5).color(accent()).into(),
                     ],
                 )
             }
@@ -2371,7 +2371,7 @@ impl Panel {
                 let agents: Vec<String> = d.agents.iter().map(|a| a.id.clone()).collect();
                 let current = self.capture_agent(ctx);
                 let mut actions: Vec<Element<'a, Message>> =
-                    vec![text("Capture").size(12).color(DIM).into()];
+                    vec![text("Capture").size(12).color(dim()).into()];
                 actions.push(
                     pick_list(agents, current.clone(), |a| {
                         Message::Panel(PanelMsg::SnapAgent(a))
@@ -2445,23 +2445,27 @@ impl Panel {
             .trim_start_matches(crate::ui::INFO)
             .replace('\n', " ");
         let notice_color = if crate::ui::is_error(&notice_text) || notice_text.contains("✖") {
-            BAD
+            bad()
         } else if notice_text.contains("Starting")
             || notice_text.contains("Loading")
             || notice_text.contains("confirm")
         {
-            WARN
+            warn()
         } else if notice_text.is_empty() {
-            DIM
+            dim()
         } else {
-            OK
+            ok()
         };
         let shown = if notice_text.is_empty() {
             "Ready".to_owned()
         } else {
             notice_text
         };
-        let color = if shown == "Ready" { DIM } else { notice_color };
+        let color = if shown == "Ready" {
+            dim()
+        } else {
+            notice_color
+        };
         let mut line = row![
             text("■").size(8).color(color),
             container(
@@ -2479,7 +2483,7 @@ impl Panel {
             line = line.push(
                 text(format!("{} notices", self.history.len()))
                     .size(11)
-                    .color(theme::FAINT),
+                    .color(theme::faint()),
             );
         }
         line.into()
@@ -2579,13 +2583,13 @@ impl Panel {
                         text(r.run.pattern.clone())
                             .font(theme::MONO_BOLD)
                             .size(13)
-                            .color(theme::HI)
+                            .color(theme::hi())
                             .width(Length::Fill),
                         text(label).size(11).color(color),
                     ]
                     .spacing(8)
                     .align_y(iced::Alignment::Center),
-                    text(r.run.id.clone()).size(11).color(DIM),
+                    text(r.run.id.clone()).size(11).color(dim()),
                     text(match task_id.and_then(|id| ctx.data.task(id)) {
                         Some(t) => format!(
                             "#{} {}   {} of {} agents live",
@@ -2597,14 +2601,14 @@ impl Panel {
                         None => format!("{} of {} agents live", r.live_agents, r.run.agents.len()),
                     })
                     .size(11)
-                    .color(DIM),
+                    .color(dim()),
                 ]
                 .spacing(3);
                 if waits {
                     body = body.push(
                         row![
-                            text("■").size(9).color(WARN),
-                            text("gate waits for you").size(11).color(WARN)
+                            text("■").size(9).color(warn()),
+                            text("gate waits for you").size(11).color(warn())
                         ]
                         .spacing(6),
                     );
@@ -2680,24 +2684,27 @@ impl Panel {
             (Gate::Plan, _) => "Approving lets the coders start on the plan.".to_owned(),
         };
         let mut head = row![
-            badge("awaiting-approval", WARN),
-            text(title).font(theme::MONO_BOLD).size(13).color(theme::HI),
+            badge("awaiting-approval", warn()),
+            text(title)
+                .font(theme::MONO_BOLD)
+                .size(13)
+                .color(theme::hi()),
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center);
         if let Some(r) = run {
-            head = head.push(text(format!("run {}", r.run.id)).size(12).color(ACCENT));
+            head = head.push(text(format!("run {}", r.run.id)).size(12).color(accent()));
         }
-        let mut body = column![head, text(what).size(12).color(DIM)].spacing(8);
+        let mut body = column![head, text(what).size(12).color(dim())].spacing(8);
         if let Some((files, added, removed)) = g.change {
             body = body.push(
                 row![
-                    text("changes").size(12).color(DIM),
+                    text("changes").size(12).color(dim()),
                     text(format!("{files} file{}", if files == 1 { "" } else { "s" }))
                         .size(12)
-                        .color(FG),
-                    text(format!("+{added}")).size(12).color(OK),
-                    text(format!("-{removed}")).size(12).color(BAD),
+                        .color(fg()),
+                    text(format!("+{added}")).size(12).color(ok()),
+                    text(format!("-{removed}")).size(12).color(bad()),
                 ]
                 .spacing(10),
             );
@@ -2714,7 +2721,7 @@ impl Panel {
                 by.push_str(&format!("   {note}"));
             }
             if !by.is_empty() {
-                body = body.push(text(by).size(12).color(FG));
+                body = body.push(text(by).size(12).color(fg()));
             }
         }
         body = body.push(
@@ -2739,7 +2746,7 @@ impl Panel {
             .spacing(8)
             .align_y(iced::Alignment::Center),
         );
-        alert(body.into(), WARN)
+        alert(body.into(), warn())
     }
 
     fn overview_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
@@ -2752,7 +2759,7 @@ impl Panel {
     fn recent_runs_table<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, Message> {
         let d = ctx.data;
         let cell = |w: f32, e: Element<'a, Message>| container(e).width(w).clip(true);
-        let head = |s: &'static str, w: f32| cell(w, text(s).size(11.5).color(DIM).into());
+        let head = |s: &'static str, w: f32| cell(w, text(s).size(11.5).color(dim()).into());
         let mut table = column![row![
             head("Run", 180.0),
             head("Pattern", 140.0),
@@ -2774,7 +2781,7 @@ impl Panel {
                 row![
                     cell(
                         180.0,
-                        button(text(r.run.id.clone()).size(12).color(ACCENT))
+                        button(text(r.run.id.clone()).size(12).color(accent()))
                             .padding(0)
                             .style(theme::link_button_style())
                             .on_press(Message::Panel(PanelMsg::SelectRun(r.run.id.clone())))
@@ -2800,12 +2807,12 @@ impl Panel {
                     cell(
                         220.0,
                         match task_id {
-                            Some(id) => button(text(task).size(12).color(ACCENT))
+                            Some(id) => button(text(task).size(12).color(accent()))
                                 .padding(0)
                                 .style(theme::link_button_style())
                                 .on_press(Message::Panel(PanelMsg::SelectTask(id)))
                                 .into(),
-                            None => text(task).size(12).color(theme::FAINT).into(),
+                            None => text(task).size(12).color(theme::faint()).into(),
                         }
                     ),
                     cell(
@@ -2820,7 +2827,7 @@ impl Panel {
                                 .replace('T', " ")
                         )
                         .size(12)
-                        .color(DIM)
+                        .color(dim())
                         .into()
                     ),
                 ]
@@ -2828,7 +2835,7 @@ impl Panel {
             );
         }
         if d.runs.is_empty() {
-            table = table.push(text("No runs yet.").size(12).color(DIM));
+            table = table.push(text("No runs yet.").size(12).color(dim()));
         }
         card("RECENT RUNS", None, table.into())
     }
@@ -2878,8 +2885,8 @@ impl Panel {
                 .width(Length::FillPortion(1))
                 .padding(0)
                 .style(|_, status| button::Style {
-                    background: msg_hot(status).then_some(Background::Color(theme::SELECTED)),
-                    text_color: FG,
+                    background: msg_hot(status).then_some(Background::Color(theme::selected())),
+                    text_color: fg(),
                     ..button::Style::default()
                 })
                 .on_press(Message::Panel(PanelMsg::Tab(tab)))
@@ -2905,7 +2912,7 @@ impl Panel {
                     kpi_cell(
                         "ACTIVE RUN",
                         running.to_string(),
-                        ACCENT,
+                        accent(),
                         Some(format!("{} finished", d.runs.len() - running))
                     ),
                     Tab::Runs
@@ -2915,7 +2922,7 @@ impl Panel {
                         kpi_cell(
                             "AGENTS",
                             d.agents.len().to_string(),
-                            theme::HI,
+                            theme::hi(),
                             Some(format!(
                                 "{active_agents} working, {} idle, {} blocked",
                                 idle.len(),
@@ -2931,7 +2938,7 @@ impl Panel {
                     kpi_cell(
                         "OPEN TASKS",
                         open_tasks.to_string(),
-                        WARN,
+                        warn(),
                         Some(if d.gates.is_empty() {
                             "nothing waits for you".to_owned()
                         } else {
@@ -2944,7 +2951,7 @@ impl Panel {
                     kpi_cell(
                         "PATTERNS",
                         d.patterns.len().to_string(),
-                        theme::HI,
+                        theme::hi(),
                         Some("ready to run".into())
                     ),
                     Tab::Patterns
@@ -2959,12 +2966,12 @@ impl Panel {
             let message: Element<'a, Message> = if hot {
                 text(format!("{needs_total} need you"))
                     .size(12)
-                    .color(WARN)
+                    .color(warn())
                     .into()
             } else {
                 text(format!("{active_agents} agents working"))
                     .size(12)
-                    .color(ACCENT)
+                    .color(accent())
                     .into()
             };
             container(iced::widget::stack![
@@ -2996,7 +3003,7 @@ impl Panel {
             .width(Length::Fill)
             .style(|_| container::Style {
                 border: iced::Border {
-                    color: LINE,
+                    color: line(),
                     width: 1.0,
                     radius: 6.0.into(),
                 },
@@ -3008,7 +3015,7 @@ impl Panel {
         let needs_card = {
             let right: Element<'a, Message> = text("Nothing is pushed until you approve it")
                 .size(11)
-                .color(DIM)
+                .color(dim())
                 .into();
             let mut body = column![].spacing(10);
             for g in &d.gates {
@@ -3025,7 +3032,7 @@ impl Panel {
                             a.notice.clone()
                         })
                         .size(11)
-                        .color(DIM)
+                        .color(dim())
                         .width(Length::Fill),
                         btn("Open", PanelMsg::SelectAgent(a.id.clone())),
                     ]
@@ -3037,7 +3044,7 @@ impl Panel {
                 body = body.push(
                     text(format!("{attention_runs} run(s) are degraded or stalled."))
                         .size(12)
-                        .color(WARN),
+                        .color(warn()),
                 );
             }
             if !idle.is_empty() {
@@ -3052,7 +3059,7 @@ impl Panel {
                                 .join(", ")
                         ))
                         .size(12)
-                        .color(DIM)
+                        .color(dim())
                         .width(Length::Fill),
                         btn("Resume idle agents", PanelMsg::ResumeAgents),
                     ]
@@ -3064,13 +3071,13 @@ impl Panel {
                 body = body.push(
                     text("All clear. The flock keeps moving on its own.")
                         .size(13)
-                        .color(DIM),
+                        .color(dim()),
                 );
             }
             let count: Element<'a, Message> = if needs_total > 0 {
-                row![badge(needs_total, WARN), right].spacing(12).into()
+                row![badge(needs_total, warn()), right].spacing(12).into()
             } else {
-                badge("ALL CLEAR", OK)
+                badge("ALL CLEAR", ok())
             };
             card("NEEDS YOU", Some(count), body.into())
         };
@@ -3085,12 +3092,12 @@ impl Panel {
                 let n = subs.len().max(1);
                 for i in 0..n {
                     let color = match subs.get(i).map(|s| s.state.as_str()) {
-                        Some("done" | "completed") => OK,
-                        Some("awaiting-approval") => WARN,
-                        Some("in_progress" | "in-progress" | "working" | "review") => ACCENT,
-                        Some(_) => theme::LINE2,
-                        None if is_done(&t.status.state) => OK,
-                        None => theme::LINE2,
+                        Some("done" | "completed") => ok(),
+                        Some("awaiting-approval") => warn(),
+                        Some("in_progress" | "in-progress" | "working" | "review") => accent(),
+                        Some(_) => theme::line2(),
+                        None if is_done(&t.status.state) => ok(),
+                        None => theme::line2(),
                     };
                     seg = seg.push(container(text("")).width(Length::Fill).height(4).style(
                         move |_| container::Style {
@@ -3127,14 +3134,14 @@ impl Panel {
                                 text(format!("#{} {}", t.status.id, t.status.title))
                                     .font(theme::MONO_BOLD)
                                     .size(12.5)
-                                    .color(theme::HI)
+                                    .color(theme::hi())
                                     .width(Length::Fill),
                                 text(t.status.state.clone())
                                     .size(11)
                                     .color(task_state_color(&t.status.state)),
                             ],
                             seg,
-                            text(caption).size(11).color(DIM),
+                            text(caption).size(11).color(dim()),
                         ]
                         .spacing(6),
                     )
@@ -3147,10 +3154,10 @@ impl Panel {
             if d.tasks.is_empty() {
                 body = body.push(
                     column![
-                        text("No tasks yet").size(13).color(theme::HI),
+                        text("No tasks yet").size(13).color(theme::hi()),
                         text("A task says what to build; a run gives it to a team.")
                             .size(12)
-                            .color(DIM),
+                            .color(dim()),
                         btn_primary("+ New task", PanelMsg::TaskNew),
                     ]
                     .spacing(8),
@@ -3159,7 +3166,7 @@ impl Panel {
             let right: Element<'a, Message> = row![
                 text(format!("{done_n} of {} done", d.tasks.len()))
                     .size(11)
-                    .color(DIM),
+                    .color(dim()),
                 btn_link("Open tasks", PanelMsg::Tab(Tab::Tasks)),
             ]
             .spacing(10)
@@ -3171,12 +3178,12 @@ impl Panel {
         // Active work: task -> run -> agents -> branches -> publish, one line per running run
         let work_card = {
             let col_head =
-                |s: &'static str, w: f32| container(text(s).size(11).color(DIM)).width(w);
+                |s: &'static str, w: f32| container(text(s).size(11).color(dim())).width(w);
             let chip = |label: String, color: Color| {
-                container(text(label).size(12).color(FG))
+                container(text(label).size(12).color(fg()))
                     .padding([5, 10])
                     .style(move |_| container::Style {
-                        background: Some(Background::Color(theme::SURFACE)),
+                        background: Some(Background::Color(theme::surface())),
                         border: iced::Border {
                             color,
                             width: 1.0,
@@ -3221,7 +3228,7 @@ impl Panel {
                     let c = status_color(agent_status(&a.state));
                     agent_col = agent_col.push(
                         row![
-                            text(a.id.clone()).size(12).color(FG),
+                            text(a.id.clone()).size(12).color(fg()),
                             text(a.state.clone()).size(11).color(c),
                         ]
                         .spacing(8),
@@ -3233,20 +3240,20 @@ impl Panel {
                             a.branch.clone()
                         })
                         .size(12)
-                        .color(DIM),
+                        .color(dim()),
                     );
                 }
                 let publish = match d.gates.iter().find(|g| Some(g.task_id) == task_id) {
-                    Some(_) => chip("awaiting-approval".to_owned(), WARN),
-                    None => chip("no publish step".to_owned(), theme::LINE2),
+                    Some(_) => chip("awaiting-approval".to_owned(), warn()),
+                    None => chip("no publish step".to_owned(), theme::line2()),
                 };
                 body = body.push(
                     row![
-                        container(chip(task_label, theme::LINE2)).width(130),
+                        container(chip(task_label, theme::line2())).width(130),
                         container(
                             button(column![
-                                text(r.run.id.clone()).size(12).color(ACCENT),
-                                text(r.run.kind.clone()).size(11).color(DIM),
+                                text(r.run.id.clone()).size(12).color(accent()),
+                                text(r.run.kind.clone()).size(11).color(dim()),
                             ])
                             .padding([5, 10])
                             .style(item_style(false))
@@ -3264,10 +3271,10 @@ impl Panel {
             if !any {
                 body = body.push(
                     column![
-                        text("No run is working").size(13).color(theme::HI),
+                        text("No run is working").size(13).color(theme::hi()),
                         text("A run is a team of agents working on one task with a pattern.")
                             .size(12)
-                            .color(DIM),
+                            .color(dim()),
                         btn_primary("Run a pattern", PanelMsg::OpenLauncher(None)),
                     ]
                     .spacing(8),
@@ -3278,7 +3285,7 @@ impl Panel {
                 Some(
                     text("How each running task reaches its agents, branches and pull requests")
                         .size(11)
-                        .color(DIM)
+                        .color(dim())
                         .into(),
                 ),
                 body.into(),
@@ -3326,17 +3333,17 @@ impl Panel {
             None => format!("The agents join the space “{workspace}”."),
         };
         column![
-            text("RUN PATTERN").size(10).color(DIM),
+            text("RUN PATTERN").size(10).color(dim()),
             pick_list(choices, selected, |c| Message::Panel(
                 PanelMsg::PickPattern(c)
             ))
             .placeholder("Pick a pattern")
             .width(Length::Fill),
-            text("Objective").size(12).color(DIM),
+            text("Objective").size(12).color(dim()),
             text_editor(&self.objective)
                 .on_action(|a| Message::Panel(PanelMsg::Edit(a)))
                 .height(Length::Fixed(160.0)),
-            text(target).size(11).color(DIM),
+            text(target).size(11).color(dim()),
             row![
                 button(container(text("Run pattern").size(13)).center_y(Length::Fill))
                     .padding([0, 16])
@@ -3367,7 +3374,7 @@ impl Panel {
                     text("No pattern runs yet").size(16),
                     text("Launch a pattern to see its agents, health, and communication here.")
                         .size(12)
-                        .color(DIM),
+                        .color(dim()),
                     button(container(text("Run a pattern").size(13)).center_y(Length::Fill))
                         .padding([0, 12])
                         .height(32)
@@ -3409,7 +3416,7 @@ impl Panel {
                     .width(1)
                     .height(22)
                     .style(|_| container::Style {
-                        background: Some(Background::Color(theme::LINE2)),
+                        background: Some(Background::Color(theme::line2())),
                         ..container::Style::default()
                     }),
             );
@@ -3438,7 +3445,7 @@ impl Panel {
             text(run.pattern.clone())
                 .font(theme::MONO_BOLD)
                 .size(18)
-                .color(theme::HI)
+                .color(theme::hi())
                 .into(),
             badge(label, color),
             controls.into(),
@@ -3452,15 +3459,15 @@ impl Panel {
             col = col.push(alert(
                 text(format!("STALLED  {reason}"))
                     .size(13)
-                    .color(WARN)
+                    .color(warn())
                     .into(),
-                WARN,
+                warn(),
             ));
         }
         if let Some(error) = run.error.as_deref() {
             col = col.push(alert(
-                text(format!("ERROR  {error}")).size(13).color(BAD).into(),
-                BAD,
+                text(format!("ERROR  {error}")).size(13).color(bad()).into(),
+                bad(),
             ));
         }
         for g in ctx
@@ -3481,13 +3488,13 @@ impl Panel {
         .size(13)]
         .spacing(8);
         if let Some(worktree) = &run.worktree {
-            objective = objective.push(text(format!("Worktree: {worktree}")).size(11).color(DIM));
+            objective = objective.push(text(format!("Worktree: {worktree}")).size(11).color(dim()));
         }
         if !run.topics.is_empty() {
             objective = objective.push(
                 text(format!("Topics: {}", run.topics.join(", ")))
                     .size(11)
-                    .color(DIM),
+                    .color(dim()),
             );
         }
         let linked = task_of_run(&run.task).map(|task| {
@@ -3504,16 +3511,16 @@ impl Panel {
                     s.coder.clone()
                 };
                 let c = match s.state.as_str() {
-                    "awaiting-approval" => WARN,
-                    "done" | "completed" => OK,
-                    "in_progress" | "in-progress" | "working" => ACCENT,
-                    _ => DIM,
+                    "awaiting-approval" => warn(),
+                    "done" | "completed" => ok(),
+                    "in_progress" | "in-progress" | "working" => accent(),
+                    _ => dim(),
                 };
                 objective = objective.push(
                     row![
-                        text(s.number.to_string()).size(11).color(DIM).width(16),
+                        text(s.number.to_string()).size(11).color(dim()).width(16),
                         text(s.title.clone()).size(12).width(Length::Fill),
-                        text(who).size(11).color(DIM),
+                        text(who).size(11).color(dim()),
                         text(s.state.clone()).size(11).color(c),
                     ]
                     .spacing(8),
@@ -3527,14 +3534,14 @@ impl Panel {
             agents = agents.push(
                 row![
                     agent_square(status),
-                    text(a.id.clone()).size(13).color(theme::HI),
-                    text(format!("({})", a.role)).size(13).color(DIM),
+                    text(a.id.clone()).size(13).color(theme::hi()),
+                    text(format!("({})", a.role)).size(13).color(dim()),
                     text(format!("[{}]", a.state))
                         .size(13)
                         .color(status_color(status)),
                     text(a.vendor.clone().unwrap_or_default())
                         .size(13)
-                        .color(DIM),
+                        .color(dim()),
                     container(text("")).width(Length::Fill),
                     btn_link("open", PanelMsg::SelectAgent(a.id.clone())),
                 ]
@@ -3579,7 +3586,7 @@ impl Panel {
         let waits = d.gates.iter().any(|g| Some(g.task_id) == task_id);
         let pill = |key: &'static str, value: String, color: Color, msg: Option<PanelMsg>| {
             let body = row![
-                text(key).size(11).color(DIM),
+                text(key).size(11).color(dim()),
                 text(value)
                     .size(12)
                     .color(color)
@@ -3589,13 +3596,13 @@ impl Panel {
             let b = button(body).padding([4, 12]).style(move |_, status| {
                 let hot = msg_hot(status);
                 button::Style {
-                    background: hot.then_some(Background::Color(theme::SURFACE)),
-                    text_color: FG,
+                    background: hot.then_some(Background::Color(theme::surface())),
+                    text_color: fg(),
                     border: iced::Border {
-                        color: if color == ACCENT {
-                            ACCENT
+                        color: if color == accent() {
+                            accent()
                         } else {
-                            theme::LINE2
+                            theme::line2()
                         },
                         width: 1.0,
                         radius: 14.0.into(),
@@ -3608,7 +3615,7 @@ impl Panel {
                 None => b,
             }
         };
-        let arrow = || text("›").size(14).color(DIM);
+        let arrow = || text("›").size(14).color(dim());
         let mut r_ = row![].spacing(8).align_y(iced::Alignment::Center);
         if let Some(id) = task_id {
             let title = d
@@ -3619,18 +3626,18 @@ impl Panel {
                 .push(pill(
                     "task",
                     format!("#{id} {title}"),
-                    FG,
+                    fg(),
                     Some(PanelMsg::SelectTask(id)),
                 ))
                 .push(arrow());
         }
         r_ = r_
-            .push(pill("run", r.run.id.clone(), ACCENT, None))
+            .push(pill("run", r.run.id.clone(), accent(), None))
             .push(arrow())
             .push(pill(
                 "agents",
                 agents.len().max(r.run.agents.len()).to_string(),
-                FG,
+                fg(),
                 Some(PanelMsg::Tab(Tab::Agents)),
             ))
             .push(arrow())
@@ -3638,7 +3645,7 @@ impl Panel {
                 "branches",
                 // a count keeps the row short; the names are in the Git view
                 branches.len().to_string(),
-                FG,
+                fg(),
                 Some(PanelMsg::Tab(Tab::Git)),
             ))
             .push(arrow())
@@ -3649,7 +3656,7 @@ impl Panel {
                 } else {
                     "no publish step".to_owned()
                 },
-                if waits { WARN } else { DIM },
+                if waits { warn() } else { dim() },
                 None,
             ));
         // the row never wraps: in a narrow detail it scrolls with the rest
@@ -3665,15 +3672,15 @@ impl Panel {
         let legend = |color: Color, name: &'static str| {
             row![
                 text("■").size(10).color(color),
-                text(name).size(11).color(DIM)
+                text(name).size(11).color(dim())
             ]
             .spacing(4)
         };
         let right: Element<'a, Message> = row![
-            legend(ACCENT, "working"),
-            legend(theme::IDLE, "idle"),
-            legend(WARN, "blocked"),
-            legend(theme::VIOLET, "topic"),
+            legend(accent(), "working"),
+            legend(theme::idle(), "idle"),
+            legend(warn(), "blocked"),
+            legend(theme::violet(), "topic"),
         ]
         .spacing(12)
         .into();
@@ -3709,7 +3716,7 @@ impl Panel {
                 "The pattern of this run could not be loaded, so there is no topology to draw.",
             )
             .size(12)
-            .color(DIM)
+            .color(dim())
             .into(),
         };
         card("LIVE TOPOLOGY", Some(right), body)
@@ -3766,7 +3773,7 @@ impl Panel {
                 let status = agent_status(&a.state);
                 let needs_you = a.state == "blocked" || !a.notice.is_empty();
                 let (state_word, state_color) = if needs_you {
-                    ("needs you", WARN)
+                    ("needs you", warn())
                 } else {
                     (a.state.as_str(), status_color(status))
                 };
@@ -3792,15 +3799,15 @@ impl Panel {
                         tail
                     })
                     .size(11)
-                    .color(if empty { DIM } else { FG }),
+                    .color(if empty { dim() } else { fg() }),
                 )
                 .padding([8, 10])
                 .width(Length::Fill)
                 .height(64)
                 .style(|_| container::Style {
-                    background: Some(Background::Color(theme::BG)),
+                    background: Some(Background::Color(theme::bg())),
                     border: iced::Border {
-                        color: LINE,
+                        color: line(),
                         width: 1.0,
                         radius: 4.0.into(),
                     },
@@ -3813,10 +3820,10 @@ impl Panel {
                             text(a.id.clone())
                                 .font(theme::MONO_BOLD)
                                 .size(13)
-                                .color(theme::HI),
+                                .color(theme::hi()),
                             text(format!("{}, {} {}", a.role, a.vendor, a.model))
                                 .size(11)
-                                .color(DIM),
+                                .color(dim()),
                         ]
                         .spacing(1)
                         .width(Length::Fill),
@@ -3839,7 +3846,7 @@ impl Panel {
                         a.task_text.chars().take(52).collect()
                     })
                     .size(12)
-                    .color(FG),
+                    .color(fg()),
                     output,
                     row![
                         text(if a.branch.is_empty() {
@@ -3848,7 +3855,7 @@ impl Panel {
                             a.branch.clone()
                         })
                         .size(11)
-                        .color(DIM)
+                        .color(dim())
                         .width(Length::Fill),
                         text(if a.pane.is_empty() {
                             String::new()
@@ -3856,7 +3863,7 @@ impl Panel {
                             format!("pane {}", a.pane)
                         })
                         .size(11)
-                        .color(DIM),
+                        .color(dim()),
                     ],
                 ]
                 .spacing(8);
@@ -3868,13 +3875,13 @@ impl Panel {
                         let hot = msg_hot(status);
                         button::Style {
                             background: Some(Background::Color(if selected_card || hot {
-                                theme::SELECTED
+                                theme::selected()
                             } else {
-                                theme::SURFACE
+                                theme::surface()
                             })),
-                            text_color: FG,
+                            text_color: fg(),
                             border: iced::Border {
-                                color: if selected_card { ACCENT } else { LINE },
+                                color: if selected_card { accent() } else { line() },
                                 width: 1.0,
                                 radius: 6.0.into(),
                             },
@@ -3896,7 +3903,7 @@ impl Panel {
                 .find(|a| Some(a.id.as_str()) == selected.as_deref())
             {
                 None => text("No agents. Launch one with \"+ New agent\".")
-                    .color(DIM)
+                    .color(dim())
                     .into(),
                 Some(a) => self.agent_detail(ctx, a),
             }
@@ -3920,7 +3927,7 @@ impl Panel {
                 .width(1)
                 .height(Length::Fill)
                 .style(|_| container::Style {
-                    background: Some(Background::Color(LINE)),
+                    background: Some(Background::Color(line())),
                     ..container::Style::default()
                 }),
             container(self.detail(detail))
@@ -4018,12 +4025,12 @@ impl Panel {
         let actions: Element<'a, Message> = container(actions).width(Length::Fill).into();
         let mut col = column![
             row![
-                text(a.id.clone()).size(18).color(theme::HI),
+                text(a.id.clone()).size(18).color(theme::hi()),
                 badge(a.state.to_uppercase(), status_color(status)),
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center),
-            text(sub).size(11.5).color(DIM),
+            text(sub).size(11.5).color(dim()),
             actions,
         ]
         .spacing(10);
@@ -4035,27 +4042,27 @@ impl Panel {
             output = output.push(
                 text("No recent communication for this agent.")
                     .size(12)
-                    .color(DIM),
+                    .color(dim()),
             );
         }
         for (head, body) in recent {
             output = output
-                .push(text(head).size(11).color(ACCENT))
+                .push(text(head).size(11).color(accent()))
                 .push(text(body).size(12.5));
         }
         let pane =
-            (!a.pane.is_empty()).then(|| text(format!("pane {}", a.pane)).size(11).color(DIM));
+            (!a.pane.is_empty()).then(|| text(format!("pane {}", a.pane)).size(11).color(dim()));
         col = col.push(card("LIVE OUTPUT", pane.map(Element::from), output.into()));
 
         if !a.notice.is_empty() {
-            let body = column![text(a.notice.clone()).size(13).color(theme::HI)].spacing(8);
+            let body = column![text(a.notice.clone()).size(13).color(theme::hi())].spacing(8);
             col = col.push(
                 container(column![
-                    container(theme::label("APPROVAL REQUIRED").color(WARN)).padding([10, 14]),
+                    container(theme::label("APPROVAL REQUIRED").color(warn())).padding([10, 14]),
                     container(body).padding(pad(4.0, 14.0, 12.0, 14.0)),
                 ])
                 .width(Length::Fill)
-                .style(theme::alert_style(WARN)),
+                .style(theme::alert_style(warn())),
             );
         }
         if !a.task_text.is_empty() {
@@ -4092,14 +4099,14 @@ impl Panel {
                         format!("branch {}", a.branch)
                     })
                     .size(13)
-                    .color(ACCENT),
+                    .color(accent()),
                     text(if a.worktree.is_empty() {
                         "No dedicated worktree".to_owned()
                     } else {
                         a.worktree.clone()
                     })
                     .size(11)
-                    .color(DIM),
+                    .color(dim()),
                 ]
                 .spacing(4)
                 .into(),
@@ -4240,7 +4247,7 @@ impl Panel {
         // every skill of the catalog: the role's are ticked, a global one goes to every agent (ticked, fixed)
         let catalog = self.cfg.skill_catalog();
         let skills_list: Element<'a, Message> = if catalog.is_empty() {
-            text("No skills found.").size(11).color(DIM).into()
+            text("No skills found.").size(11).color(dim()).into()
         } else {
             theme::scroll(
                 column(catalog.into_iter().map(|(name, global)| {
@@ -4267,30 +4274,30 @@ impl Panel {
             .into()
         };
         column![
-            text("LAUNCH AGENT").size(10).color(DIM),
-            text("Role").size(12).color(DIM),
+            text("LAUNCH AGENT").size(10).color(dim()),
+            text("Role").size(12).color(dim()),
             pick_list(role_choices, selected_role, |c| Message::Panel(
                 PanelMsg::SpawnAgentRole(c)
             ))
             .placeholder("Pick a role")
             .width(Length::Fill),
-            text("Workspace").size(12).color(DIM),
+            text("Workspace").size(12).color(dim()),
             pick_list(workspace_choices, selected_workspace, |c| Message::Panel(
                 PanelMsg::SpawnAgentWorkspace(c)
             ))
             .placeholder("Pick a workspace")
             .width(Length::Fill),
-            text("Vendor (optional, from role)").size(12).color(DIM),
+            text("Vendor (optional, from role)").size(12).color(dim()),
             pick_list(vendor_choices, selected_vendor, |c| Message::Panel(
                 PanelMsg::SpawnAgentVendor(c)
             ))
             .placeholder("Pick a vendor")
             .width(Length::Fill),
-            text("Model (optional)").size(12).color(DIM),
+            text("Model (optional)").size(12).color(dim()),
             model_dropdown,
-            text("Skills (the role's are ticked)").size(12).color(DIM),
+            text("Skills (the role's are ticked)").size(12).color(dim()),
             skills_list,
-            text("Task").size(12).color(DIM),
+            text("Task").size(12).color(dim()),
             text_input("Agent task description", &self.spawn_task_text)
                 .on_input(|v| Message::Panel(PanelMsg::SpawnAgentTask(v)))
                 .width(Length::Fill),
@@ -4300,7 +4307,7 @@ impl Panel {
                 .text_size(12),
             text(format!("The agent joins the space \"{workspace_label}\"."))
                 .size(11)
-                .color(DIM),
+                .color(dim()),
             row![
                 button(container(text("Launch").size(13)).center_y(Length::Fill))
                     .padding([0, 16])
@@ -4339,11 +4346,11 @@ impl Panel {
             let subs = &t.status.subtasks;
             let sel = selected == Some(t.status.id);
             let mut body = column![row![
-                text(format!("#{}", t.status.id)).size(11).color(DIM),
+                text(format!("#{}", t.status.id)).size(11).color(dim()),
                 text(t.status.title.clone())
                     .font(theme::MONO_BOLD)
                     .size(13)
-                    .color(theme::HI)
+                    .color(theme::hi())
                     .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
             ]
             .spacing(8)]
@@ -4352,10 +4359,10 @@ impl Panel {
                 let mut seg = row![].spacing(3);
                 for s in subs {
                     let color = match s.state.as_str() {
-                        "done" | "completed" => OK,
-                        "awaiting-approval" => WARN,
-                        "in_progress" | "in-progress" | "working" | "review" => ACCENT,
-                        _ => theme::LINE2,
+                        "done" | "completed" => ok(),
+                        "awaiting-approval" => warn(),
+                        "in_progress" | "in-progress" | "working" | "review" => accent(),
+                        _ => theme::line2(),
                     };
                     seg = seg.push(container(text("")).width(Length::Fill).height(3).style(
                         move |_| container::Style {
@@ -4374,7 +4381,7 @@ impl Panel {
                     format!("{} subtasks, {crit}", subs.len())
                 })
                 .size(11)
-                .color(DIM),
+                .color(dim()),
             );
             let waiting = subs
                 .iter()
@@ -4383,10 +4390,10 @@ impl Panel {
             if waiting > 0 {
                 body = body.push(
                     row![
-                        text("■").size(9).color(WARN),
+                        text("■").size(9).color(warn()),
                         text(format!("{waiting} subtask waits for you"))
                             .size(11)
-                            .color(WARN)
+                            .color(warn())
                     ]
                     .spacing(6),
                 );
@@ -4399,7 +4406,7 @@ impl Panel {
                 body = body.push(
                     text(format!("run {}", r.run.id))
                         .size(11)
-                        .color(ACCENT)
+                        .color(accent())
                         .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
                 );
             }
@@ -4410,13 +4417,13 @@ impl Panel {
                     let hot = msg_hot(status);
                     button::Style {
                         background: Some(Background::Color(if sel || hot {
-                            theme::SELECTED
+                            theme::selected()
                         } else {
-                            theme::SURFACE
+                            theme::surface()
                         })),
-                        text_color: FG,
+                        text_color: fg(),
                         border: iced::Border {
-                            color: if sel { ACCENT } else { LINE },
+                            color: if sel { accent() } else { line() },
                             width: 1.0,
                             radius: 6.0.into(),
                         },
@@ -4439,8 +4446,8 @@ impl Panel {
                 text(title)
                     .font(theme::MONO_BOLD)
                     .size(12.5)
-                    .color(theme::HI),
-                text(tasks.len().to_string()).size(11).color(DIM),
+                    .color(theme::hi()),
+                text(tasks.len().to_string()).size(11).color(dim()),
                 container(text("")).width(Length::Fill),
             ]
             .spacing(8)
@@ -4450,7 +4457,7 @@ impl Panel {
             }
             let mut cards = column![].spacing(8);
             if tasks.is_empty() {
-                cards = cards.push(text("None.").size(12).color(DIM));
+                cards = cards.push(text("None.").size(12).color(dim()));
             }
             for t in tasks {
                 cards = cards.push(card_of(t));
@@ -4502,15 +4509,15 @@ impl Panel {
             .filter(shown)
             .collect();
         row![
-            column_of("New", theme::IDLE, new_tasks, None),
-            column_of("In run", ACCENT, running, None),
+            column_of("New", theme::idle(), new_tasks, None),
+            column_of("In run", accent(), running, None),
             column_of(
                 "Done",
-                OK,
+                ok(),
                 done,
                 Some(self.arm_button(Armed::ArchiveDone, "Archive", "Confirm: archive"))
             ),
-            column_of("Cancelled", BAD, cancelled, None),
+            column_of("Cancelled", bad(), cancelled, None),
         ]
         .spacing(14)
         .height(Length::Fixed(520.0))
@@ -4534,233 +4541,236 @@ impl Panel {
             let (this, ctx) = (self, ctx.clone());
             move || this.tasks_board(&ctx)
         });
-        let detail: Element<'a, Message> =
-            match d.tasks.iter().find(|t| Some(t.status.id) == selected) {
-                None => column![
-                    text("No task selected").size(13).color(theme::HI),
-                    text(format!(
-                        "Tasks of {} show up on the board.",
-                        d.root.display()
-                    ))
-                    .size(12)
-                    .color(DIM),
-                    btn_primary("+ New task", PanelMsg::TaskNew),
-                ]
-                .spacing(8)
-                .into(),
-                Some(t) => {
-                    let runs: Vec<_> = d
-                        .runs
-                        .iter()
-                        .filter(|r| task_of_run(&r.run.task) == Some(t.status.id))
-                        .collect();
-                    let state_color = task_state_color(&t.status.state);
-                    let mut col = column![].spacing(14);
-                    let mut actions = row![].spacing(8).align_y(iced::Alignment::Center);
-                    match runs.first() {
-                        Some(r) => {
-                            actions = actions.push(btn_primary(
-                                "Open run",
-                                PanelMsg::SelectRun(r.run.id.clone()),
-                            ))
-                        }
-                        None => {
-                            actions = actions.push(btn_primary(
-                                "Run with an agent",
-                                PanelMsg::RunTaskWithAgent(t.status.id),
-                            ))
-                        }
+        let detail: Element<'a, Message> = match d
+            .tasks
+            .iter()
+            .find(|t| Some(t.status.id) == selected)
+        {
+            None => column![
+                text("No task selected").size(13).color(theme::hi()),
+                text(format!(
+                    "Tasks of {} show up on the board.",
+                    d.root.display()
+                ))
+                .size(12)
+                .color(dim()),
+                btn_primary("+ New task", PanelMsg::TaskNew),
+            ]
+            .spacing(8)
+            .into(),
+            Some(t) => {
+                let runs: Vec<_> = d
+                    .runs
+                    .iter()
+                    .filter(|r| task_of_run(&r.run.task) == Some(t.status.id))
+                    .collect();
+                let state_color = task_state_color(&t.status.state);
+                let mut col = column![].spacing(14);
+                let mut actions = row![].spacing(8).align_y(iced::Alignment::Center);
+                match runs.first() {
+                    Some(r) => {
+                        actions = actions.push(btn_primary(
+                            "Open run",
+                            PanelMsg::SelectRun(r.run.id.clone()),
+                        ))
                     }
-                    if !runs.is_empty() {
-                        actions = actions.push(btn(
+                    None => {
+                        actions = actions.push(btn_primary(
                             "Run with an agent",
                             PanelMsg::RunTaskWithAgent(t.status.id),
-                        ));
-                    }
-                    actions = actions
-                        .push(btn(
-                            "Run with a pattern",
-                            PanelMsg::OpenLauncher(Some(t.status.id)),
                         ))
-                        .push(btn("Edit", PanelMsg::TaskEditOpen(t.status.id)));
-                    if has_run(&t.status.state) {
-                        actions = actions.push(self.arm_button(
-                            Armed::CancelRun(t.status.id),
-                            "Cancel run",
-                            "Confirm: cancel the run",
-                        ));
                     }
-                    actions = actions.push(self.arm_button(
-                        Armed::DeleteTask(t.status.id),
-                        "Delete",
-                        "Confirm: delete for good",
+                }
+                if !runs.is_empty() {
+                    actions = actions.push(btn(
+                        "Run with an agent",
+                        PanelMsg::RunTaskWithAgent(t.status.id),
                     ));
-                    // the drawer is fixed (it only scrolls vertically): its action bar wraps instead
+                }
+                actions = actions
+                    .push(btn(
+                        "Run with a pattern",
+                        PanelMsg::OpenLauncher(Some(t.status.id)),
+                    ))
+                    .push(btn("Edit", PanelMsg::TaskEditOpen(t.status.id)));
+                if has_run(&t.status.state) {
+                    actions = actions.push(self.arm_button(
+                        Armed::CancelRun(t.status.id),
+                        "Cancel run",
+                        "Confirm: cancel the run",
+                    ));
+                }
+                actions = actions.push(self.arm_button(
+                    Armed::DeleteTask(t.status.id),
+                    "Delete",
+                    "Confirm: delete for good",
+                ));
+                // the drawer is fixed (it only scrolls vertically): its action bar wraps instead
+                col = col.push(
+                    column![
+                        row![
+                            text(t.status.title.clone())
+                                .font(theme::MONO_BOLD)
+                                .size(18)
+                                .color(theme::hi())
+                                .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
+                            badge(t.status.state.clone(), state_color),
+                        ]
+                        .spacing(10)
+                        .align_y(iced::Alignment::Center),
+                        text(format!(
+                            "#{}   {}",
+                            t.status.id,
+                            if runs.is_empty() {
+                                "no run yet".to_owned()
+                            } else {
+                                format!("run {}", runs[0].run.id)
+                            }
+                        ))
+                        .size(11.5)
+                        .color(dim()),
+                        actions.wrap(),
+                    ]
+                    .spacing(10),
+                );
+                if !t.description.is_empty() {
                     col = col.push(
                         column![
-                            row![
-                                text(t.status.title.clone())
-                                    .font(theme::MONO_BOLD)
-                                    .size(18)
-                                    .color(theme::HI)
-                                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
-                                badge(t.status.state.clone(), state_color),
-                            ]
-                            .spacing(10)
-                            .align_y(iced::Alignment::Center),
-                            text(format!(
-                                "#{}   {}",
-                                t.status.id,
-                                if runs.is_empty() {
-                                    "no run yet".to_owned()
-                                } else {
-                                    format!("run {}", runs[0].run.id)
-                                }
-                            ))
-                            .size(11.5)
-                            .color(DIM),
-                            actions.wrap(),
+                            theme::label("SPECIFICATION"),
+                            text(t.description.clone())
+                                .size(13)
+                                .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
                         ]
-                        .spacing(10),
+                        .spacing(8),
                     );
-                    if !t.description.is_empty() {
-                        col = col.push(
-                            column![
-                                theme::label("SPECIFICATION"),
-                                text(t.description.clone())
+                }
+                if !t.criteria.is_empty() {
+                    let mut rows = column![row![
+                        theme::label("ACCEPTANCE CRITERIA"),
+                        text(format!("{} of {} met", met(t), t.criteria.len()))
+                            .size(11)
+                            .color(dim())
+                    ]
+                    .spacing(10)]
+                    .spacing(8);
+                    for c in &t.criteria {
+                        let ok = c.trim_start().starts_with("- [x]");
+                        let text_of = c
+                            .trim_start_matches("- [ ] ")
+                            .trim_start_matches("- [x] ")
+                            .trim_start_matches("- ")
+                            .to_owned();
+                        rows = rows.push(
+                            row![
+                                container(
+                                    text(if ok { "✓" } else { "" }).size(11).color(theme::bg())
+                                )
+                                .width(16)
+                                .height(16)
+                                .center_x(16)
+                                .center_y(16)
+                                .style(move |_| {
+                                    container::Style {
+                                        background: ok.then_some(Background::Color(theme::ok())),
+                                        border: iced::Border {
+                                            color: if ok { theme::ok() } else { theme::line2() },
+                                            width: 1.0,
+                                            radius: 3.0.into(),
+                                        },
+                                        ..container::Style::default()
+                                    }
+                                }),
+                                text(text_of)
                                     .size(13)
-                                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
-                            ]
-                            .spacing(8),
-                        );
-                    }
-                    if !t.criteria.is_empty() {
-                        let mut rows = column![row![
-                            theme::label("ACCEPTANCE CRITERIA"),
-                            text(format!("{} of {} met", met(t), t.criteria.len()))
-                                .size(11)
-                                .color(DIM)
-                        ]
-                        .spacing(10)]
-                        .spacing(8);
-                        for c in &t.criteria {
-                            let ok = c.trim_start().starts_with("- [x]");
-                            let text_of = c
-                                .trim_start_matches("- [ ] ")
-                                .trim_start_matches("- [x] ")
-                                .trim_start_matches("- ")
-                                .to_owned();
-                            rows = rows.push(
-                                row![
-                                    container(
-                                        text(if ok { "✓" } else { "" }).size(11).color(theme::BG)
-                                    )
-                                    .width(16)
-                                    .height(16)
-                                    .center_x(16)
-                                    .center_y(16)
-                                    .style(move |_| {
-                                        container::Style {
-                                            background: ok.then_some(Background::Color(OK)),
-                                            border: iced::Border {
-                                                color: if ok { OK } else { theme::LINE2 },
-                                                width: 1.0,
-                                                radius: 3.0.into(),
-                                            },
-                                            ..container::Style::default()
-                                        }
-                                    }),
-                                    text(text_of)
-                                        .size(13)
-                                        .width(Length::Fill)
-                                        .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
-                                ]
-                                .spacing(10),
-                            );
-                        }
-                        col = col.push(rows);
-                    }
-                    if !t.status.subtasks.is_empty() {
-                        let mut rows = column![theme::label("SUBTASKS")].spacing(0);
-                        for s in &t.status.subtasks {
-                            let state = s.state.as_str();
-                            let color = match state {
-                                "awaiting-approval" => WARN,
-                                "done" | "completed" => OK,
-                                "in_progress" | "in-progress" | "working" => ACCENT,
-                                _ => DIM,
-                            };
-                            let mut line = row![
-                                text(s.number.to_string()).size(11).color(DIM).width(18),
-                                text(s.title.clone())
-                                    .size(12.5)
-                                    .color(theme::HI)
                                     .width(Length::Fill)
                                     .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
                             ]
-                            .spacing(8)
-                            .align_y(iced::Alignment::Center);
-                            if state == "awaiting-approval" {
-                                if let Some(r) = runs.first() {
-                                    line = line.push(btn_link(
-                                        "Review gate",
-                                        PanelMsg::SelectRun(r.run.id.clone()),
-                                    ));
-                                }
-                            }
-                            line = line.push(text(state.to_owned()).size(11).color(color));
-                            rows = rows.push(container(line).padding([8, 12]).width(Length::Fill));
-                        }
-                        col = col.push(
-                            container(rows)
-                                .padding(pad(10.0, 0.0, 4.0, 0.0))
-                                .style(card_style),
+                            .spacing(10),
                         );
                     }
-                    // where the work lives: run, agents, branches, source
-                    let mut lives = column![theme::label("WHERE IT LIVES")].spacing(6);
-                    let kv = |k: &'static str, v: String| {
-                        row![
-                            text(k).size(11.5).color(DIM).width(70),
-                            text(v)
-                                .size(12)
-                                .color(FG)
-                                .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+                    col = col.push(rows);
+                }
+                if !t.status.subtasks.is_empty() {
+                    let mut rows = column![theme::label("SUBTASKS")].spacing(0);
+                    for s in &t.status.subtasks {
+                        let state = s.state.as_str();
+                        let color = match state {
+                            "awaiting-approval" => warn(),
+                            "done" | "completed" => ok(),
+                            "in_progress" | "in-progress" | "working" => accent(),
+                            _ => dim(),
+                        };
+                        let mut line = row![
+                            text(s.number.to_string()).size(11).color(dim()).width(18),
+                            text(s.title.clone())
+                                .size(12.5)
+                                .color(theme::hi())
+                                .width(Length::Fill)
+                                .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
                         ]
                         .spacing(8)
-                    };
-                    if let Some(r) = runs.first() {
-                        lives = lives.push(kv(
-                            "run",
-                            format!("{} ({})", r.run.id, state_badge(r.run.state).0),
-                        ));
-                        let ids: Vec<_> = r.run.agents.iter().map(|a| a.id.clone()).collect();
-                        lives = lives.push(kv("agents", ids.join(", ")));
-                        let mut branches: Vec<String> = vec![];
-                        for a in d.agents.iter().filter(|a| ids.contains(&a.id)) {
-                            let b = if a.branch.is_empty() {
-                                "main".to_owned()
-                            } else {
-                                a.branch.clone()
-                            };
-                            if !branches.contains(&b) {
-                                branches.push(b);
+                        .align_y(iced::Alignment::Center);
+                        if state == "awaiting-approval" {
+                            if let Some(r) = runs.first() {
+                                line = line.push(btn_link(
+                                    "Review gate",
+                                    PanelMsg::SelectRun(r.run.id.clone()),
+                                ));
                             }
                         }
-                        lives = lives.push(kv("branches", branches.join(", ")));
-                    } else if !t.status.branch.is_empty() {
-                        lives = lives.push(kv("branches", t.status.branch.clone()));
-                    } else {
-                        lives = lives.push(
-                            text("Not started: no run, agent or branch yet.")
-                                .size(12)
-                                .color(DIM),
-                        );
+                        line = line.push(text(state.to_owned()).size(11).color(color));
+                        rows = rows.push(container(line).padding([8, 12]).width(Length::Fill));
                     }
-                    col = col.push(lives);
-                    col.into()
+                    col = col.push(
+                        container(rows)
+                            .padding(pad(10.0, 0.0, 4.0, 0.0))
+                            .style(card_style),
+                    );
                 }
-            };
+                // where the work lives: run, agents, branches, source
+                let mut lives = column![theme::label("WHERE IT LIVES")].spacing(6);
+                let kv = |k: &'static str, v: String| {
+                    row![
+                        text(k).size(11.5).color(dim()).width(70),
+                        text(v)
+                            .size(12)
+                            .color(fg())
+                            .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+                    ]
+                    .spacing(8)
+                };
+                if let Some(r) = runs.first() {
+                    lives = lives.push(kv(
+                        "run",
+                        format!("{} ({})", r.run.id, state_badge(r.run.state).0),
+                    ));
+                    let ids: Vec<_> = r.run.agents.iter().map(|a| a.id.clone()).collect();
+                    lives = lives.push(kv("agents", ids.join(", ")));
+                    let mut branches: Vec<String> = vec![];
+                    for a in d.agents.iter().filter(|a| ids.contains(&a.id)) {
+                        let b = if a.branch.is_empty() {
+                            "main".to_owned()
+                        } else {
+                            a.branch.clone()
+                        };
+                        if !branches.contains(&b) {
+                            branches.push(b);
+                        }
+                    }
+                    lives = lives.push(kv("branches", branches.join(", ")));
+                } else if !t.status.branch.is_empty() {
+                    lives = lives.push(kv("branches", t.status.branch.clone()));
+                } else {
+                    lives = lives.push(
+                        text("Not started: no run, agent or branch yet.")
+                            .size(12)
+                            .color(dim()),
+                    );
+                }
+                col = col.push(lives);
+                col.into()
+            }
+        };
         let detail = match (&self.task_form, &self.importing) {
             (Some(form), _) => self.task_form_view(form),
             (None, Some(issue)) => self.import_view(issue),
@@ -4772,7 +4782,7 @@ impl Panel {
                 .width(1)
                 .height(Length::Fill)
                 .style(|_| container::Style {
-                    background: Some(Background::Color(LINE)),
+                    background: Some(Background::Color(line())),
                     ..container::Style::default()
                 }),
             container(self.detail(detail))
@@ -4788,7 +4798,7 @@ impl Panel {
     fn import_view<'a>(&'a self, issue: &'a str) -> Element<'a, Message> {
         container(
             column![
-                text("Import a GitHub issue").size(18).color(theme::HI),
+                text("Import a GitHub issue").size(18).color(theme::hi()),
                 theme::label("ISSUE NUMBER, OWNER/REPO#N OR URL"),
                 text_input("7", issue)
                     .on_input(|t| Message::Panel(PanelMsg::ImportInput(t)))
@@ -4798,7 +4808,7 @@ impl Panel {
                     .size(13),
                 text("Needs the GitHub CLI (`gh`) signed in. The title and body become the task.")
                     .size(11)
-                    .color(DIM),
+                    .color(dim()),
                 row![
                     btn_primary("Import", PanelMsg::ImportSubmit),
                     btn("Cancel", PanelMsg::ImportCancel),
@@ -4831,7 +4841,7 @@ impl Panel {
                     None => "New task".to_owned(),
                 })
                 .size(18)
-                .color(theme::HI),
+                .color(theme::hi()),
                 container(text("")).width(Length::Fill),
                 btn_primary("Save", PanelMsg::TaskSave),
                 btn("Cancel", PanelMsg::TaskCancel),
@@ -4878,9 +4888,9 @@ impl Panel {
         use shepherd_app_core::shepherd_core::patterns::PatternSource;
         let entry = |p: &'a shepherd_app_core::shepherd_core::patterns::PatternSummary| -> Element<'a, Message> {
             let body = column![
-                text(p.name.clone()).font(theme::MONO_BOLD).size(13).color(theme::HI),
-                text(format!("{:?}", p.kind).to_lowercase()).size(11).color(DIM),
-                text(format!("{} agents, {} topics", p.agents_count, p.topics_count)).size(11).color(DIM),
+                text(p.name.clone()).font(theme::MONO_BOLD).size(13).color(theme::hi()),
+                text(format!("{:?}", p.kind).to_lowercase()).size(11).color(dim()),
+                text(format!("{} agents, {} topics", p.agents_count, p.topics_count)).size(11).color(dim()),
             ]
             .spacing(3);
             button(body)
@@ -4894,7 +4904,7 @@ impl Panel {
                 .into()
         };
         let heading = |s: &'static str| {
-            container(text(s).size(11.5).color(DIM)).padding(pad(10.0, 4.0, 4.0, 4.0))
+            container(text(s).size(11.5).color(dim())).padding(pad(10.0, 4.0, 4.0, 4.0))
         };
         let (mine, builtin): (Vec<_>, Vec<_>) = ctx
             .data
@@ -4929,7 +4939,7 @@ impl Panel {
                             "Select a pattern"
                         })
                         .size(16),
-                        text(message).size(12).color(DIM),
+                        text(message).size(12).color(dim()),
                     ]
                     .spacing(8),
                 )
@@ -5037,22 +5047,22 @@ impl Panel {
             .map_or(0, |t| t.as_secs());
         let from = now.saturating_sub(secs);
         let state_color = |s: &str| match s {
-            "working" | "starting" => ACCENT,
-            "blocked" => WARN,
-            "done" => OK,
-            "failed" | "killed" => BAD,
-            timeline::UNKNOWN => theme::LINE,
-            _ => theme::LINE2,
+            "working" | "starting" => accent(),
+            "blocked" => warn(),
+            "done" => ok(),
+            "failed" | "killed" => bad(),
+            timeline::UNKNOWN => theme::line(),
+            _ => theme::line2(),
         };
         let legend = |c: Color, n: &'static str| {
-            row![text("■").size(10).color(c), text(n).size(11).color(DIM)].spacing(4)
+            row![text("■").size(10).color(c), text(n).size(11).color(dim())].spacing(4)
         };
         let mut rows = column![].spacing(14);
         if d.agents.is_empty() {
             rows = rows.push(
                 text("No agents yet. Their timelines appear here once they start.")
                     .size(12)
-                    .color(DIM),
+                    .color(dim()),
             );
         }
         for a in &d.agents {
@@ -5064,7 +5074,7 @@ impl Panel {
                 if state == timeline::UNKNOWN {
                     // before the app was recording: a hatched stretch
                     bar = bar.push(
-                        container(text("╱".repeat(400)).size(9).color(theme::LINE2))
+                        container(text("╱".repeat(400)).size(9).color(theme::line2()))
                             .width(portion)
                             .height(10)
                             .clip(true),
@@ -5097,7 +5107,7 @@ impl Panel {
                                 text(crate::sidebar::ellipsize(&a.id, 11))
                                     .font(theme::MONO_BOLD)
                                     .size(12.5)
-                                    .color(theme::HI),
+                                    .color(theme::hi()),
                                 text(word).size(11).color(status_color(status)),
                             ]
                             .spacing(8)
@@ -5106,9 +5116,12 @@ impl Panel {
                                 .padding([2, 2])
                                 .width(Length::Fill)
                                 .style(|_| container::Style {
-                                    background: Some(Background::Color(Color::from_rgb8(8, 8, 11))),
+                                    background: Some(Background::Color(theme::pick(
+                                        Color::from_rgb8(8, 8, 11),
+                                        Color::from_rgb8(0xF3, 0xF3, 0xF7),
+                                    ))),
                                     border: iced::Border {
-                                        color: Color::from_rgb8(0x15, 0x15, 0x1C),
+                                        color: theme::selected(),
                                         width: 1.0,
                                         radius: 3.0.into(),
                                     },
@@ -5121,7 +5134,7 @@ impl Panel {
                                     crate::sidebar::ellipsize(&a.task_text, 32)
                                 })
                                 .size(11.5)
-                                .color(DIM)
+                                .color(dim())
                             )
                             .width(250)
                             .clip(true),
@@ -5157,13 +5170,13 @@ impl Panel {
         while t < now.saturating_sub(secs / 10) {
             let next = (t + step).min(now);
             let width = Length::FillPortion((next - at).max(1) as u16);
-            marks = marks.push(container(text(clock(t)).size(10.5).color(DIM)).width(width));
+            marks = marks.push(container(text(clock(t)).size(10.5).color(dim())).width(width));
             at = next;
             t += step;
         }
         let marks: Element<'a, Message> = iced::widget::stack![
             marks,
-            container(text("now").size(10.5).color(DIM))
+            container(text("now").size(10.5).color(dim()))
                 .width(Length::Fill)
                 .align_x(iced::alignment::Horizontal::Right)
         ]
@@ -5174,13 +5187,13 @@ impl Panel {
             "AGENT TIMELINES",
             Some(
                 row![
-                    legend(ACCENT, "working"),
-                    legend(theme::LINE2, "idle"),
-                    legend(WARN, "blocked"),
-                    legend(OK, "done"),
+                    legend(accent(), "working"),
+                    legend(theme::line2(), "idle"),
+                    legend(warn(), "blocked"),
+                    legend(ok(), "done"),
                     row![
-                        text("╱╱").size(10).color(theme::LINE2),
-                        text("before the app opened").size(11).color(DIM)
+                        text("╱╱").size(10).color(theme::line2()),
+                        text("before the app opened").size(11).color(dim())
                     ]
                     .spacing(4)
                 ]
@@ -5225,17 +5238,17 @@ impl Panel {
                         row![
                             text(crate::sidebar::ellipsize(&format!("#{}", t.name), 15))
                                 .size(12.5)
-                                .color(theme::VIOLET)
+                                .color(theme::violet())
                                 .width(120),
                             container(
                                 row![
                                     text(crate::sidebar::ellipsize(&g.group, 14))
                                         .font(theme::MONO_BOLD)
                                         .size(12.5)
-                                        .color(theme::HI),
+                                        .color(theme::hi()),
                                     text(crate::sidebar::ellipsize(&g.members.join(", "), 16))
                                         .size(11)
-                                        .color(DIM),
+                                        .color(dim()),
                                 ]
                                 .spacing(8)
                             )
@@ -5250,17 +5263,17 @@ impl Panel {
                             container(
                                 row![
                                     if lag == 0 {
-                                        text("caught up").size(12).color(OK)
+                                        text("caught up").size(12).color(ok())
                                     } else {
                                         text(format!("lag {lag}")).size(12).color(if lag > 1 {
-                                            WARN
+                                            warn()
                                         } else {
-                                            FG
+                                            fg()
                                         })
                                     },
                                     text(crate::sidebar::ellipsize(&detail, 12))
                                         .size(11)
-                                        .color(theme::FAINT),
+                                        .color(theme::faint()),
                                 ]
                                 .spacing(8)
                             )
@@ -5281,7 +5294,7 @@ impl Panel {
             lag_rows = lag_rows.push(
                 text("No reader has joined a topic yet.")
                     .size(12)
-                    .color(DIM),
+                    .color(dim()),
             );
         }
         let lag = card(
@@ -5290,7 +5303,7 @@ impl Panel {
             column![
                 text("Messages each consumer group has not read yet, per topic. A longer prism means more waiting.")
                     .size(11.5)
-                    .color(DIM),
+                    .color(dim()),
                 lag_rows
             ]
             .spacing(12)
@@ -5330,23 +5343,23 @@ impl Panel {
         }
         let title = column![
             row![
-                button(text("Runs").size(11.5).color(ACCENT))
+                button(text("Runs").size(11.5).color(accent()))
                     .padding(0)
                     .style(theme::link_button_style())
                     .on_press(Message::Panel(PanelMsg::CommClose)),
-                text("›").size(11.5).color(DIM),
+                text("›").size(11.5).color(dim()),
                 text(
                     run.map(|r| r.run.id.clone())
                         .unwrap_or_else(|| "all agents".into())
                 )
                 .size(11.5)
-                .color(DIM),
+                .color(dim()),
             ]
             .spacing(6),
             text("What the agents say to each other")
                 .font(theme::MONO_BOLD)
                 .size(20)
-                .color(theme::HI),
+                .color(theme::hi()),
         ]
         .spacing(6);
         let header = container(
@@ -5381,7 +5394,7 @@ impl Panel {
                 (id.clone(), word.to_owned(), status_color(agent_status(st)))
             })
             .collect();
-        names.push(("user".into(), "human".into(), theme::VIOLET));
+        names.push(("user".into(), "human".into(), theme::violet()));
         for (id, word, color) in names {
             let shown = !self.comm_hidden.contains(&id);
             let key = id.clone();
@@ -5414,10 +5427,10 @@ impl Panel {
         if visible.is_empty() {
             feed = feed.push(
                 column![
-                    text("No communication yet").size(14).color(theme::HI),
+                    text("No communication yet").size(14).color(theme::hi()),
                     text("Messages appear here as the agents publish to this run's topics.")
                         .size(12)
-                        .color(DIM),
+                        .color(dim()),
                 ]
                 .spacing(6),
             );
@@ -5429,8 +5442,8 @@ impl Panel {
             if system {
                 feed = feed.push(
                     container(row![
-                        text(time).size(11.5).color(DIM).width(80),
-                        text(m.content.clone()).size(12).color(DIM),
+                        text(time).size(11.5).color(dim()).width(80),
+                        text(m.content.clone()).size(12).color(dim()),
                     ])
                     .padding([6, 0]),
                 );
@@ -5445,25 +5458,25 @@ impl Panel {
             let mut head = row![text(m.from.clone())
                 .font(theme::MONO_BOLD)
                 .size(12.5)
-                .color(theme::HI)]
+                .color(theme::hi())]
             .spacing(8)
             .align_y(iced::Alignment::Center);
             if !m.to.is_empty() {
                 head = head
-                    .push(text("to").size(11.5).color(DIM))
-                    .push(text(m.to.clone()).size(12).color(FG));
+                    .push(text("to").size(11.5).color(dim()))
+                    .push(text(m.to.clone()).size(12).color(fg()));
             }
             if !m.topic.is_empty() {
-                head = head.push(text("to").size(11.5).color(DIM)).push(
+                head = head.push(text("to").size(11.5).color(dim())).push(
                     container(
                         text(format!("#{} p{}", m.topic, m.partition))
                             .size(11)
-                            .color(theme::VIOLET),
+                            .color(theme::violet()),
                     )
                     .padding([0, 6])
                     .style(|_| container::Style {
                         border: iced::Border {
-                            color: theme::VIOLET,
+                            color: theme::violet(),
                             width: 1.0,
                             radius: 3.0.into(),
                         },
@@ -5474,12 +5487,12 @@ impl Panel {
             feed = feed.push(
                 container(
                     row![
-                        text(time).size(11.5).color(DIM).width(80),
+                        text(time).size(11.5).color(dim()).width(80),
                         container(
                             text(letter)
                                 .size(11)
                                 .font(theme::MONO_BOLD)
-                                .color(theme::BG)
+                                .color(theme::bg())
                         )
                         .width(22)
                         .height(22)
@@ -5493,7 +5506,8 @@ impl Panel {
                             },
                             ..container::Style::default()
                         }),
-                        column![head, text(m.content.clone()).size(13).color(theme::FG)].spacing(3),
+                        column![head, text(m.content.clone()).size(13).color(theme::fg())]
+                            .spacing(3),
                     ]
                     .spacing(12),
                 )
@@ -5516,7 +5530,7 @@ impl Panel {
                 .spacing(12)
                 .align_y(iced::Alignment::Center)
                 .into(),
-                WARN,
+                warn(),
             ));
         }
         let target = self.comm_topic.clone().or_else(|| topics.first().cloned());
@@ -5527,7 +5541,7 @@ impl Panel {
                     None => "no topic".into(),
                 })
                 .size(12)
-                .color(DIM),
+                .color(dim()),
                 text_input("Tell the team something, sent as you", &self.comm_text)
                     .on_input(|t| Message::Panel(PanelMsg::CommText(t)))
                     .on_submit(Message::Panel(PanelMsg::CommSend))
@@ -5553,7 +5567,7 @@ impl Panel {
                     .width(1)
                     .height(Length::Fill)
                     .style(|_| container::Style {
-                        background: Some(Background::Color(LINE)),
+                        background: Some(Background::Color(line())),
                         ..container::Style::default()
                     }),
                 crate::theme::scroll(container(feed).padding([8, 28]).width(Length::Fill))
@@ -5600,7 +5614,7 @@ pub fn list_box_sized<'a>(
             .width(Length::Fill)
             .height(1)
             .style(|_| container::Style {
-                background: Some(Background::Color(LINE)),
+                background: Some(Background::Color(line())),
                 ..container::Style::default()
             })
     };
@@ -5621,7 +5635,7 @@ pub fn list_box_sized<'a>(
             .width(1)
             .height(Length::Fill)
             .style(|_| container::Style {
-                background: Some(Background::Color(LINE)),
+                background: Some(Background::Color(theme::line())),
                 ..container::Style::default()
             }),
     ]
@@ -5647,7 +5661,7 @@ pub(crate) fn detail_header<'a>(
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center),
-        text(meta).size(11.5).color(DIM),
+        text(meta).size(11.5).color(dim()),
     ]
     .spacing(6)
     .into()

@@ -2,7 +2,7 @@
 //! Loading happens off the UI thread (git and the bus can be slow); the only writes are the model forms.
 
 use crate::panel::{detail_box, list_box, PanelMsg, Tab};
-use crate::theme::{card_style, item_style, ACCENT, DIM, OK, WARN};
+use crate::theme::{accent, card_style, dim, item_style, ok, warn};
 use crate::Message;
 use iced::widget::{button, checkbox, column, container, row, text, text_editor, text_input};
 use iced::{Background, Color, Element, Length, Task};
@@ -1317,7 +1317,7 @@ impl ConfigPanel {
                     text(format!("{}{}", if s.enabled { "" } else { "✖ " }, s.name))
                         .font(crate::theme::MONO_BOLD)
                         .size(13)
-                        .color(crate::theme::HI)
+                        .color(crate::theme::hi())
                         .width(Length::Fill),
                     text(if users > 0 {
                         format!("{users} agent{}", if users == 1 { "" } else { "s" })
@@ -1325,11 +1325,11 @@ impl ConfigPanel {
                         String::new()
                     })
                     .size(11)
-                    .color(DIM),
+                    .color(dim()),
                 ],
                 text(s.description.chars().take(46).collect::<String>())
                     .size(11)
-                    .color(DIM),
+                    .color(dim()),
             ]
             .spacing(3);
             button(body)
@@ -1343,7 +1343,8 @@ impl ConfigPanel {
                 .into()
         };
         let heading = |s: String| {
-            container(text(s).size(11.5).color(DIM)).padding(crate::theme::pad(10.0, 4.0, 4.0, 4.0))
+            container(text(s).size(11.5).color(dim()))
+                .padding(crate::theme::pad(10.0, 4.0, 4.0, 4.0))
         };
         let (own, shipped): (Vec<&SkillRow>, Vec<&SkillRow>) =
             self.skills.iter().filter(pass).partition(|s| !builtin(s));
@@ -1372,7 +1373,7 @@ impl ConfigPanel {
                         text(s.name.clone())
                             .font(crate::theme::MONO_BOLD)
                             .size(20)
-                            .color(crate::theme::HI),
+                            .color(crate::theme::hi()),
                         crate::panel::badge(
                             if !s.enabled {
                                 "disabled".to_owned()
@@ -1384,24 +1385,24 @@ impl ConfigPanel {
                                 "yours".to_owned()
                             },
                             if s.enabled {
-                                crate::theme::IDLE
+                                crate::theme::idle()
                             } else {
-                                crate::theme::BAD
+                                crate::theme::bad()
                             }
                         ),
                     ]
                     .spacing(10)
                     .align_y(iced::Alignment::Center),
-                    text(s.description.clone()).size(13).color(DIM)
+                    text(s.description.clone()).size(13).color(dim())
                 ]
                 .spacing(10);
                 for problem in &s.problems {
                     col = col.push(crate::panel::alert(
                         text(format!("✕ {problem}"))
                             .size(13)
-                            .color(crate::theme::BAD)
+                            .color(crate::theme::bad())
                             .into(),
-                        crate::theme::BAD,
+                        crate::theme::bad(),
                     ));
                 }
                 // what can be done with it: the ones that ship with Shepherd are customized (copied), not edited
@@ -1437,7 +1438,7 @@ impl ConfigPanel {
                         .push(
                             text("ships with Shepherd: customizing copies it to your skills")
                                 .size(11)
-                                .color(DIM),
+                                .color(dim()),
                         );
                 }
                 actions = actions.push(cfg_btn(
@@ -1450,11 +1451,11 @@ impl ConfigPanel {
                     false,
                 ));
                 let users = used_by(&s.name);
-                let mut used = row![text("Used by").size(12).color(DIM)]
+                let mut used = row![text("Used by").size(12).color(dim())]
                     .spacing(10)
                     .align_y(iced::Alignment::Center);
                 if users.is_empty() {
-                    used = used.push(text("no agent yet").size(12).color(DIM));
+                    used = used.push(text("no agent yet").size(12).color(dim()));
                 }
                 for u in users {
                     used = used.push(
@@ -1462,7 +1463,7 @@ impl ConfigPanel {
                             .padding([2, 10])
                             .style(|_| container::Style {
                                 border: iced::Border {
-                                    color: crate::theme::LINE2,
+                                    color: crate::theme::line2(),
                                     width: 1.0,
                                     radius: 12.0.into(),
                                 },
@@ -1476,17 +1477,17 @@ impl ConfigPanel {
                 let mut source = column![].spacing(2);
                 for (i, l) in s.body.lines().enumerate() {
                     let color = if l.starts_with("name:") || l.starts_with("description:") {
-                        crate::theme::VIOLET
+                        crate::theme::violet()
                     } else if l.starts_with('#') {
-                        crate::theme::HI
+                        crate::theme::hi()
                     } else {
-                        crate::theme::FG
+                        crate::theme::fg()
                     };
                     source = source.push(
                         row![
                             text((i + 1).to_string())
                                 .size(12)
-                                .color(crate::theme::LINE3)
+                                .color(crate::theme::line3())
                                 .width(48)
                                 .align_x(iced::alignment::Horizontal::Right),
                             text(l.to_owned()).size(12.5).color(color),
@@ -1502,7 +1503,7 @@ impl ConfigPanel {
                     "Agents get it when their role lists it or its description fits."
                 };
                 col.push(actions)
-                    .push(text(note).size(11.5).color(DIM))
+                    .push(text(note).size(11.5).color(dim()))
                     .push(used.wrap())
                     .push(crate::panel::card(
                         "SKILL.md",
@@ -1516,7 +1517,7 @@ impl ConfigPanel {
                                 }
                             ))
                             .size(11)
-                            .color(DIM)
+                            .color(dim())
                             .into(),
                         ),
                         source.into(),
@@ -1551,10 +1552,10 @@ impl ConfigPanel {
     /// The form that creates a skill: a name and where it goes.
     fn skill_new_view<'a>(&'a self, form: &'a SkillNew) -> Element<'a, Message> {
         let mut col = column![
-            text("New skill").size(18).color(crate::theme::HI),
+            text("New skill").size(18).color(crate::theme::hi()),
             text("It starts from Shepherd's template; you edit it next.")
                 .size(12)
-                .color(DIM),
+                .color(dim()),
             column![
                 crate::theme::label("NAME"),
                 text_input("lowercase-with-dashes", &form.name)
@@ -1588,9 +1589,9 @@ impl ConfigPanel {
             col = col.push(crate::panel::alert(
                 text(format!("✕ {error}"))
                     .size(13)
-                    .color(crate::theme::BAD)
+                    .color(crate::theme::bad())
                     .into(),
-                crate::theme::BAD,
+                crate::theme::bad(),
             ));
         }
         col.push(
@@ -1610,13 +1611,13 @@ impl ConfigPanel {
         let mut head = row![
             text(format!("EDIT {}", edit.name))
                 .size(18)
-                .color(crate::theme::HI),
-            text("SKILL.md").size(11).color(DIM),
+                .color(crate::theme::hi()),
+            text("SKILL.md").size(11).color(dim()),
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center);
         if dirty {
-            head = head.push(text("● unsaved changes").size(12).color(WARN));
+            head = head.push(text("● unsaved changes").size(12).color(warn()));
         }
         head = head
             .push(container(text("")).width(Length::Fill))
@@ -1631,9 +1632,9 @@ impl ConfigPanel {
             col = col.push(crate::panel::alert(
                 text(format!("✕ {problem}"))
                     .size(13)
-                    .color(crate::theme::BAD)
+                    .color(crate::theme::bad())
                     .into(),
-                crate::theme::BAD,
+                crate::theme::bad(),
             ));
         }
         col.push(crate::editor::view(&edit.content, |a| {
@@ -1655,7 +1656,7 @@ impl ConfigPanel {
             }
             return row![
                 list_box(vec![], vec![refresh_button()]),
-                detail_box(text("Loading…").color(DIM).into())
+                detail_box(text("Loading…").color(dim()).into())
             ]
             .into();
         };
@@ -1664,9 +1665,9 @@ impl ConfigPanel {
             note = note.push(crate::panel::alert(
                 text(format!("✕ {error}"))
                     .size(12)
-                    .color(crate::theme::BAD)
+                    .color(crate::theme::bad())
                     .into(),
-                crate::theme::BAD,
+                crate::theme::bad(),
             ));
         }
         if let Some(n) = git
@@ -1679,7 +1680,7 @@ impl ConfigPanel {
                 Some("`gh` is not available: pull requests are hidden.")
             })
         {
-            note = note.push(text(n.to_owned()).size(12).color(DIM));
+            note = note.push(text(n.to_owned()).size(12).color(dim()));
         }
         if git.worktrees.is_empty() {
             return container(
@@ -1702,7 +1703,7 @@ impl ConfigPanel {
             .unwrap_or(&git.worktrees[0]);
         // fixed columns: Branch 260, Worktree 260, Changes 140, Ahead / behind 120, Agents 160, Pull request 180
         let cell = |w: f32, e: Element<'a, Message>| container(e).width(w).clip(true);
-        let head = |s: &'static str, w: f32| cell(w, text(s).size(11.5).color(DIM).into());
+        let head = |s: &'static str, w: f32| cell(w, text(s).size(11.5).color(dim()).into());
         let mut table = column![container(
             row![
                 head("Branch", 260.0),
@@ -1719,7 +1720,7 @@ impl ConfigPanel {
         for w in &git.worktrees {
             let sel = w.path == selected.path;
             let branch: Element<'a, Message> = row![
-                text("⎇").size(12).color(DIM),
+                text("⎇").size(12).color(dim()),
                 text(if w.branch.is_empty() {
                     "(no branch)".to_owned()
                 } else {
@@ -1727,13 +1728,13 @@ impl ConfigPanel {
                 })
                 .font(crate::theme::MONO_BOLD)
                 .size(12.5)
-                .color(crate::theme::HI),
+                .color(crate::theme::hi()),
                 if w.is_main {
-                    container(text("main checkout").size(10).color(ACCENT))
+                    container(text("main checkout").size(10).color(accent()))
                         .padding([0, 6])
                         .style(|_| container::Style {
                             border: iced::Border {
-                                color: ACCENT,
+                                color: accent(),
                                 width: 1.0,
                                 radius: 3.0.into(),
                             },
@@ -1747,12 +1748,12 @@ impl ConfigPanel {
             .align_y(iced::Alignment::Center)
             .into();
             let changes: Element<'a, Message> = if w.is_clean {
-                row![text("■").size(9).color(OK), text("clean").size(12)]
+                row![text("■").size(9).color(ok()), text("clean").size(12)]
                     .spacing(6)
                     .into()
             } else {
                 row![
-                    text("■").size(9).color(WARN),
+                    text("■").size(9).color(warn()),
                     text(format!("{} uncommitted", w.dirty_count)).size(12)
                 ]
                 .spacing(6)
@@ -1762,18 +1763,21 @@ impl ConfigPanel {
                 Some(p) => text(format!("#{} {}", p.number, p.state.to_lowercase()))
                     .size(12)
                     .color(if matches!(p.state.as_str(), "OPEN" | "MERGED") {
-                        OK
+                        ok()
                     } else {
-                        DIM
+                        dim()
                     })
                     .into(),
-                None => text("none").size(12).color(DIM).into(),
+                None => text("none").size(12).color(dim()).into(),
             };
             let line = row![
                 cell(260.0, branch),
                 cell(
                     260.0,
-                    text(display(Path::new(&w.path))).size(12).color(DIM).into()
+                    text(display(Path::new(&w.path)))
+                        .size(12)
+                        .color(dim())
+                        .into()
                 ),
                 cell(140.0, changes),
                 cell(
@@ -1800,10 +1804,10 @@ impl ConfigPanel {
                             matches!(status, button::Status::Hovered | button::Status::Pressed);
                         button::Style {
                             background: (sel || hot)
-                                .then_some(Background::Color(crate::theme::SELECTED)),
-                            text_color: crate::theme::FG,
+                                .then_some(Background::Color(crate::theme::selected())),
+                            text_color: crate::theme::fg(),
                             border: iced::Border {
-                                color: if sel { ACCENT } else { Color::TRANSPARENT },
+                                color: if sel { accent() } else { Color::TRANSPARENT },
                                 width: 0.0,
                                 radius: 0.0.into(),
                             },
@@ -1828,24 +1832,24 @@ impl ConfigPanel {
                     "The files could not be listed."
                 })
                 .size(12)
-                .color(DIM),
+                .color(dim()),
             );
         }
         for ch in &w.changes {
             let color = match ch.status.as_str() {
-                "added" | "untracked" => OK,
-                "deleted" => crate::theme::BAD,
-                _ => WARN,
+                "added" | "untracked" => ok(),
+                "deleted" => crate::theme::bad(),
+                _ => warn(),
             };
             files = files.push(
                 container(
                     row![
                         text(ch.status.clone()).size(12).color(color).width(90),
                         text(ch.path.clone()).size(12).width(Length::Fill),
-                        text(format!("+{}", ch.added)).size(11.5).color(OK),
+                        text(format!("+{}", ch.added)).size(11.5).color(ok()),
                         text(format!("-{}", ch.removed))
                             .size(11.5)
-                            .color(crate::theme::BAD),
+                            .color(crate::theme::bad()),
                     ]
                     .spacing(8),
                 )
@@ -1869,31 +1873,31 @@ impl ConfigPanel {
                     }
                 ))
                 .size(11.5)
-                .color(if w.is_clean { OK } else { WARN })
+                .color(if w.is_clean { ok() } else { warn() })
                 .into(),
             ),
             files.into(),
         );
         let kv = |k: &'static str, v: String, color: Color| {
             row![
-                text(k).size(12).color(DIM).width(90),
+                text(k).size(12).color(dim()).width(90),
                 text(v).size(12).color(color)
             ]
             .spacing(8)
         };
         let mut info = column![
-            kv("folder", display(Path::new(&w.path)), crate::theme::FG),
+            kv("folder", display(Path::new(&w.path)), crate::theme::fg()),
             kv(
                 "upstream",
                 w.upstream
                     .clone()
                     .unwrap_or_else(|| "not pushed yet".into()),
-                crate::theme::FG
+                crate::theme::fg()
             ),
             kv(
                 "agents",
                 w.agent_id.clone().unwrap_or_else(|| "none".into()),
-                crate::theme::FG
+                crate::theme::fg()
             ),
             kv(
                 "pull request",
@@ -1901,7 +1905,7 @@ impl ConfigPanel {
                     Some(p) => format!("#{} {} ({})", p.number, p.title, p.state.to_lowercase()),
                     None => "none".into(),
                 },
-                crate::theme::FG
+                crate::theme::fg()
             ),
         ]
         .spacing(6);
@@ -1936,7 +1940,7 @@ impl ConfigPanel {
                         why.join(" and ")
                     ))
                     .size(11.5)
-                    .color(WARN),
+                    .color(warn()),
                 );
             }
         }
@@ -1989,10 +1993,10 @@ impl ConfigPanel {
             };
         container(
             column![
-                text(title).size(18).color(crate::theme::HI),
+                text(title).size(18).color(crate::theme::hi()),
                 field(first.0, first.1, &form.first, CfgMsg::GitFormFirst),
                 field(second.0, second.1, &form.second, CfgMsg::GitFormSecond),
-                text(hint).size(11).color(DIM),
+                text(hint).size(11).color(dim()),
                 row![
                     cfg_btn("Create", CfgMsg::GitFormSubmit, true),
                     cfg_btn("Cancel", CfgMsg::GitFormCancel, false),
@@ -2026,7 +2030,7 @@ impl ConfigPanel {
                 let mut col = column![row![
                     text(format!("#{}", t.name))
                         .size(18)
-                        .color(crate::theme::VIOLET),
+                        .color(crate::theme::violet()),
                     text(format!(
                         "{} messages, {} partitions, {} consumer groups",
                         t.messages_count,
@@ -2034,7 +2038,7 @@ impl ConfigPanel {
                         t.groups.len()
                     ))
                     .size(12)
-                    .color(DIM),
+                    .color(dim()),
                 ]
                 .spacing(10)
                 .align_y(iced::Alignment::Center)]
@@ -2076,7 +2080,7 @@ impl ConfigPanel {
                         row![
                             text(format!("p{p}"))
                                 .size(12)
-                                .color(crate::theme::HI)
+                                .color(crate::theme::hi())
                                 .width(26),
                             iced::widget::canvas::Canvas::new(crate::prism::Prism {
                                 preset: crate::prism::Preset::lag(reach, f64::from(p) * 7.0),
@@ -2085,11 +2089,11 @@ impl ConfigPanel {
                             .width(Length::Fill)
                             .height(14),
                             row![
-                                text(format!("{msgs} msgs · lag ")).size(12).color(DIM),
+                                text(format!("{msgs} msgs · lag ")).size(12).color(dim()),
                                 text(lag.to_string()).size(12).color(if lag > 1 {
-                                    WARN
+                                    warn()
                                 } else {
-                                    OK
+                                    ok()
                                 }),
                             ]
                             .width(116),
@@ -2125,7 +2129,7 @@ impl ConfigPanel {
                     );
                 }
                 if senders.is_empty() {
-                    publishers = publishers.push(text("nobody yet").size(12).color(DIM));
+                    publishers = publishers.push(text("nobody yet").size(12).color(dim()));
                 }
                 let mut readers = column![crate::theme::label("CONSUMER GROUPS")].spacing(8);
                 for g in &t.groups {
@@ -2135,7 +2139,7 @@ impl ConfigPanel {
                             container(
                                 column![
                                     row![
-                                        text(g.group.clone()).size(12.5).color(crate::theme::HI),
+                                        text(g.group.clone()).size(12.5).color(crate::theme::hi()),
                                         container(text("")).width(Length::Fill),
                                         text(if lag == 0 {
                                             "read".to_owned()
@@ -2143,7 +2147,7 @@ impl ConfigPanel {
                                             format!("lag {lag}")
                                         })
                                         .size(11)
-                                        .color(if lag > 1 { WARN } else { OK }),
+                                        .color(if lag > 1 { warn() } else { ok() }),
                                     ],
                                     text(if g.members.is_empty() {
                                         "no members".to_owned()
@@ -2151,7 +2155,7 @@ impl ConfigPanel {
                                         g.members.join(", ")
                                     })
                                     .size(11)
-                                    .color(DIM),
+                                    .color(dim()),
                                 ]
                                 .spacing(4),
                             )
@@ -2161,14 +2165,14 @@ impl ConfigPanel {
                         );
                 }
                 if t.groups.is_empty() {
-                    readers = readers.push(text("nobody reads yet").size(12).color(DIM));
+                    readers = readers.push(text("nobody reads yet").size(12).color(dim()));
                 }
                 col = col.push(crate::panel::card(
                     "FLOW",
                     Some(
                         text("who writes, how full, who reads")
                             .size(11)
-                            .color(DIM)
+                            .color(dim())
                             .into(),
                     ),
                     row![
@@ -2184,7 +2188,7 @@ impl ConfigPanel {
                 // Recent messages, newest first: time, who emitted it, and colours.
                 let mut feed = column![].spacing(0);
                 if self.feed.is_empty() {
-                    feed = feed.push(text("No messages yet.").size(12).color(DIM));
+                    feed = feed.push(text("No messages yet.").size(12).color(dim()));
                 }
                 for m in self
                     .feed
@@ -2213,7 +2217,7 @@ impl ConfigPanel {
                         t.name
                     ))
                     .size(12)
-                    .color(DIM)];
+                    .color(dim())];
                 } else if self.feed.len() >= self.feed_limit() {
                     feed = feed.push(
                         container(cfg_btn("Load older", CfgMsg::LoadOlder, false)).padding([10, 0]),
@@ -2254,14 +2258,14 @@ impl ConfigPanel {
                     .sum();
                 let mut title = row![text(format!("#{}", t.name))
                     .size(13)
-                    .color(crate::theme::HI)]
+                    .color(crate::theme::hi())]
                 .spacing(8)
                 .align_y(iced::Alignment::Center);
                 if t.paused {
-                    title = title.push(text("paused").size(11).color(WARN));
+                    title = title.push(text("paused").size(11).color(warn()));
                 }
                 if unread > 0 {
-                    title = title.push(text(format!("{unread} unread")).size(11).color(WARN));
+                    title = title.push(text(format!("{unread} unread")).size(11).color(warn()));
                 }
                 let body = column![
                     title,
@@ -2270,7 +2274,7 @@ impl ConfigPanel {
                         t.messages_count, t.partitions
                     ))
                     .size(11)
-                    .color(DIM)
+                    .color(dim())
                 ]
                 .spacing(1);
                 button(body)
@@ -2360,7 +2364,7 @@ impl ConfigPanel {
                 .push(
                     text(format!("Message for #{topic}"))
                         .size(18)
-                        .color(crate::theme::HI),
+                        .color(crate::theme::hi()),
                 )
                 .push(
                     column![
@@ -2371,7 +2375,7 @@ impl ConfigPanel {
                 );
         } else {
             col = col
-                .push(text("New topic").size(18).color(crate::theme::HI))
+                .push(text("New topic").size(18).color(crate::theme::hi()))
                 .push(
                     column![
                         crate::theme::label("NAME"),
@@ -2412,7 +2416,7 @@ impl ConfigPanel {
             .map(|(_, v)| v.as_str())
             .unwrap_or("");
         column![
-            text(label).size(12).color(DIM),
+            text(label).size(12).color(dim()),
             text_input("", value)
                 .on_input(move |v| cfg(CfgMsg::VendorField(field, v)))
                 .size(13)
@@ -2433,7 +2437,7 @@ impl ConfigPanel {
             .map(|(_, v)| v.as_str())
             .unwrap_or("");
         row![
-            iced::widget::container(text(label).size(12).color(DIM)).width(110),
+            iced::widget::container(text(label).size(12).color(dim())).width(110),
             text_input("", value)
                 .on_input(move |v| cfg(CfgMsg::RoleField(field, v)))
                 .size(13)
@@ -2462,7 +2466,7 @@ impl ConfigPanel {
                     )
                 })
                 .size(11)
-                .color(DIM)
+                .color(dim())
             ])
             .width(Length::Fill)
             .padding([4, 8])
@@ -2475,7 +2479,7 @@ impl ConfigPanel {
                 container(text("")).width(Length::Fill),
                 text(self.models.roles.len().to_string())
                     .size(11)
-                    .color(DIM),
+                    .color(dim()),
             ])
             .width(Length::Fill)
             .padding([4, 8])
@@ -2494,7 +2498,7 @@ impl ConfigPanel {
             items.push(
                 button(column![
                     text(name.clone()).size(13),
-                    text(v.command.clone()).size(11).color(DIM)
+                    text(v.command.clone()).size(11).color(dim())
                 ])
                 .width(Length::Fill)
                 .padding([4, 8])
@@ -2519,7 +2523,7 @@ impl ConfigPanel {
                     text(name.clone()).size(13),
                     text(format!("{} {}", r.vendor, r.model))
                         .size(11)
-                        .color(DIM)
+                        .color(dim())
                 ])
                 .width(Length::Fill)
                 .padding([4, 8])
@@ -2534,7 +2538,7 @@ impl ConfigPanel {
         let footer: Vec<Element<'a, Message>> = vec![];
         let target = format!("Saved in {}", display(&self.models.target));
         let detail: Element<'a, Message> = match &self.editing {
-            None => text("Pick a vendor or a role.").color(DIM).into(),
+            None => text("Pick a vendor or a role.").color(dim()).into(),
             Some(Editing::Installed) => self.installed_view(),
             Some(Editing::Roles) => self.roles_view(),
             Some(editing) => {
@@ -2560,14 +2564,14 @@ impl ConfigPanel {
                                 text(format!("Vendor {}", val(VField::Name)))
                                     .font(crate::theme::MONO_BOLD)
                                     .size(18)
-                                    .color(crate::theme::HI),
+                                    .color(crate::theme::hi()),
                                 text(if users.is_empty() {
                                     "used by no role".to_owned()
                                 } else {
                                     format!("used by {}", users.join(", "))
                                 })
                                 .size(11.5)
-                                .color(DIM),
+                                .color(dim()),
                             ]
                             .spacing(12)
                             .align_y(iced::Alignment::Center),
@@ -2633,7 +2637,7 @@ impl ConfigPanel {
                     }
                     Editing::Installed | Editing::Roles => {}
                     Editing::Role(_) => {
-                        form = form.push(text("ROLE").size(11).color(DIM));
+                        form = form.push(text("ROLE").size(11).color(dim()));
                         let vendor_names: Vec<String> =
                             self.models.vendors.keys().cloned().collect();
                         form = form
@@ -2677,7 +2681,7 @@ impl ConfigPanel {
                         .style(crate::theme::outline_button_style(!self.armed_delete))
                         .on_press(cfg(CfgMsg::Delete)),
                 )
-                .push(text(target).size(11).color(DIM))
+                .push(text(target).size(11).color(dim()))
                 .push(
                     text(if self.is_new {
                         "New entry: pick a name, then save."
@@ -2685,7 +2689,7 @@ impl ConfigPanel {
                         "Lists are comma or space separated. Saving rewrites config.yaml (comments are lost, a .bak is kept)."
                     })
                     .size(11)
-                    .color(DIM),
+                    .color(dim()),
                 )
                     .into()
             }
@@ -2718,7 +2722,7 @@ impl ConfigPanel {
     fn save_bar<'a>(&'a self) -> Element<'a, Message> {
         container(
             row![
-                text("■").size(8).color(crate::theme::WARN),
+                text("■").size(8).color(crate::theme::warn()),
                 text("Unsaved changes to config.yaml.").size(12),
                 container(text("")).width(Length::Fill),
                 cfg_btn("Discard", CfgMsg::Discard, false),
@@ -2732,9 +2736,12 @@ impl ConfigPanel {
         .width(Length::Fill)
         .align_y(iced::alignment::Vertical::Center)
         .style(|_| container::Style {
-            background: Some(Background::Color(Color::from_rgb8(0x0E, 0x0B, 0x09))),
+            background: Some(Background::Color(crate::theme::pick(
+                Color::from_rgb8(0x0E, 0x0B, 0x09),
+                Color::from_rgb8(0xFF, 0xF4, 0xE8),
+            ))),
             border: iced::Border {
-                color: crate::theme::WARN,
+                color: crate::theme::warn(),
                 width: 1.0,
                 radius: 0.0.into(),
             },
@@ -2761,9 +2768,9 @@ impl ConfigPanel {
                 r.wrap()
             };
         let mut table = column![row![
-            container(text("Role").size(11).color(DIM)).width(180),
-            container(text("Vendor").size(11).color(DIM)).width(Length::FillPortion(2)),
-            container(text("Model").size(11).color(DIM)).width(Length::FillPortion(3)),
+            container(text("Role").size(11).color(dim())).width(180),
+            container(text("Vendor").size(11).color(dim())).width(Length::FillPortion(2)),
+            container(text("Model").size(11).color(dim())).width(Length::FillPortion(3)),
             container(text("")).width(70),
         ]
         .spacing(12)]
@@ -2784,9 +2791,9 @@ impl ConfigPanel {
             table = table.push(
                 row![
                     button(text(name.clone()).size(13).color(if changed {
-                        crate::theme::WARN
+                        crate::theme::warn()
                     } else {
-                        crate::theme::HI
+                        crate::theme::hi()
                     }))
                     .width(180)
                     .padding([4, 8])
@@ -2805,7 +2812,7 @@ impl ConfigPanel {
                     ))
                     .width(Length::FillPortion(3)),
                     container(
-                        button(text("Remove").size(11.5).color(DIM))
+                        button(text("Remove").size(11.5).color(dim()))
                             .padding([4, 8])
                             .style(crate::theme::link_button_style())
                             .on_press(cfg(CfgMsg::RolesRemove(name.clone())))
@@ -2817,10 +2824,10 @@ impl ConfigPanel {
             );
         }
         column![
-            text("Roles").font(crate::theme::MONO_BOLD).size(18).color(crate::theme::HI),
+            text("Roles").font(crate::theme::MONO_BOLD).size(18).color(crate::theme::hi()),
             text("The vendor and model an agent of each role starts with. A pattern or the New agent form can still override them.")
                 .size(12)
-                .color(DIM),
+                .color(dim()),
             table,
         ]
         .spacing(14)
@@ -2831,13 +2838,13 @@ impl ConfigPanel {
     fn installed_view<'a>(&'a self) -> Element<'a, Message> {
         let mut rows = column![].spacing(0);
         if self.installed.is_empty() {
-            rows = rows.push(text("Looking at this computer…").size(13).color(DIM));
+            rows = rows.push(text("Looking at this computer…").size(13).color(dim()));
         }
         for r in &self.installed {
             let (dot, state_text) = match (r.installed(), r.state.as_deref()) {
-                (true, Some("available") | None) => (OK, "installed"),
-                (true, Some(other)) => (WARN, other),
-                (false, _) => (crate::theme::BAD, "not installed"),
+                (true, Some("available") | None) => (ok(), "installed"),
+                (true, Some(other)) => (warn(), other),
+                (false, _) => (crate::theme::bad(), "not installed"),
             };
             let vendor: Element<'a, Message> = match &r.vendor {
                 Some(name) => crate::panel::btn_link(
@@ -2860,20 +2867,20 @@ impl ConfigPanel {
                     row![
                         text("●").size(11).color(dot),
                         column![
-                            text(r.command.clone()).size(13).color(crate::theme::HI),
+                            text(r.command.clone()).size(13).color(crate::theme::hi()),
                             text(r.path.clone().unwrap_or_else(|| state_text.to_owned()))
                                 .size(11)
-                                .color(DIM),
+                                .color(dim()),
                         ]
                         .width(Length::FillPortion(3))
                         .spacing(1),
                         column![
-                            text("default model").size(11).color(DIM),
+                            text("default model").size(11).color(dim()),
                             text(r.default_model.clone().unwrap_or_else(|| "—".into())).size(13),
                         ]
                         .width(Length::FillPortion(2))
                         .spacing(1),
-                        column![text("models").size(11).color(DIM), text(models).size(13)]
+                        column![text("models").size(11).color(dim()), text(models).size(13)]
                             .width(Length::FillPortion(5))
                             .spacing(1),
                         vendor,
@@ -2886,7 +2893,7 @@ impl ConfigPanel {
                     .width(Length::Fill)
                     .height(1)
                     .style(|_| container::Style {
-                        background: Some(iced::Background::Color(crate::theme::LINE)),
+                        background: Some(iced::Background::Color(crate::theme::line())),
                         ..container::Style::default()
                     }),
             ]);
@@ -2894,10 +2901,10 @@ impl ConfigPanel {
         column![
             text("Installed on this computer")
                 .size(18)
-                .color(crate::theme::HI),
+                .color(crate::theme::hi()),
             text("Agent commands found on your PATH. A vendor whose command is missing cannot start agents.")
                 .size(12)
-                .color(DIM),
+                .color(dim()),
             cfg_btn("Look again", CfgMsg::LookAgain, false),
             crate::panel::card(
                 "AGENTS · VENDORS · MODELS",
@@ -2907,7 +2914,7 @@ impl ConfigPanel {
                         self.installed.iter().filter(|r| r.installed()).count()
                     ))
                     .size(11)
-                    .color(DIM)
+                    .color(dim())
                     .into()
                 ),
                 rows.into(),
@@ -2971,7 +2978,7 @@ impl ConfigPanel {
             return text("").into();
         }
         row![
-            container(text("installed").size(12).color(DIM)).width(110),
+            container(text("installed").size(12).color(dim())).width(110),
             chips.wrap()
         ]
         .spacing(8)
@@ -3014,7 +3021,7 @@ impl ConfigPanel {
             .map(|(_, v)| v.as_str())
             .unwrap_or("");
         row![
-            iced::widget::container(text(label).size(12).color(DIM)).width(110),
+            iced::widget::container(text(label).size(12).color(dim())).width(110),
             dropdown(options, value, empty_label, move |choice| cfg(
                 CfgMsg::RoleField(field, choice)
             )),
@@ -3039,7 +3046,7 @@ impl ConfigPanel {
             .map(|(_, v)| v.as_str())
             .unwrap_or("");
         column![
-            text(label).size(12).color(DIM),
+            text(label).size(12).color(dim()),
             dropdown(options, value, empty_label, move |choice| cfg(
                 CfgMsg::VendorField(field, choice)
             )),
@@ -3058,7 +3065,7 @@ impl ConfigPanel {
             .map(|(_, v)| words(v))
             .unwrap_or_default();
         row![
-            container(text("skills").size(12).color(DIM)).width(110),
+            container(text("skills").size(12).color(dim())).width(110),
             column![
                 text(if assigned.is_empty() {
                     "none assigned".to_owned()
@@ -3068,7 +3075,7 @@ impl ConfigPanel {
                 .size(13),
                 text(format!("{} assigned", assigned.len()))
                     .size(11)
-                    .color(DIM),
+                    .color(dim()),
             ]
             .width(Length::Fill)
             .spacing(1),
@@ -3101,13 +3108,13 @@ impl ConfigPanel {
                         checkbox(ticked).size(15),
                         column![
                             row![
-                                text(s.name.clone()).size(13).color(crate::theme::HI),
-                                text(s.scope.to_lowercase()).size(11).color(DIM),
+                                text(s.name.clone()).size(13).color(crate::theme::hi()),
+                                text(s.scope.to_lowercase()).size(11).color(dim()),
                             ]
                             .spacing(8),
                             text(s.description.chars().take(110).collect::<String>())
                                 .size(11)
-                                .color(DIM),
+                                .color(dim()),
                         ]
                         .spacing(1)
                         .width(Length::Fill),
@@ -3132,7 +3139,7 @@ impl ConfigPanel {
                     row![
                         checkbox(true).size(15),
                         text(missing.clone()).size(13),
-                        text("not found").size(11).color(WARN),
+                        text("not found").size(11).color(warn()),
                     ]
                     .spacing(12)
                     .align_y(iced::Alignment::Center),
@@ -3144,18 +3151,18 @@ impl ConfigPanel {
             );
         }
         if shown == 0 {
-            list = list.push(text("No skill matches.").size(12).color(DIM));
+            list = list.push(text("No skill matches.").size(12).color(dim()));
         }
         let dialog = container(
             column![
                 row![
                     text(format!("Skills of {role}"))
                         .size(18)
-                        .color(crate::theme::HI),
+                        .color(crate::theme::hi()),
                     container(text("")).width(Length::Fill),
                     text(format!("{} selected", picker.selected.len()))
                         .size(12)
-                        .color(ACCENT),
+                        .color(accent()),
                 ]
                 .align_y(iced::Alignment::Center),
                 text_input("Filter skills", &picker.filter)
@@ -3169,7 +3176,7 @@ impl ConfigPanel {
                     cfg_btn("Cancel", CfgMsg::SkillPickCancel, false),
                     text("Done fills the role's skills; Save keeps them in config.yaml")
                         .size(11)
-                        .color(DIM),
+                        .color(dim()),
                 ]
                 .spacing(10)
                 .align_y(iced::Alignment::Center),
@@ -3235,8 +3242,8 @@ fn refresh_button<'a>() -> Element<'a, Message> {
 fn empty_state<'a>(title: &'static str, detail: &'static str) -> Element<'a, Message> {
     container(
         column![
-            text(title).size(16).color(crate::theme::HI),
-            text(detail).size(13).color(DIM),
+            text(title).size(16).color(crate::theme::hi()),
+            text(detail).size(13).color(dim()),
             refresh_button(),
         ]
         .spacing(8),
@@ -3250,11 +3257,11 @@ fn empty_state<'a>(title: &'static str, detail: &'static str) -> Element<'a, Mes
 fn loading_state<'a>(label: &'static str) -> Element<'a, Message> {
     container(
         column![
-            text("●").size(18).color(crate::theme::ACCENT),
+            text("●").size(18).color(crate::theme::accent()),
             text(label).size(14),
             text("The data is being loaded in the background.")
                 .size(12)
-                .color(DIM),
+                .color(dim()),
         ]
         .spacing(8),
     )

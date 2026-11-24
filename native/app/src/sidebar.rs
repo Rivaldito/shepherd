@@ -60,37 +60,37 @@ pub fn rollup(agents: &[AgentPane], shells: usize) -> Roll {
         .count();
     if urgent > 0 {
         Roll {
-            square: theme::WARN,
+            square: theme::warn(),
             label: format!("{urgent} needs you"),
-            label_color: theme::WARN,
+            label_color: theme::warn(),
         }
     } else if working > 0 {
         Roll {
-            square: theme::ACCENT,
+            square: theme::accent(),
             label: format!("{working} working"),
-            label_color: theme::DIM,
+            label_color: theme::dim(),
         }
     } else if !agents.is_empty() {
         Roll {
-            square: theme::IDLE,
+            square: theme::idle(),
             label: "idle".into(),
-            label_color: theme::DIM,
+            label_color: theme::dim(),
         }
     } else if shells > 0 {
         Roll {
-            square: theme::LINE2,
+            square: theme::line2(),
             label: if shells == 1 {
                 "1 shell".into()
             } else {
                 format!("{shells} shells")
             },
-            label_color: theme::FAINT,
+            label_color: theme::faint(),
         }
     } else {
         Roll {
-            square: theme::LINE2,
+            square: theme::line2(),
             label: "empty".into(),
-            label_color: theme::FAINT,
+            label_color: theme::faint(),
         }
     }
 }
@@ -173,12 +173,12 @@ mod tests {
             ],
             2,
         );
-        assert_eq!((r.label.as_str(), r.square), ("2 needs you", theme::WARN));
+        assert_eq!((r.label.as_str(), r.square), ("2 needs you", theme::warn()));
         let r = rollup(
             &[agent(Status::Working, false), agent(Status::Idle, false)],
             0,
         );
-        assert_eq!((r.label.as_str(), r.square), ("1 working", theme::ACCENT));
+        assert_eq!((r.label.as_str(), r.square), ("1 working", theme::accent()));
         let r = rollup(&[agent(Status::Idle, false)], 3);
         assert_eq!(r.label, "idle");
         assert_eq!(rollup(&[], 1).label, "1 shell");
