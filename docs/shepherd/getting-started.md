@@ -213,4 +213,5 @@ If a pattern run would exceed `max_concurrent`, `shepherd pattern run` asks for 
 - [agents-roles-skills.md](agents-roles-skills.md): tune roles, add skills.
 - [patterns.md](patterns.md): design your own team.
 - [topics-and-events.md](topics-and-events.md): understand and watch the bus.
+- [cli-reference.md](cli-reference.md): every command, grouped.
 - [native-app.md](native-app.md): the desktop app.

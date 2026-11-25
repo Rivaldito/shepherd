@@ -21,6 +21,8 @@ curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh 
 
 Use `SHEPHERD_NO_GUI=1` to skip it (for example on a server without a screen). The app needs a desktop session (Wayland or X11 on Linux) and, on Linux, glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later). It uses the GPU when there is one.
 
+There is no desktop app for Windows yet: Windows has the terminal UI and the CLI.
+
 To build it from source instead, from its own Cargo workspace:
 
 ```bash
@@ -74,6 +76,16 @@ The gear at the bottom of the sidebar, next to "Hide sidebar", opens a small men
 
 The same from a terminal: `shepherd server restart` (stops the server if it is running, starts a new one detached from the command, and waits until it answers) and `shepherd server stop`. After installing a new version, restart the server so it runs the new binary.
 
+### Roles, skills and patterns in the app
+
+The three things you write yourself can all be made without leaving the window. [The pieces of Shepherd](the-pieces.md) says what each one is for; [the recipe](recipe-own-team.md) builds one of each.
+
+- **A role:** Agents > **+ New role**. The editor takes a name, vendor and model (from lists of what is installed), fallbacks, a vendor it must differ from, skills and a prompt.
+- **A skill:** the Skills view has an editor with line numbers. Make it global to give it to every agent, assign it to roles, or tick it when you launch an agent. On a running agent, **Add a skill...** in its Skills card; it applies at the next start.
+- **A pattern:** Patterns, pick a built-in one (read its **About this pattern** card), **Duplicate**, edit the agents and topics in the graph, **Save** and look for the **valid** badge, then **Run this pattern**. Built-in patterns are read-only; the copy is saved in the project.
+
+Settings of the window (the theme and the two zoom sizes) are kept in `native-view.json` in the state folder; everything about agents, tasks and runs stays in the server.
+
 ### Shortcuts
 
 | Keys | Action |
@@ -97,9 +109,9 @@ The Shepherd panel groups its views in two sets.
 |---|---|
 | **Overview** | A summary card: what is running, what is blocked, and a message when nothing needs you |
 | **Runs** | Every pattern run with its state, agents and topics. Stop a run, delete one, or clean finished runs (each needs a second click to confirm). Approve or reject a gate (rejecting can carry a reason) and cancel a task's run |
-| **Agents** | Each agent with role, vendor, model and state; a **Terminal** button jumps to its pane. A form launches a new agent: role, workspace, vendor, model, task and optional worktree. An agent can be linked to a task, and its **Skills** card turns each skill on or off for that agent (it applies the next time the agent starts) |
+| **Agents** | Each agent with role, vendor, model and state; a **Terminal** button jumps to its pane. **+ New agent** launches one: role, workspace, vendor and model from lists, the skills to install (the role's are ticked; a global skill is always on), task and optional worktree. **+ New role** opens the role editor. An agent can be linked to a task, and its **Skills** card turns each skill on or off for that agent and adds one it does not have (**Add a skill...**); it applies the next time the agent starts |
 | **Tasks** | Create, edit and delete tasks (title, specification, acceptance criteria), import a GitHub issue as a task, archive finished ones, and run a task with an agent or with a pattern |
-| **Patterns** | A gallery of patterns and a **graph editor** for the topology: select a node to edit an agent, check validation messages, and launch a run |
+| **Patterns** | A gallery of patterns and a **graph editor** for the topology: select a node to edit an agent (role, vendor and model come from lists, the persona is a text box), check validation messages, switch to the read-only **YAML** view, and launch a run. A built-in pattern shows an **About this pattern** card: what it is, when to use it and an example |
 
 **Inspect**
 
