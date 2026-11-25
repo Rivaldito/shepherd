@@ -38,7 +38,7 @@ A role with `worktree: true` gets its own `git worktree` and a branch named `she
 
 ### Teams as files
 
-A **pattern** is a YAML file describing a team: which agents, with which roles, vendors and models, which topics they use to talk, and who starts. Four topologies ship as templates: `orchestrator-worker`, `hierarchical`, `blackboard` and `market`. Copy one, edit it, validate it and run it:
+A **pattern** is a YAML file describing a team: which agents, with which roles, vendors and models, which topics they use to talk, and who starts. Ten templates ship with Shepherd: four topologies (`orchestrator-worker`, `hierarchical`, `blackboard` and `market`) and six teams that write and check tests. Each one says what it is for and when to use it. Copy one, edit it, validate it and run it:
 
 ```bash
 shepherd pattern new webteam --from orchestrator-worker

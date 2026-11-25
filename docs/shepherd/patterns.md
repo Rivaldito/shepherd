@@ -10,7 +10,7 @@ The first match by name wins:
 
 1. `<repo>/.shepherd/patterns/<name>.yaml`: project, versioned with your code.
 2. `~/.config/shepherd/patterns/<name>.yaml`: user-wide (`pattern new --global`).
-3. Built-in templates: the four topologies (`orchestrator-worker`, `hierarchical`, `blackboard`, `market`) and six for testing (see [Patterns for testing](#4b-patterns-for-testing)). They are read-only starting points.
+3. Built-in templates: the four topologies (`orchestrator-worker`, `hierarchical`, `blackboard`, `market`) and six for testing (see [the built-in patterns, one by one](#4b-the-built-in-patterns-one-by-one)). They are read-only starting points.
 
 ```
 $ shepherd pattern list
@@ -112,7 +112,9 @@ Things to know:
 - With `count > 1` the instances share `group`: each partition is divided among them and **each message goes to exactly one member**.
 - Agent ids in a pattern (`worker`) differ from the ids the running agents get (`coder-1`, `coder-2`). Use `shepherd agents` to see the running ones.
 
-## 4. The four topologies
+## 4. The four kinds of pattern
+
+Every pattern has a `kind` that decides how its agents are wired and which rules the validator checks. There are four kinds, described here. The ten built-in patterns are made from them: the four basic ones have the same name as their kind, and the six for testing are built on `blackboard` and `orchestrator-worker`. [The built-in patterns, one by one](#4b-the-built-in-patterns-one-by-one) says what each of the ten is for.
 
 ### orchestrator-worker
 
@@ -186,7 +188,7 @@ Use it to compete several approaches to the same problem and keep the best.
 
 ## 4b. The built-in patterns, one by one
 
-Ten templates come with Shepherd. Four are the basic topologies; six are teams that write and check unit tests, each a known way of making agents give each other feedback. They all validate, run and edit like any pattern you write. In the apps and in `shepherd pattern show <name>` each one explains itself the same way: what it is, when to use it and an example.
+Ten templates come with Shepherd. Four are the basic kinds; six are teams that write and check unit tests, each a known way of making agents give each other feedback. They all validate, run and edit like any pattern you write. In the apps and in `shepherd pattern show <name>` each one explains itself the same way: what it is, when to use it and an example.
 
 How to choose, in one line each:
 

@@ -105,7 +105,7 @@ What you create in one shows up in the other two.
   <tr>
     <td width="50%" valign="top">
       <b>Patterns</b><br />
-      Agent teams as YAML. Four ready-made topologies, and your own.<br />
+      Agent teams as YAML. Ten ready-made patterns, and your own.<br />
       <code>shepherd pattern run api-team --task "…"</code>
     </td>
     <td width="50%" valign="top">
@@ -162,7 +162,7 @@ Shepherd stops where a person should decide. With `workflow.confirm: true` a run
 
 ## Patterns: your agent teams
 
-A **pattern** is a team described in a YAML file: which agents, which roles, which topics they use to talk, and who starts. **Four patterns ship built in**, so you can run a team on day one, and you can copy any of them or write a new one from scratch.
+A **pattern** is a team described in a YAML file: which agents, which roles, which topics they use to talk, and who starts. **Ten patterns ship built in** (four topologies and six for writing and checking tests), so you can run a team on day one, and you can copy any of them or write a new one from scratch. Each one says when to use it and gives an example.
 
 <p align="center">
   <img src="assets/readme/patterns.svg" alt="The four basic topologies among the ten built-in patterns. orchestrator-worker: an orchestrator publishes to #orders, a pool of workers reports to #results. hierarchical: director, #root-orders, two managers, #team-orders, four specialists. blackboard: researcher, analyst and synthesizer share #blackboard. market: requester, #ask, solvers, #bid, market-maker, #transaction." width="100%" />
@@ -370,7 +370,7 @@ native/dev/demo.sh                           # or on a throwaway server with sam
 | [Why Shepherd](docs/shepherd/why-shepherd.md) | What Shepherd adds on top of herdr, and when it helps |
 | [Getting started](docs/shepherd/getting-started.md) | Build, enable, first agent, first team, where files live, limits |
 | [Agents, roles and skills](docs/shepherd/agents-roles-skills.md) | Agent lifecycle, roles, vendors, writing and assigning skills, MCP tools, snapshots |
-| [Patterns](docs/shepherd/patterns.md) | The four team topologies, the YAML format, validation, run states, a full example |
+| [Patterns](docs/shepherd/patterns.md) | The four kinds of pattern, the ten built-ins and when to use each, the YAML format, validation, run states, a full example |
 | [Topics and events](docs/shepherd/topics-and-events.md) | The event bus: topics, partitions, consumer groups, replay |
 | [Desktop app](docs/shepherd/native-app.md) | The desktop window, its eleven views and how to connect it |
 
