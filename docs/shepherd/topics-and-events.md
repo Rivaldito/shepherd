@@ -112,6 +112,19 @@ topics:
   filter: hypothesis
 ```
 
+## 7b. Capping a topic
+
+A topic in a pattern can have a hard limit, `max_messages`. Once the topic holds that many messages the next `publish` is refused with a message telling the agent to stop and tell the human what is unresolved, and the run shows as `stalled`. The count survives reopening the bus, so it holds however the agents reach it.
+
+```yaml
+topics:
+- name: board
+  partitions: 1
+  max_messages: 10
+```
+
+Use it on feedback loops (a generator and a critic, a test writer and a coder) so they cannot argue for ever and spend tokens: the built-in loops set it, next to the round limits in their prompts. Without `max_messages` a topic has no limit.
+
 ## 8. Watching the bus
 
 - **CLI:** `shepherd topic tail <topic>` follows what agents say to each other. `shepherd bus clean --force` deletes every message of the bus (agents lose its history).

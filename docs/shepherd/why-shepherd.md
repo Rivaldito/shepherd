@@ -8,7 +8,7 @@ This page explains what you gain. The other guides show how to use each piece:
 |---|---|
 | [getting-started.md](getting-started.md) | Build and run your first agents |
 | [agents-roles-skills.md](agents-roles-skills.md) | Agent lifecycle, roles, vendors, skills and the MCP tools |
-| [patterns.md](patterns.md) | Multi-agent teams as YAML: the four topologies, validation and runs |
+| [patterns.md](patterns.md) | Multi-agent teams as YAML: the ten built-in patterns and when to use each, validation and runs |
 | [topics-and-events.md](topics-and-events.md) | The event bus: topics, partitions, consumer groups, replay |
 | [native-app.md](native-app.md) | The native desktop app and how it relates to the terminal |
 

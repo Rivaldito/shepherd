@@ -165,7 +165,7 @@ Shepherd stops where a person should decide. With `workflow.confirm: true` a run
 A **pattern** is a team described in a YAML file: which agents, which roles, which topics they use to talk, and who starts. **Four patterns ship built in**, so you can run a team on day one, and you can copy any of them or write a new one from scratch.
 
 <p align="center">
-  <img src="assets/readme/patterns.svg" alt="The four built-in patterns. orchestrator-worker: an orchestrator publishes to #orders, a pool of workers reports to #results. hierarchical: director, #root-orders, two managers, #team-orders, four specialists. blackboard: researcher, analyst and synthesizer share #blackboard. market: requester, #ask, solvers, #bid, market-maker, #transaction." width="100%" />
+  <img src="assets/readme/patterns.svg" alt="The four basic topologies among the ten built-in patterns. orchestrator-worker: an orchestrator publishes to #orders, a pool of workers reports to #results. hierarchical: director, #root-orders, two managers, #team-orders, four specialists. blackboard: researcher, analyst and synthesizer share #blackboard. market: requester, #ask, solvers, #bid, market-maker, #transaction." width="100%" />
 </p>
 
 Run a built-in pattern, or make your own in three commands:
