@@ -85,6 +85,8 @@ The same from a terminal: `shepherd server restart` (stops the server if it is r
 
 The command palette runs any action by name: type to filter, `Up` and `Down` to move, `Enter` to run, `Esc` to close.
 
+All the keys, including the terminal UI's prefix keys for splitting panes, tabs and workspaces: [keyboard shortcuts](shortcuts.md).
+
 ## 3. The eleven views
 
 The Shepherd panel groups its views in two sets.

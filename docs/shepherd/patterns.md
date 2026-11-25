@@ -184,20 +184,351 @@ Rules: topics `ask`, `bid` and `transaction` must exist; exactly **one** market-
 
 Use it to compete several approaches to the same problem and keep the best.
 
-## 4b. Patterns for testing
+## 4b. The built-in patterns, one by one
 
-Six built-in templates are teams that write and check unit tests, each a known way of making agents give each other feedback. They use the same four topologies, so they validate, run and edit like any other pattern.
+Ten templates come with Shepherd. Four are the basic topologies; six are teams that write and check unit tests, each a known way of making agents give each other feedback. They all validate, run and edit like any pattern you write. In the apps and in `shepherd pattern show <name>` each one explains itself the same way: what it is, when to use it and an example.
 
-| Template | Who | What happens |
+How to choose, in one line each:
+
+- **`orchestrator-worker`**: use it when a job splits into independent pieces of similar size: one module, one handler or one file per worker.
+- **`hierarchical`**: use it when the objective is big enough to need levels, for example epics that split into tasks.
+- **`blackboard`**: use it when the problem is unclear and several viewpoints must read each other's findings: research, hunting a root cause, reviewing a design.
+- **`market`**: use it when there are several ways to solve it and you want rival proposals.
+- **`reflection-loop`**: use it when one agent's output needs a second pair of eyes before you accept it, new code or new tests, and the standard is clear enough for a critic to judge.
+- **`tdd`**: use it when you have a clear specification and want tests that do not mirror the implementation: the test writer never sees the code.
+- **`agentcoder`**: use it when you want an independent test suite that includes edge and large cases, and a real test run whose errors go straight back to the programmer.
+- **`mutation-testing`**: use it when tests already exist and you doubt they would catch a real bug.
+- **`planner-workers-reviewer`**: use it when you need unit tests for many modules at once.
+- **`self-debug`**: use it when a bug or a failing test survives the first fix and you want attempts that learn from each other.
+
+Every feedback loop has two caps. The prompts number the rounds (3 or 4): after the last one the agents say what is unresolved and stop. And the shared topic has a `max_messages` limit that the server enforces: the next `publish` fails with a message saying so, the agents stop, and the run shows as `stalled` for a person to decide. The test runs themselves (`tdd`, `agentcoder`) go through the `run_checks` tool, so pass or fail is the exit code of the project's real test command, and the report an agent posts is that tool's output.
+
+### `orchestrator-worker`
+
+One orchestrator splits the objective into orders and a pool of workers does them in parallel.
+
+**Who is in it**
+
+| Agent | Role | What it does |
 |---|---|---|
-| `reflection-loop` | generator, critic | The generator writes code or tests; the critic (another vendor) reviews and sends comments back until it approves |
-| `tdd` | test-writer, coder, runner | Tests come first, written from the spec alone (the test-writer never reads the implementation); the coder implements; the runner runs the real test command and posts the exact failures |
-| `agentcoder` | programmer, test-designer, executor | An independent suite (basic, edge and large cases) is run against the code and the real errors go back to the programmer |
-| `mutation-testing` | mutator, test-writer, judge | The mutator plants bugs on branches, the test-writer adds tests that must catch them, the judge posts the score and the survivors |
-| `planner-workers-reviewer` | planner, 3 workers, reviewer | One module per worker, each with its tests; the reviewer checks coverage and quality before the planner reports |
-| `self-debug` | solver, debugger | After each failing run the solver writes a reflection; the board keeps them as memory so no attempt repeats a failed change |
+| `orchestrator` | `brain` | Splits the objective, publishes one order per task, aggregates the results. Starts the run. |
+| `worker x3` | `coder` | Takes an order, does it in its own worktree, publishes the result. |
 
-Every loop has two caps. The prompts number the rounds (3 or 4): after the last one the agents say what is unresolved and stop. And the shared topic has a `max_messages` limit that the server enforces: the next `publish` fails with a message saying so, the agents stop, and the run shows as `stalled` for a person to decide. The test runs themselves (`tdd`, `agentcoder`) go through the `run_checks` tool, so pass or fail is the exit code of the project's real test command, and the report an agent posts is that tool's output.
+**Topics:** `orders` (4 partitions) and `results`. **Kind:** `orchestrator-worker`.
+
+**How it runs**
+
+1. The orchestrator receives the objective and publishes one order per independent task to `orders`.
+2. Each order goes to exactly one worker. The worker does it on its own branch and publishes the result to `results`.
+3. The orchestrator reads the results and writes the final answer.
+
+**Use it when** a job splits into independent pieces of similar size: one module, one handler or one file per worker. Not when the pieces depend on each other (use `hierarchical`) or when you want rival answers (use `market`).
+
+**Example**
+
+```bash
+shepherd pattern run orchestrator-worker --task "Add input validation to the 12 API handlers, one handler per worker"
+```
+
+**What to expect**
+
+- Four agents and, usually, three branches to review.
+- No message cap by default. Add `max_messages` to a topic if you want one.
+
+### `hierarchical`
+
+A tree: a director, managers and specialists. Each level orders the level below and reads its results.
+
+**Who is in it**
+
+| Agent | Role | What it does |
+|---|---|---|
+| `director` | `brain` | Level 0. Turns the objective into directives for the managers. Starts the run. |
+| `manager x2` | `reviewer` | Level 1. Split a directive into assignments for their specialists and report upward. |
+| `specialist x4` | `coder` | Level 2. Do the work and publish to `team-results`. |
+
+**Topics:** `root-orders`, `root-results`, `team-orders`, `team-results`. **Kind:** `hierarchical`.
+
+**How it runs**
+
+1. The director publishes directives to `root-orders`.
+2. Each manager reads them, publishes assignments to `team-orders` and waits for `team-results`.
+3. The specialists do the work and publish to `team-results`; the managers report to `root-results`; the director reads them.
+
+**Use it when** the objective is big enough to need levels, for example epics that split into tasks. Not for small jobs: the extra layers only cost tokens.
+
+**Example**
+
+```bash
+shepherd pattern run hierarchical --task "Move the billing service to the new payments API: backend, API client and tests teams"
+```
+
+**What to expect**
+
+- Seven agents run at once, so it is the most expensive of the ten.
+- Every agent needs a `level`, contiguous from 0, and topics must not form cycles.
+
+### `blackboard`
+
+A shared board where several agents read each other's findings and add their own, with no fixed order.
+
+**Who is in it**
+
+| Agent | Role | What it does |
+|---|---|---|
+| `researcher` | `brain` | Turns the objective into a hypothesis and posts it. Starts the run. |
+| `analyst` | `tester` | Checks each hypothesis for flaws and edge cases and posts a validation. |
+| `synthesizer` | `docs` | Once a hypothesis has a validation, posts a short synthesis of the verified facts. |
+
+**Topics:** one topic, `blackboard`, whose `filter` is the message prefix `hypothesis`. **Kind:** `blackboard`.
+
+**How it runs**
+
+1. The researcher posts `hypothesis: ...`.
+2. The analyst answers with `validation: ...`.
+3. The synthesizer posts `synthesis: ...` once a hypothesis is validated.
+
+**Use it when** the problem is unclear and several viewpoints must read each other's findings: research, hunting a root cause, reviewing a design. Not when the work splits cleanly into parts.
+
+**Example**
+
+```bash
+shepherd pattern run blackboard --task "Find out why the nightly import takes four hours"
+```
+
+**What to expect**
+
+- Three agents, no worktree needed unless a role asks for one.
+- There is no natural end: it is `done` when everyone is idle and nothing new was posted.
+
+### `market`
+
+Requesters post asks, solvers bid, a market-maker picks the winner and that solver does the work.
+
+**Who is in it**
+
+| Agent | Role | What it does |
+|---|---|---|
+| `requester x2` | `docs` | Post the ask from the objective. Start the run. |
+| `solver x3` | `coder` | Bid on an ask; the winner implements it. |
+| `market-maker` | `brain` | Reads asks and bids and publishes the transaction. |
+
+**Topics:** `ask` (2 partitions), `bid` (2) and `transaction`. **Kind:** `market`.
+
+**How it runs**
+
+1. The requesters publish an `ask` built from the objective.
+2. The solvers publish a `bid` each.
+3. The market-maker reads asks and bids and publishes the `transaction`; the winner works and reports.
+
+**Use it when** there are several ways to solve it and you want rival proposals. It costs more than one agent, so use it when the choice matters.
+
+**Example**
+
+```bash
+shepherd pattern run market --task "Choose and implement the fastest way to deduplicate 10 million rows"
+```
+
+**What to expect**
+
+- Six agents. Needs at least two solvers publishing to `bid`.
+- Only the winning solver's branch is worth merging.
+
+### `reflection-loop`
+
+A generator writes code or tests; a critic from another vendor reviews them and sends comments back until it approves.
+
+**Who is in it**
+
+| Agent | Role | What it does |
+|---|---|---|
+| `generator` | `coder` | Writes the draft in its own worktree and posts `draft: round N/3`. Starts the run. |
+| `critic` | `reviewer` | Reads the diff and posts `critique: round N/3`: APPROVE, or REQUEST_CHANGES with `file:line` comments. |
+
+**Topics:** one topic, `board`, capped at 10 messages. **Kind:** `blackboard`.
+
+**How it runs**
+
+1. The generator posts `draft: round 1/3` with its branch.
+2. The critic reads the diff and posts APPROVE or REQUEST_CHANGES.
+3. On REQUEST_CHANGES the generator fixes every comment and posts the next draft. It stops when the critic approves.
+
+**Use it when** one agent's output needs a second pair of eyes before you accept it, new code or new tests, and the standard is clear enough for a critic to judge. Not for open exploration.
+
+**Example**
+
+```bash
+shepherd pattern run reflection-loop --task "Write unit tests for src/billing/invoice.rs; the critic must approve before I read them"
+```
+
+**What to expect**
+
+- At most 3 rounds (the prompts) and 10 messages (the server). If they hit the cap the run shows as `stalled` and you decide.
+- The critic never edits files.
+
+### `tdd`
+
+Tests first. A test writer works from the specification alone, a coder implements until they pass and a runner runs the real tests.
+
+**Who is in it**
+
+| Agent | Role | What it does |
+|---|---|---|
+| `test-writer` | `tester` | Writes the failing tests from the spec without reading any implementation. Starts the run. |
+| `coder` | `coder` | Checks out the tests and implements until they pass. Never edits the tests. |
+| `runner` | `tester` | Calls `run_checks` on the coder's branch and posts the exact report. |
+
+**Topics:** one topic, `board`, capped at 16 messages. **Kind:** `blackboard`.
+
+**How it runs**
+
+1. The test writer posts `tests:` with its branch and the command that runs them.
+2. The coder posts `code: round N/4`.
+3. The runner posts `failures: round N/4` with the real output, or `passed`. The coder fixes the code, not the tests.
+
+**Use it when** you have a clear specification and want tests that do not mirror the implementation: the test writer never sees the code. Not when the spec is still vague.
+
+**Example**
+
+```bash
+shepherd pattern run tdd --task "Implement slugify(title) as described in docs/slugify.md: lowercase, hyphens, no accents"
+```
+
+**What to expect**
+
+- At most 4 rounds and 16 messages.
+- Pass or fail is the exit code of your checks, copied as is; it is only as good as your `workflow.checks`.
+
+### `agentcoder`
+
+A programmer, an independent test designer and an executor, after the AgentCoder paper.
+
+**Who is in it**
+
+| Agent | Role | What it does |
+|---|---|---|
+| `programmer` | `coder` | Implements and posts `code: round N/4`. Starts the run. |
+| `test-designer` | `tester` | Writes one suite from the spec alone: basic, edge and large cases. |
+| `executor` | `tester` | Runs the suite against the code with `run_checks` and posts the real errors. |
+
+**Topics:** one topic, `board`, capped at 16 messages. **Kind:** `blackboard`.
+
+**How it runs**
+
+1. The programmer posts `code:` and the test designer posts `tests:`, independently.
+2. The executor puts them together, calls `run_checks` and posts `errors: round N/4` or `passed`.
+3. The programmer fixes the code using those real errors.
+
+**Use it when** you want an independent test suite that includes edge and large cases, and a real test run whose errors go straight back to the programmer. Needs a project whose tests run from the command line.
+
+**Example**
+
+```bash
+shepherd pattern run agentcoder --task "Implement an LRU cache with a capacity and a time to live"
+```
+
+**What to expect**
+
+- At most 4 rounds and 16 messages.
+- If your project has no checks to run, the executor says so and stops.
+
+### `mutation-testing`
+
+Measures whether tests are worth anything: a mutator plants bugs, a test writer must catch them, a judge scores the result.
+
+**Who is in it**
+
+| Agent | Role | What it does |
+|---|---|---|
+| `mutator` | `coder` | Creates up to 8 mutants, each a small deliberate bug on its own branch. Never touches the original. Starts the run. |
+| `test-writer` | `tester` | Adds tests that must fail on a surviving mutant and pass on the original. |
+| `judge` | `reviewer` | Runs the tests on the original and on every mutant and posts the score and the survivors. |
+
+**Topics:** one topic, `board`, capped at 16 messages. **Kind:** `blackboard`.
+
+**How it runs**
+
+1. The mutator posts `mutants:` with one line per mutant.
+2. The judge posts `score: round N/3` (killed / total) and `survivors:`.
+3. The test writer adds tests aimed at each survivor; the loop repeats until every mutant is killed or round 3.
+
+**Use it when** tests already exist and you doubt they would catch a real bug. It judges the tests; it does not write the feature.
+
+**Example**
+
+```bash
+shepherd pattern run mutation-testing --task "Measure how well the tests in src/parser catch bugs"
+```
+
+**What to expect**
+
+- At most 3 rounds and 16 messages.
+- A mutant must still compile, so a surviving one is a real gap in the tests.
+
+### `planner-workers-reviewer`
+
+A planner gives one module to each worker, each worker writes that module's tests, and a reviewer checks coverage and quality before anything is reported.
+
+**Who is in it**
+
+| Agent | Role | What it does |
+|---|---|---|
+| `planner` | `brain` | Splits the objective into modules, orders one per module, reports only what the reviewer approved. Starts the run. |
+| `worker x3` | `coder` | Writes the unit tests of its module and publishes the result. |
+| `reviewer` | `reviewer` | Compares each result with its order, checks coverage and quality, publishes APPROVE or REQUEST_CHANGES. |
+
+**Topics:** `orders` (4 partitions), `results` and `reviews`. **Kind:** `orchestrator-worker`.
+
+**How it runs**
+
+1. The planner publishes one order per module to `orders`.
+2. A worker writes the tests, runs them, commits and publishes to `results`.
+3. The reviewer publishes to `reviews`; the planner collects the approved ones. A module rejected twice is reported as not done.
+
+**Use it when** you need unit tests for many modules at once. Not for a single module.
+
+**Example**
+
+```bash
+shepherd pattern run planner-workers-reviewer --task "Add unit tests for every module under src/services, one worker per module"
+```
+
+**What to expect**
+
+- Five agents and three branches. Nothing is merged by the run.
+- Workers get at most one retry.
+
+### `self-debug`
+
+Reflexion and self-debug: after each failing run the solver writes a reflection, and the board keeps them as memory.
+
+**Who is in it**
+
+| Agent | Role | What it does |
+|---|---|---|
+| `solver` | `coder` | Implements, runs the tests, and after a failure posts `reflection:` (what failed, why, what it will change). Starts the run. |
+| `debugger` | `tester` | Reproduces the failure on its own and posts `diagnosis:` with the root cause and the smallest fix. |
+
+**Topics:** one topic, `board`, capped at 16 messages. **Kind:** `blackboard`.
+
+**How it runs**
+
+1. The solver posts `attempt: N/4`.
+2. On failure it posts a `reflection:` and the debugger posts a `diagnosis:`.
+3. Each next attempt starts by reading every earlier reflection and diagnosis, and does not repeat a change that already failed.
+
+**Use it when** a bug or a failing test survives the first fix and you want attempts that learn from each other.
+
+**Example**
+
+```bash
+shepherd pattern run self-debug --task "Fix test_checkout_total: it only fails when a discount code is used"
+```
+
+**What to expect**
+
+- At most 4 attempts and 16 messages, then it posts `blocked:` with what is unresolved.
+- The board is the memory, so the whole run's reflections stay readable in the Events view.
 
 ## 5. Validation
 

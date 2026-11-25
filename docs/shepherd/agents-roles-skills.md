@@ -2,6 +2,8 @@
 
 How an agent lives inside Shepherd, how to choose who does what, and how to teach agents your conventions.
 
+New to the vocabulary? [The pieces of Shepherd](the-pieces.md) says what each one is for and how a role, a skill and a pattern differ.
+
 ## 1. Agent lifecycle
 
 `shepherd spawn <role> <task>` (or `s` in the Agents view, or a pattern run) does this:
@@ -81,6 +83,13 @@ roles:
 Check the result with `shepherd config validate`. Common problems it reports: a role pointing at an unknown vendor or fallback, a `must_differ_from` that names an unknown role, or limits below 1.
 
 In the native app, the **Models** view lists the agents and models installed on your machine, grouped by vendor, and lets you pick them for each role without editing YAML.
+
+### What you do with a role
+
+- **Use one as it is.** The five built-in roles are enough to start: `brain` plans, `coder` implements, `reviewer` reviews, `docs` writes documentation, `tester` writes and runs tests. `shepherd spawn coder "..."` or a pattern that names `role: coder` uses it.
+- **Change one.** Write only what changes in `config.yaml`, for example `roles: {coder: {vendor: claude, model: sonnet}}`. Everything else keeps its default.
+- **Add your own.** Add a new name under `roles:` when a job needs its own vendor, model, skills or prompt: a `gopher`, a `migrator`, a `security-auditor`. Patterns can use it right away.
+- **Check it.** `shepherd config validate` finds a role that points at an unknown vendor, a `must_differ_from` that names an unknown role, and skills that do not exist. `shepherd roles list` shows what each role resolves to.
 
 ## 3. Vendors
 
@@ -195,6 +204,13 @@ roles:
 - **Native app, Skills view:** an editor with line numbers to create, edit and delete skills. A dialog in the role settings lets you assign existing skills with a few clicks.
 - **Native app, Agents view:** the **Skills** card of an agent has **Turn off**, **Turn on** and **Reset** for each skill, for that agent only.
 - **CLI:** `shepherd skills create <name> [--description <text>] [--repo] [--global]`, `skills delete <name>`, `skills global <name> [--off]`, and for one agent `shepherd skills agent <agent> <skill> on|off|default`.
+
+### What you do with a skill
+
+- **Write one.** A folder with a `SKILL.md`. The `name` must match the folder; the `description` is one line that starts with "Use when". Create it with `shepherd skills create <name> --repo`, or in the Skills editor.
+- **Choose where it lives.** In the project (`.shepherd/skills/`, shared through git), for you across projects (`~/.config/shepherd/skills/`), or built in. The project wins over the user, and the user over the built-in.
+- **Assign it.** To every agent (`skills.global`), to every agent of a role (`roles.<role>.skills`), or to one agent from its Skills card. Adding or removing a skill takes effect when the agent restarts; editing its text reaches a running agent at once.
+- **Turn it off.** `skills.disabled: [name]` excludes it everywhere, and a session adjustment turns it off for one agent. If another layer wins, Shepherd says which one.
 
 `shepherd config validate` flags a skill without front matter, with a name that differs from its folder, or one a role references that does not exist.
 
