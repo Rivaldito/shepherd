@@ -139,4 +139,4 @@ Use it on feedback loops (a generator and a critic, a test writer and a coder) s
 - **Request and reply:** one topic for requests, another for results, as in orchestrator-worker.
 - **Shared notes:** one partition and a prefix convention, as in blackboard.
 
-See [patterns.md](patterns.md) for the four ready-made topologies built from these pieces.
+See [patterns.md](patterns.md) for the ten built-in patterns built from these pieces.
